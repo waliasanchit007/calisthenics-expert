@@ -75,6 +75,7 @@ contracts/
     live_capture_to_model_input.v1.md
   tooling/
     expected_failure.v1.schema.json
+    preprocessing_vector.v1.schema.json
     validator_error_codes.v1.json
   CHANGELOG.md
   schema-release-process.md
@@ -165,6 +166,7 @@ Required groups:
   - requested camera FPS
   - configured inference FPS
   - `model_input_width` and `model_input_height`, distinct from camera resolution
+  - `inference_drain_timeout_ms`
   - live-capture preprocessing-contract version
   - fixture preprocessing-contract version when fixture replay is used
 - Cadence:
@@ -184,10 +186,10 @@ Required groups:
   - `inference_frames_submitted`: buffers submitted to the pose backend;
   - `inference_records_emitted`: NDJSON records written after completed backend calls;
   - `pose_detected_records`: emitted records with `pose_present: true`;
-  - `frames_skipped_before_inference`: received frames deliberately not submitted because of cadence selection or backpressure;
+  - `frames_skipped_before_inference`: every received frame not submitted to inference, with reason counts for `cadence_selection`, `backpressure`, and `session_stopping`;
   - `trailing_frames_skipped_after_last_emitted_record`: skipped frames not attributable to a later emitted record at session end, or all skipped frames when no record was emitted;
   - `inference_failures`: submitted calls that failed before a `RawPoseFrame` could be emitted.
-- Machine inference failures are a structured list separate from the human capture-quality failure log. Each entry records submission index, capture timestamp, stable validator/backend error code, and optional sanitized detail. The list length equals `inference_failures`.
+- Machine inference failures are a structured list separate from the human capture-quality failure log. Each entry records submission index, capture timestamp, `failure_source` (`harness` or `backend`), a stable harness classification (`backend_call_failed` or `session_teardown_timeout`), an optional opaque source/backend code, and optional sanitized detail. Runtime failure classifications are not validator error codes. The list length equals `inference_failures`.
 - Human-observed capture-quality setup fields and a free-text failure log. These are observations, not a `CaptureQualityEngine` decision.
 
 Study conditions remain an extensible `study_context` object instead of becoming rigid runtime fields. This keeps angle, distance, camera height, lighting, clothing, environment, and future protocol labels versioned with the study design.
@@ -301,7 +303,7 @@ The first implementation validates prepared fixture bytes and metadata. A cross-
 
 The live contract governs the path the fixture bypasses. It converts each platform camera buffer into the same canonical model-input representation before inference:
 
-1. Read and record source pixel format, colour matrix, colour range, orientation, mirroring, width, and height. A buffer with missing colour metadata is rejected for conformance capture rather than silently assigned a matrix.
+1. Read and record source pixel format, colour matrix, colour range, orientation, mirroring, width, and height. A conformance session cannot start when required colour metadata is unavailable; no individual buffer is silently discarded or assigned an assumed matrix.
 2. Convert the source buffer to upright, unmirrored, full-range sRGB RGB24 using the recorded matrix and range.
 3. Scale, round, centre, and pad to the manifest's configured model-input dimensions using the exact algorithm in steps 3–6 of the fixture contract.
 4. Feed the canonical pixel plane to the pose backend and record the live preprocessing-contract version in the manifest.
@@ -347,7 +349,7 @@ Session shutdown stops new submissions and drains every in-flight call. A call s
 The package exposes:
 
 ```text
-python -m observation_contracts validate-session <manifest> <frames.ndjson> [annotation]
+python -m observation_contracts validate-session <manifest> <frames.ndjson> [annotation ...]
 python -m observation_contracts verify-fixture <fixture-metadata>
 python -m observation_contracts guard-repository [repository]
 ```
@@ -363,11 +365,15 @@ Human output is concise and grouped by artifact. `--format json` returns a stabl
 
 Validation failures exit nonzero. Unexpected internal failures use a distinct exit code and never masquerade as invalid user data.
 
+When multiple annotation paths are supplied, the validator resolves every adjudicated artifact's `input_annotation_ids` against the supplied independent artifacts, rejects missing or duplicate IDs, and verifies that all linked annotations share the session ID.
+
 ### 7.4 Stable error codes
 
 `contracts/tooling/validator_error_codes.v1.json` is the registry for machine-readable validator errors. Codes are uppercase namespaced identifiers such as `FRAME.TIMESTAMP_REGRESSION` and `FIXTURE.CHECKSUM_MISMATCH`. Released codes are never renamed or reused for a different condition; replacement codes are added and old codes may be deprecated through the schema release process.
 
 `contracts/tooling/expected_failure.v1.schema.json` validates each negative fixture's `expected_failure.json`. The tooling contract records its own semantic version, command, expected code, and artifact path. Unknown error codes or malformed expectation files fail the repository guard.
+
+`contracts/tooling/preprocessing_vector.v1.schema.json` validates each reference vector descriptor. It records synthetic provenance, input/output dimensions, input and expected-output paths, byte lengths, and SHA-256 values. It is independent of `FixtureMetadata`, which describes decoded frame sequences rather than geometry-function pairs.
 
 ## 8. Repository guard
 
@@ -379,7 +385,13 @@ The guard examines tracked and staged paths and selected file signatures. It rej
 - identity-key directories and known authentication filenames
 - obvious private keys or credential exports
 
-Positive synthetic fixtures are allowed only below `fixtures/synthetic/valid/`, must be referenced by valid fixture metadata, and must declare `synthetic: true`. Declared-negative fixtures are allowed only below `fixtures/synthetic/negative/<case>/` and must include an `expected_failure.json` naming the validator command, expected error code, and expected artifact path. The guard validates the negative-fixture declaration and synthetic provenance but does not require the intentionally malformed artifact to pass its target validator. Path checks are deterministic and explain which rule rejected a file. Tests include allowed documentation and schema examples to constrain false positives.
+The guard admits exactly three synthetic fixture classes:
+
+- positive session fixtures below `fixtures/synthetic/valid/`, referenced by valid `FixtureMetadata` with `synthetic: true`;
+- declared-negative fixtures below `fixtures/synthetic/negative/<case>/`, with a valid `expected_failure.json` naming the validator command, expected error code, and expected artifact path;
+- preprocessing conformance vectors below `fixtures/synthetic/preprocessing/`, with a valid `preprocessing_vector.v1` descriptor, synthetic provenance, and verified input/output hashes.
+
+The guard validates negative-fixture declarations without requiring intentionally malformed target artifacts to pass. Path checks are deterministic and explain which rule rejected a file. Tests include all three fixture classes plus allowed documentation and schema examples to constrain false positives.
 
 The guard is callable directly and by `make verify`. A committed `.githooks/pre-commit` invokes the staged-path guard. `make bootstrap` idempotently configures `core.hooksPath=.githooks`; onboarding requires this command before write-mode work. `.github/workflows/verify.yml` runs `make verify` for pull requests and pushes, and `make verify` independently scans the tracked tree, so protection does not rely solely on local hook installation. ADR-0003 records this deliberate repository-local Git configuration and its residual pre-bootstrap local-commit risk.
 
@@ -405,6 +417,7 @@ Required test groups:
 - Exact normalized/world array duplication rejection without numeric tolerances.
 - Reference RGB24 scale/pad golden vectors.
 - Error-code registry immutability and declared-negative expectation-schema validation.
+- Preprocessing-vector descriptor validation and guard admission.
 - Schema evolution:
   - known current major succeeds;
   - same-major newer minor/patch with unknown optional fields succeeds;
@@ -418,7 +431,7 @@ Required test groups:
 
 This milestone is complete when:
 
-1. all four stable observation schemas, both preprocessing contracts, both tooling contracts, the material ADRs, and the schema release/change procedure are versioned and documented;
+1. all four stable observation schemas, both preprocessing contracts, all three tooling contracts, the material ADRs, and the schema release/change procedure are versioned and documented;
 2. the Python reference validator performs the structural and semantic checks above;
 3. committed synthetic positive and negative fixtures exercise the contract boundaries;
 4. schema-evolution behavior is proven by tests;

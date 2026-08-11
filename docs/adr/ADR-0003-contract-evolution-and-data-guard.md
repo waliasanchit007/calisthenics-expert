@@ -16,7 +16,7 @@ Future Android, iOS, and analysis implementations need one executable interpreta
 - Positive synthetic fixtures and declared-negative synthetic fixtures are committed. Negative fixtures include an `expected_failure.json` declaration and are required to fail with the named validator error.
 - A committed `.githooks/pre-commit` runs the staged-path data guard. `make bootstrap` idempotently sets `core.hooksPath=.githooks` before write-mode work.
 - A committed GitHub Actions workflow runs `make verify` on pull requests and pushes. `make verify` scans the complete tracked tree independently of hook installation.
-- Validator error codes are a versioned registry. Released codes are never renamed or reused, and declared-negative fixtures are validated against a tooling schema.
+- Validator error codes are a versioned registry. Released codes are never renamed or reused, declared-negative fixtures are validated against an expectation schema, and preprocessing vectors are validated against a separate descriptor schema. Harness/backend runtime failure classifications are a separate manifest namespace and never masquerade as validator codes.
 
 ## Consequences
 
