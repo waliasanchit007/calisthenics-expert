@@ -1,6 +1,6 @@
 # Phase 0 (M0) Plan of Record
 
-Status: plan of record for M0 documentation and schema design; application implementation remains gated.
+Status: plan of record for M0. Write-mode implementation was enabled on 2026-08-12; `AGENTS.md` and the approved milestone design define the active implementation boundary.
 
 Source of truth: `docs/central-handoff.md` at commit `b08f521`.
 
@@ -501,3 +501,13 @@ Ranked by how much they block:
 **Handoff rule preserved throughout: no numeric accuracy threshold is invented anywhere in v1 or v2.** The two places a threshold could have crept in — E1's conformance tolerance and OQ8/OQ9's decision rules — are the two places the review pushed hardest, and both are now resolved without inventing a number.
 
 This reviewed plan is now persisted as the durable basis for Stage 0 and Stage A planning artifacts.
+
+## Post-plan decision amendments
+
+The following accepted ADRs supersede conflicting v2 language for the observation-contract foundation:
+
+- `docs/adr/ADR-0001-observation-before-interpretation.md` defers stable `DerivedFeatures`, `MovementEvent`, and in-frame `debug_features` contracts. OQ10 is therefore **deferred pending Phase 0 evidence**, not answered by a placeholder `MovementEvent v1`. Human annotation still represents `valid`, `invalid`, and `uncertain` explicitly.
+- `docs/adr/ADR-0002-canonical-preprocessing.md` freezes the canonical decoded-fixture and live model-input representation while leaving source-format-specific platform vectors to each native-harness milestone.
+- `docs/adr/ADR-0003-contract-evolution-and-data-guard.md` establishes independent artifact versioning, Python reference validation, declared-negative fixtures, and repository-local preventive Git hooks.
+
+These amendments narrow interpretation scope without changing M0's study objective, set allocation, evidence requirements, privacy rules, or no-invented-threshold constraint.

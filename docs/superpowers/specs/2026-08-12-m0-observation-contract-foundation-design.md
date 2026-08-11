@@ -1,6 +1,6 @@
 # M0 Observation Contract Foundation Design
 
-Status: approved direction, revised after review
+Status: approved direction, revised after independent Claude review
 
 Date: 2026-08-12
 
@@ -25,12 +25,14 @@ The result must be usable as the canonical acceptance target for future Android 
   - `RawPoseFrame`
   - `Annotation`
   - `FixtureMetadata`
-- A frozen preprocessing contract for decoded-frame conformance fixtures.
+- Frozen preprocessing contracts for decoded-frame conformance fixtures and the live camera-to-model-input path.
 - A Python 3.12 reference validator for structural and semantic checks.
 - Synthetic valid and invalid fixtures containing no participant or biometric data.
 - A repository guard for prohibited data and credential paths.
 - Schema-evolution tests.
 - One verification command for formatting, static checks, tests, fixture validation, and repository guarding.
+- Architecture decision records for the material M0 choices made by this milestone.
+- A schema release, compatibility, deprecation, and migration procedure.
 
 ### Explicitly defer
 
@@ -43,7 +45,7 @@ The result must be usable as the canonical acceptance target for future Android 
 - Real participant data and study execution
 - Product or benchmark acceptance thresholds
 
-An optional `debug_features` extension may carry non-authoritative on-device measurements in later harness exports. This milestone does not define or validate its movement semantics, and analysis code must not consume it as authoritative data.
+The reviewed M0 plan proposed placeholder `DerivedFeatures` and `MovementEvent` contracts plus an in-frame `debug_features` extension. This design deliberately supersedes that proposal: those artifacts describe interpretation, not observation, and freezing them before evidence would turn hypotheses into a public v1 contract. ADR-0001 records the deviation and changes OQ10 from "placeholder defined" to "deferred pending Phase 0 evidence." A later native-harness design may define a separate explicitly experimental diagnostic-measurement artifact; it will not be embedded in stable `RawPoseFrame v1`.
 
 ## 3. Design principles
 
@@ -67,7 +69,14 @@ contracts/
     fixture_metadata.v1.schema.json
   preprocessing/
     decoded_frame_fixture.v1.md
+    live_capture_to_model_input.v1.md
   CHANGELOG.md
+  schema-release-process.md
+docs/
+  adr/
+    ADR-0001-observation-before-interpretation.md
+    ADR-0002-canonical-preprocessing.md
+    ADR-0003-contract-evolution-and-data-guard.md
 reference/
   pyproject.toml
   src/observation_contracts/
@@ -85,11 +94,15 @@ reference/
   tests/
 fixtures/
   synthetic/
-    valid_session/
-    invalid_timestamp_regression/
-    invalid_session_switch/
-    invalid_landmark_count/
-    invalid_fixture_checksum/
+    valid/
+      session/
+    negative/
+      timestamp_regression/
+      session_switch/
+      landmark_count/
+      fixture_checksum/
+.githooks/
+  pre-commit
 Makefile
 ```
 
@@ -115,6 +128,7 @@ Required groups:
 
 - Identity and versions:
   - `session_id`
+  - `participant_pseudonym_id`
   - `session_manifest_schema_version`
   - `capture_protocol_version`
   - `harness_git_sha`
@@ -138,7 +152,9 @@ Required groups:
   - camera facing, resolution, orientation, and mirroring
   - requested camera FPS
   - configured inference FPS
-  - input dimensions and preprocessing-contract version
+  - input dimensions
+  - live-capture preprocessing-contract version
+  - fixture preprocessing-contract version when fixture replay is used
 - Cadence:
   - configured inference FPS
   - achieved inference FPS time series
@@ -150,15 +166,21 @@ Required groups:
 - Available observations:
   - normalized image landmarks available
   - world landmarks available
-- Optional media or fixture references with SHA-256 and synchronization metadata.
-- Counts for attempted inference frames, emitted records, detected poses, and dropped frames.
+- Optional media or fixture references with a required role. The role set includes `session_video`, `static_reference_clip`, and `conformance_fixture`. Cross-device media synchronization records both offset and drift estimates.
+- Counts with capture-path definitions:
+  - `camera_frames_received`: buffers delivered by the camera source;
+  - `inference_frames_submitted`: buffers submitted to the pose backend;
+  - `inference_records_emitted`: NDJSON records written after completed backend calls;
+  - `pose_detected_records`: emitted records with `pose_present: true`;
+  - `frames_skipped_before_inference`: received frames deliberately not submitted because of cadence selection or backpressure;
+  - `inference_failures`: submitted calls that failed before a `RawPoseFrame` could be emitted.
 - Human-observed capture-quality setup fields and a free-text failure log. These are observations, not a `CaptureQualityEngine` decision.
 
 Study conditions remain an extensible `study_context` object instead of becoming rigid runtime fields. This keeps angle, distance, camera height, lighting, clothing, environment, and future protocol labels versioned with the study design.
 
 ### 5.3 `RawPoseFrame v1`
 
-`RawPoseFrame` is NDJSON, one record for every attempted inference, including attempts where no pose is detected.
+`RawPoseFrame` is NDJSON, one record for every completed inference call, including calls where no pose is detected. Backend calls that fail before producing a result are counted and described in the manifest failure log rather than fabricated as pose observations.
 
 Required fields:
 
@@ -173,20 +195,18 @@ Required fields:
 - `world_landmarks`
 - `image_width`
 - `image_height`
-- `frames_dropped_since_last`
+- `frames_skipped_since_last_submission`
 
 Landmarks preserve:
 
 - topology index
 - optional topology name
 - `x`, `y`, and `z`
-- backend-provided `visibility` and `presence`, including low numeric values
+- nullable backend-provided `visibility` and `presence`, including low numeric values; `null` means the backend did not supply the value and no numeric sentinel is permitted
 
-When `pose_present` is false, normalized landmarks are empty and world landmarks are null. When a pose is present, normalized-landmark count must match the declared topology. World landmarks are either null when unavailable or a complete matching topology; partial world arrays are invalid because they cannot be aligned safely.
+When `pose_present` is false, both normalized and world landmark fields are null. When a pose is present, normalized-landmark count must match the declared topology. World landmarks are either null when unavailable or a complete matching topology; partial world arrays are invalid because they cannot be aligned safely. A manifest that declares world landmarks unavailable requires every frame's `world_landmarks` to be null; a manifest that declares them available permits per-frame null only when the backend omitted the complete world result for that frame.
 
-Backend, model, delegate, and topology metadata live in the manifest rather than being duplicated on every frame. The stream is joined to exactly one manifest by `session_id`.
-
-An optional `debug_features` object is an opaque extension point for diagnostic on-device measurements required by the later harness. Its description marks it non-authoritative, provisional, and excluded from reference semantic validation.
+Backend, model, delegate, and topology metadata live in the manifest rather than being duplicated on every frame. The stream is joined to exactly one manifest by `session_id`. The artifact schema version must remain constant across the entire NDJSON stream.
 
 ### 5.4 `Annotation v1`
 
@@ -198,7 +218,9 @@ Required fields:
 - `session_id`
 - `annotation_protocol_version`
 - `annotator_pseudonym`
+- `label_tier`
 - `events`
+- `set_level`
 - `media_reference`
 - `created_at`
 
@@ -207,11 +229,15 @@ Each event contains:
 - `event_id`
 - `type`
 - either `timestamp_ns` or a `start_timestamp_ns`/`end_timestamp_ns` range
-- a JSON scalar or object `value`
+- nullable `rep_index`
+- nullable `label` with the closed values `valid`, `invalid`, and `uncertain`
+- `invalid_reasons`, using the closed Phase 0 enumeration `partial_rom_top`, `partial_rom_bottom`, `kipping_or_leg_drive`, `assisted`, and `non_continuous`
+- nullable `annotator_confidence` in the inclusive range 0–1
+- an optional JSON scalar or object `value` for event-specific observational detail
 - `source`
 - optional `notes`
 
-Initial event types are `rep_start`, `rep_top`, `rep_bottom`, `rep_end`, `valid_rep`, `invalid_rep`, and `tracking_failure`. Version 1 requires `source: human`; the field exists so later majors can distinguish rule, user-feedback, teacher-model, and coach labels without redesigning the event envelope.
+Initial event types are `rep_start`, `rep_top`, `rep_bottom`, `rep_end`, `rep_label`, and `tracking_failure`. A `rep_label` event requires `rep_index` and `label`; `invalid_reasons` must be non-empty only for `label: invalid`. `label_tier` uses `gold`, `silver`, or `bronze`; Phase 0 human annotations are `gold`, including pre-adjudication independent annotations. Version 1 requires `source: human`; the field exists so later majors can distinguish rule, user-feedback, teacher-model, and coach labels without redesigning the event envelope. `set_level` contains `athlete_reported_reps` and optional notes.
 
 ### 5.5 `FixtureMetadata v1`
 
@@ -222,7 +248,7 @@ It records:
 - `fixture_metadata_schema_version`
 - fixture ID and explicit `synthetic: true`
 - preprocessing-contract version
-- frame width, height, byte stride, pixel format, colour space, colour range, channel order, and orientation
+- frame width, height, pixel format, colour space, colour range, channel order, and orientation
 - ordered frame entries containing frame index, timestamp, relative path, byte length, and SHA-256
 - optional source-generation metadata that contains no participant information
 
@@ -250,6 +276,17 @@ When a source image must be prepared for a fixture, the fixture generator:
 
 The first implementation validates prepared fixture bytes and metadata. A cross-platform fixture generator is not part of this milestone.
 
+### 6.1 Live camera-to-model-input contract
+
+The live contract governs the path the fixture bypasses. It converts each platform camera buffer into the same canonical model-input representation before inference:
+
+1. Read and record source pixel format, colour matrix, colour range, orientation, mirroring, width, and height. A buffer with missing colour metadata is rejected for conformance capture rather than silently assigned a matrix.
+2. Convert the source buffer to upright, unmirrored, full-range sRGB RGB24 using the recorded matrix and range.
+3. Scale, round, centre, and pad to the manifest's configured model-input dimensions using the exact algorithm in steps 3–6 of the fixture contract.
+4. Feed the canonical pixel plane to the pose backend and record the live preprocessing-contract version in the manifest.
+
+Platform adapters may use optimized YUV conversion implementations only when byte-level synthetic conversion vectors for the declared source format match the reference output. Source-format-specific vectors and adapters belong to the native-harness milestone; the output contract and acceptance rule are frozen here.
+
 ## 7. Python reference validator
 
 The validator is the canonical executable interpretation of the observation contracts for both future platform exporters.
@@ -267,15 +304,16 @@ The validator is the canonical executable interpretation of the observation cont
 - Reject unknown schema majors before processing the artifact.
 - Accept same-major newer minor and patch versions when required v1 fields remain present.
 - Require one stable `session_id` across manifest, frame stream, and annotations.
+- Require one stable raw-frame schema version across an NDJSON stream.
 - Require strictly increasing `frame_index` values.
-- Require nondecreasing capture timestamps and valid inference timing order.
+- Require strictly increasing capture timestamps and `capture_timestamp_ns <= inference_start_ns <= inference_end_ns`.
 - Require topology-specific landmark cardinality for present poses.
-- Require empty/null landmark representations for absent poses.
-- Require normalized and world coordinate spaces to remain distinct.
-- Reconcile emitted-record, detected-pose, and dropped-frame counts with the manifest.
+- Require null landmark representations for absent poses and manifest-consistent world-landmark availability.
+- Keep normalized and world observations in separate typed fields; do not compare their numeric values or impose coordinate-range assumptions in v1.
+- Reconcile count identities: `camera_frames_received = inference_frames_submitted + frames_skipped_before_inference`, `inference_frames_submitted = inference_records_emitted + inference_failures`, emitted lines equal `inference_records_emitted`, detected rows equal `pose_detected_records`, and the per-frame skipped counts sum to `frames_skipped_before_inference`.
 - Detect missing or duplicate fixture frame indexes and timestamp regressions.
 - Verify fixture byte lengths and SHA-256 values.
-- Compare configured FPS metadata with observed timestamps only for contradictions such as impossible or corrupt timing. It does not impose a performance threshold or fail ordinary variance.
+- Validate only structural timing impossibilities and count identities. Configured-versus-achieved FPS is reported as evidence and never produces a threshold-based validation failure.
 
 The topology registry initially knows `mediapipe_pose_33_v1` and its 33 ordered landmarks. Unknown topologies fail with a specific unsupported-topology error rather than being misvalidated against 33.
 
@@ -310,9 +348,9 @@ The guard examines tracked and staged paths and selected file signatures. It rej
 - identity-key directories and known authentication filenames
 - obvious private keys or credential exports
 
-Synthetic fixtures are allowed only below `fixtures/synthetic/`, must be referenced by valid fixture metadata, and must declare `synthetic: true`. Path checks are deterministic and explain which rule rejected a file. Tests include allowed documentation and schema examples to constrain false positives.
+Positive synthetic fixtures are allowed only below `fixtures/synthetic/valid/`, must be referenced by valid fixture metadata, and must declare `synthetic: true`. Declared-negative fixtures are allowed only below `fixtures/synthetic/negative/<case>/` and must include an `expected_failure.json` naming the validator command, expected error code, and expected artifact path. The guard validates the negative-fixture declaration and synthetic provenance but does not require the intentionally malformed artifact to pass its target validator. Path checks are deterministic and explain which rule rejected a file. Tests include allowed documentation and schema examples to constrain false positives.
 
-The guard is callable directly and by `make verify`. Installing it as a local Git pre-commit hook is documented but not automatic; repository verification must work in fresh clones without mutating developer Git configuration.
+The guard is callable directly and by `make verify`. A committed `.githooks/pre-commit` invokes the staged-path guard. `make bootstrap` idempotently configures `core.hooksPath=.githooks`; onboarding requires this command before write-mode work. CI and `make verify` independently scan the tracked tree so protection does not rely solely on local hook installation. ADR-0003 records this deliberate repository-local Git configuration.
 
 ## 9. Verification strategy
 
@@ -324,9 +362,13 @@ Required test groups:
 - Valid session and no-pose frame behavior.
 - Timestamp and frame-index regressions.
 - Mid-stream session-ID changes.
+- Mid-stream schema-version changes.
+- Participant-pseudonym presence and cross-artifact consistency where applicable.
 - Topology-specific count failures and unsupported topologies.
-- Complete, null, and invalid partial world-landmark arrays.
+- Nullable confidence values, complete/null world arrays, manifest availability mismatches, and invalid partial world arrays.
 - Fixture missing frames, duplicate indexes, byte-length mismatch, and checksum mismatch.
+- Annotation `valid`/`invalid`/`uncertain` labels, closed invalid reasons, rep indexes, confidence, tiers, and set-level fields.
+- Count-identity reconciliation and static-reference media-role validation.
 - Schema evolution:
   - known current major succeeds;
   - same-major newer minor/patch with unknown optional fields succeeds;
@@ -334,13 +376,13 @@ Required test groups:
 - Repository-guard positive and false-positive cases.
 - CLI human and JSON output plus exit-code behavior.
 
-`make verify` runs formatting checks, static analysis, the complete test suite, validation of committed valid fixtures, and the repository guard. It must be deterministic, offline after dependency installation, and safe in a clean clone.
+`make verify` runs formatting checks, static analysis, the complete test suite, validation of committed positive fixtures, expected-failure execution for every declared-negative fixture, and the tracked-tree repository guard. It must be deterministic, offline after dependency installation, and safe in a clean clone.
 
 ## 10. Completion criteria
 
 This milestone is complete when:
 
-1. all four stable schemas and the preprocessing contract are versioned and documented;
+1. all four stable schemas, both preprocessing contracts, the material ADRs, and the schema release/change procedure are versioned and documented;
 2. the Python reference validator performs the structural and semantic checks above;
 3. committed synthetic positive and negative fixtures exercise the contract boundaries;
 4. schema-evolution behavior is proven by tests;
@@ -349,6 +391,17 @@ This milestone is complete when:
 7. Claude has implemented against the approved plan, Codex has independently reviewed the diff and tests, and all critical or important findings are resolved;
 8. no real participant data, biometric-derived observations, consent records, credentials, or identity keys are tracked.
 
-## 11. Next milestone boundary
+## 11. Decision and release records
+
+The design is accompanied by:
+
+- ADR-0001: stabilize observation contracts and explicitly defer `DerivedFeatures`, `MovementEvent`, and in-frame debug measurements;
+- ADR-0002: use a canonical full-range sRGB RGB24 plane and one deterministic scale/pad algorithm for fixture and live model input;
+- ADR-0003: use independent schema versions, Python as the reference validator, and an enforced repository-local data guard;
+- `contracts/schema-release-process.md`: proposal, review, compatibility classification, release, deprecation, and migration rules.
+
+These records resolve the reviewed plan's D1/D2 requirements for decisions owned by this milestone. Future M0 decisions receive new ADRs rather than being appended silently to these records.
+
+## 12. Next milestone boundary
 
 After this foundation is accepted, the next design cycle selects one native diagnostic harness. That milestone will make the first exporter conform to these contracts and will supply the practical feedback needed before the second platform begins. Interpretation-layer contracts remain deferred until Phase 0 evidence supports them.
