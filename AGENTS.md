@@ -10,7 +10,9 @@ Do not silently turn hypotheses into decisions. Record open questions, assumptio
 
 ## Current operating gate
 
-The project is currently planning/documentation-only. Protocol documents, ADRs, open-question records, and language-neutral JSON Schema contracts are allowed. Do not create application code, dependency manifests, generated projects, validators, platform builds, or other implementation artifacts until Sanchit explicitly enables write-mode implementation in the Buzz channel.
+Sanchit enabled write-mode implementation on 2026-08-12. The active implementation scope is the Phase 0 observation-contract foundation described in `docs/superpowers/specs/2026-08-12-m0-observation-contract-foundation-design.md` and its approved implementation plan.
+
+Within that milestone, language-neutral observation schemas, the Python reference validator, synthetic fixtures, repository/data guards, dependency manifests, and verification tooling are allowed. Android/iOS harnesses, MediaPipe integration, canonicalization, movement interpretation, rep counting, custom ML, acceptance thresholds, and real participant data remain out of scope until the next milestone is designed and approved.
 
 ## Collaboration
 
