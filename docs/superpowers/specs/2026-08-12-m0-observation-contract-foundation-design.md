@@ -30,6 +30,9 @@ The result must be usable as the canonical acceptance target for future Android 
 - Synthetic valid and invalid fixtures containing no participant or biometric data.
 - A repository guard for prohibited data and credential paths.
 - Schema-evolution tests.
+- A reference RGB24 scale/pad implementation with synthetic golden conformance vectors.
+- A versioned validator error-code registry and schema for declared-negative fixture expectations.
+- A GitHub Actions workflow that runs the same verification command as local development.
 - One verification command for formatting, static checks, tests, fixture validation, and repository guarding.
 - Architecture decision records for the material M0 choices made by this milestone.
 - A schema release, compatibility, deprecation, and migration procedure.
@@ -70,6 +73,9 @@ contracts/
   preprocessing/
     decoded_frame_fixture.v1.md
     live_capture_to_model_input.v1.md
+  tooling/
+    expected_failure.v1.schema.json
+    validator_error_codes.v1.json
   CHANGELOG.md
   schema-release-process.md
 docs/
@@ -90,6 +96,7 @@ reference/
     structural.py
     semantic.py
     fixture_integrity.py
+    preprocessing.py
     repository_guard.py
   tests/
 fixtures/
@@ -101,8 +108,13 @@ fixtures/
       session_switch/
       landmark_count/
       fixture_checksum/
+    preprocessing/
+      scale_pad_golden/
 .githooks/
   pre-commit
+.github/
+  workflows/
+    verify.yml
 Makefile
 ```
 
@@ -152,7 +164,7 @@ Required groups:
   - camera facing, resolution, orientation, and mirroring
   - requested camera FPS
   - configured inference FPS
-  - input dimensions
+  - `model_input_width` and `model_input_height`, distinct from camera resolution
   - live-capture preprocessing-contract version
   - fixture preprocessing-contract version when fixture replay is used
 - Cadence:
@@ -173,7 +185,9 @@ Required groups:
   - `inference_records_emitted`: NDJSON records written after completed backend calls;
   - `pose_detected_records`: emitted records with `pose_present: true`;
   - `frames_skipped_before_inference`: received frames deliberately not submitted because of cadence selection or backpressure;
+  - `trailing_frames_skipped_after_last_emitted_record`: skipped frames not attributable to a later emitted record at session end, or all skipped frames when no record was emitted;
   - `inference_failures`: submitted calls that failed before a `RawPoseFrame` could be emitted.
+- Machine inference failures are a structured list separate from the human capture-quality failure log. Each entry records submission index, capture timestamp, stable validator/backend error code, and optional sanitized detail. The list length equals `inference_failures`.
 - Human-observed capture-quality setup fields and a free-text failure log. These are observations, not a `CaptureQualityEngine` decision.
 
 Study conditions remain an extensible `study_context` object instead of becoming rigid runtime fields. This keeps angle, distance, camera height, lighting, clothing, environment, and future protocol labels versioned with the study design.
@@ -195,7 +209,7 @@ Required fields:
 - `world_landmarks`
 - `image_width`
 - `image_height`
-- `frames_skipped_since_last_submission`
+- `frames_skipped_since_last_emitted_record`
 
 Landmarks preserve:
 
@@ -206,6 +220,8 @@ Landmarks preserve:
 
 When `pose_present` is false, both normalized and world landmark fields are null. When a pose is present, normalized-landmark count must match the declared topology. World landmarks are either null when unavailable or a complete matching topology; partial world arrays are invalid because they cannot be aligned safely. A manifest that declares world landmarks unavailable requires every frame's `world_landmarks` to be null; a manifest that declares them available permits per-frame null only when the backend omitted the complete world result for that frame.
 
+`frames_skipped_since_last_emitted_record` counts camera frames received but not submitted since the previous record-emitting completed call; on the first record it counts from session start. Skips before failed submissions remain accumulated until the next emitted record, so their total is not lost.
+
 Backend, model, delegate, and topology metadata live in the manifest rather than being duplicated on every frame. The stream is joined to exactly one manifest by `session_id`. The artifact schema version must remain constant across the entire NDJSON stream.
 
 ### 5.4 `Annotation v1`
@@ -215,10 +231,13 @@ Annotation remains a deliberately small study-timeline contract rather than an e
 Required fields:
 
 - `annotation_schema_version`
+- `annotation_id`
 - `session_id`
 - `annotation_protocol_version`
 - `annotator_pseudonym`
 - `label_tier`
+- `annotation_stage`
+- `input_annotation_ids`
 - `events`
 - `set_level`
 - `media_reference`
@@ -237,7 +256,9 @@ Each event contains:
 - `source`
 - optional `notes`
 
-Initial event types are `rep_start`, `rep_top`, `rep_bottom`, `rep_end`, `rep_label`, and `tracking_failure`. A `rep_label` event requires `rep_index` and `label`; `invalid_reasons` must be non-empty only for `label: invalid`. `label_tier` uses `gold`, `silver`, or `bronze`; Phase 0 human annotations are `gold`, including pre-adjudication independent annotations. Version 1 requires `source: human`; the field exists so later majors can distinguish rule, user-feedback, teacher-model, and coach labels without redesigning the event envelope. `set_level` contains `athlete_reported_reps` and optional notes.
+Initial event types are `rep_start`, `rep_top`, `rep_bottom`, `rep_end`, `rep_label`, and `tracking_failure`. A `rep_label` event requires `rep_index` and `label`. `label: invalid` requires at least one `invalid_reasons` value; every other label requires `invalid_reasons` to be empty. `label_tier` uses `gold`, `silver`, or `bronze`; Phase 0 human annotations are `gold`.
+
+`annotation_stage` is `independent` or `adjudicated`. Independent passes require an empty `input_annotation_ids` array. An adjudicated artifact requires at least two distinct input annotation IDs, identifies the adjudicator through `annotator_pseudonym`, and is the benchmark ground-truth artifact. This preserves the independent inputs needed for agreement analysis while making consensus selection explicit. Version 1 requires `source: human`; the field exists so later majors can distinguish rule, user-feedback, teacher-model, and coach labels without redesigning the event envelope. `set_level` contains `athlete_reported_reps` and optional notes.
 
 ### 5.5 `FixtureMetadata v1`
 
@@ -285,7 +306,9 @@ The live contract governs the path the fixture bypasses. It converts each platfo
 3. Scale, round, centre, and pad to the manifest's configured model-input dimensions using the exact algorithm in steps 3–6 of the fixture contract.
 4. Feed the canonical pixel plane to the pose backend and record the live preprocessing-contract version in the manifest.
 
-Platform adapters may use optimized YUV conversion implementations only when byte-level synthetic conversion vectors for the declared source format match the reference output. Source-format-specific vectors and adapters belong to the native-harness milestone; the output contract and acceptance rule are frozen here.
+The Python package implements steps 3–6 as a reference RGB24 scale/pad function. Committed synthetic golden vectors cover aspect-ratio preservation, half-up rounding, odd right/bottom padding, and black fill; their expected bytes and hashes are validated by `make verify`. Platform adapters must match these vectors byte for byte.
+
+Platform adapters may use optimized YUV conversion implementations only when byte-level synthetic conversion vectors for the declared source format match the reference output. Source-format-specific YUV vectors and adapters belong to the native-harness milestone; the shared RGB24 geometry, output contract, and acceptance rule are executable here.
 
 ## 7. Python reference validator
 
@@ -309,13 +332,15 @@ The validator is the canonical executable interpretation of the observation cont
 - Require strictly increasing capture timestamps and `capture_timestamp_ns <= inference_start_ns <= inference_end_ns`.
 - Require topology-specific landmark cardinality for present poses.
 - Require null landmark representations for absent poses and manifest-consistent world-landmark availability.
-- Keep normalized and world observations in separate typed fields; do not compare their numeric values or impose coordinate-range assumptions in v1.
-- Reconcile count identities: `camera_frames_received = inference_frames_submitted + frames_skipped_before_inference`, `inference_frames_submitted = inference_records_emitted + inference_failures`, emitted lines equal `inference_records_emitted`, detected rows equal `pose_detected_records`, and the per-frame skipped counts sum to `frames_skipped_before_inference`.
+- Keep normalized and world observations in separate typed fields and reject exact serialized-array equality when both are present; do not impose coordinate-range assumptions or numeric tolerances in v1.
+- Reconcile count identities: `camera_frames_received = inference_frames_submitted + frames_skipped_before_inference`; `inference_frames_submitted = inference_records_emitted + inference_failures`; emitted lines equal `inference_records_emitted`; detected rows equal `pose_detected_records`; the structured machine-failure list length equals `inference_failures`; and the sum of per-frame `frames_skipped_since_last_emitted_record` plus `trailing_frames_skipped_after_last_emitted_record` equals `frames_skipped_before_inference`.
 - Detect missing or duplicate fixture frame indexes and timestamp regressions.
 - Verify fixture byte lengths and SHA-256 values.
 - Validate only structural timing impossibilities and count identities. Configured-versus-achieved FPS is reported as evidence and never produces a threshold-based validation failure.
 
 The topology registry initially knows `mediapipe_pose_33_v1` and its 33 ordered landmarks. Unknown topologies fail with a specific unsupported-topology error rather than being misvalidated against 33.
+
+Session shutdown stops new submissions and drains every in-flight call. A call still incomplete after the configured drain timeout becomes a structured `session_teardown_timeout` inference failure, ensuring every submitted call is classified exactly once and the count identities close.
 
 ### 7.3 CLI and errors
 
@@ -338,6 +363,12 @@ Human output is concise and grouped by artifact. `--format json` returns a stabl
 
 Validation failures exit nonzero. Unexpected internal failures use a distinct exit code and never masquerade as invalid user data.
 
+### 7.4 Stable error codes
+
+`contracts/tooling/validator_error_codes.v1.json` is the registry for machine-readable validator errors. Codes are uppercase namespaced identifiers such as `FRAME.TIMESTAMP_REGRESSION` and `FIXTURE.CHECKSUM_MISMATCH`. Released codes are never renamed or reused for a different condition; replacement codes are added and old codes may be deprecated through the schema release process.
+
+`contracts/tooling/expected_failure.v1.schema.json` validates each negative fixture's `expected_failure.json`. The tooling contract records its own semantic version, command, expected code, and artifact path. Unknown error codes or malformed expectation files fail the repository guard.
+
 ## 8. Repository guard
 
 The guard examines tracked and staged paths and selected file signatures. It rejects:
@@ -350,7 +381,7 @@ The guard examines tracked and staged paths and selected file signatures. It rej
 
 Positive synthetic fixtures are allowed only below `fixtures/synthetic/valid/`, must be referenced by valid fixture metadata, and must declare `synthetic: true`. Declared-negative fixtures are allowed only below `fixtures/synthetic/negative/<case>/` and must include an `expected_failure.json` naming the validator command, expected error code, and expected artifact path. The guard validates the negative-fixture declaration and synthetic provenance but does not require the intentionally malformed artifact to pass its target validator. Path checks are deterministic and explain which rule rejected a file. Tests include allowed documentation and schema examples to constrain false positives.
 
-The guard is callable directly and by `make verify`. A committed `.githooks/pre-commit` invokes the staged-path guard. `make bootstrap` idempotently configures `core.hooksPath=.githooks`; onboarding requires this command before write-mode work. CI and `make verify` independently scan the tracked tree so protection does not rely solely on local hook installation. ADR-0003 records this deliberate repository-local Git configuration.
+The guard is callable directly and by `make verify`. A committed `.githooks/pre-commit` invokes the staged-path guard. `make bootstrap` idempotently configures `core.hooksPath=.githooks`; onboarding requires this command before write-mode work. `.github/workflows/verify.yml` runs `make verify` for pull requests and pushes, and `make verify` independently scans the tracked tree, so protection does not rely solely on local hook installation. ADR-0003 records this deliberate repository-local Git configuration and its residual pre-bootstrap local-commit risk.
 
 ## 9. Verification strategy
 
@@ -368,7 +399,12 @@ Required test groups:
 - Nullable confidence values, complete/null world arrays, manifest availability mismatches, and invalid partial world arrays.
 - Fixture missing frames, duplicate indexes, byte-length mismatch, and checksum mismatch.
 - Annotation `valid`/`invalid`/`uncertain` labels, closed invalid reasons, rep indexes, confidence, tiers, and set-level fields.
+- Independent and adjudicated annotation artifacts, consensus-input linkage, and invalid stage combinations.
 - Count-identity reconciliation and static-reference media-role validation.
+- Failed and teardown-timed-out inference accounting.
+- Exact normalized/world array duplication rejection without numeric tolerances.
+- Reference RGB24 scale/pad golden vectors.
+- Error-code registry immutability and declared-negative expectation-schema validation.
 - Schema evolution:
   - known current major succeeds;
   - same-major newer minor/patch with unknown optional fields succeeds;
@@ -382,11 +418,11 @@ Required test groups:
 
 This milestone is complete when:
 
-1. all four stable schemas, both preprocessing contracts, the material ADRs, and the schema release/change procedure are versioned and documented;
+1. all four stable observation schemas, both preprocessing contracts, both tooling contracts, the material ADRs, and the schema release/change procedure are versioned and documented;
 2. the Python reference validator performs the structural and semantic checks above;
 3. committed synthetic positive and negative fixtures exercise the contract boundaries;
 4. schema-evolution behavior is proven by tests;
-5. repository guarding blocks prohibited artifacts without rejecting approved synthetic fixtures or ordinary project files;
+5. repository guarding blocks prohibited artifacts without rejecting approved synthetic fixtures or ordinary project files, and the committed GitHub Actions workflow runs that guard through `make verify`;
 6. `make verify` succeeds from a clean environment;
 7. Claude has implemented against the approved plan, Codex has independently reviewed the diff and tests, and all critical or important findings are resolved;
 8. no real participant data, biometric-derived observations, consent records, credentials, or identity keys are tracked.
@@ -398,7 +434,7 @@ The design is accompanied by:
 - ADR-0001: stabilize observation contracts and explicitly defer `DerivedFeatures`, `MovementEvent`, and in-frame debug measurements;
 - ADR-0002: use a canonical full-range sRGB RGB24 plane and one deterministic scale/pad algorithm for fixture and live model input;
 - ADR-0003: use independent schema versions, Python as the reference validator, and an enforced repository-local data guard;
-- `contracts/schema-release-process.md`: proposal, review, compatibility classification, release, deprecation, and migration rules.
+- `contracts/schema-release-process.md`: proposal, review, compatibility classification, release, deprecation, migration, and validator-error-code rules.
 
 These records resolve the reviewed plan's D1/D2 requirements for decisions owned by this milestone. Future M0 decisions receive new ADRs rather than being appended silently to these records.
 

@@ -21,11 +21,11 @@ Both decoded fixtures and live capture use one scale-to-fit transformation:
 5. centre the result, assigning odd padding to the right or bottom;
 6. pad with RGB `(0, 0, 0)`.
 
-Fixture metadata records exact canonical bytes and SHA-256 values. Live manifests record source pixel metadata, target dimensions, and preprocessing-contract version. Platform-optimized conversions must match source-format-specific synthetic reference vectors byte for byte before use in conformance capture.
+Fixture metadata records exact canonical bytes and SHA-256 values. Live manifests record source pixel metadata, target dimensions, and preprocessing-contract version. This milestone supplies a Python RGB24 scale/pad reference implementation and committed golden vectors for the shared geometry. Platform-optimized conversions must match those vectors and source-format-specific synthetic reference vectors byte for byte before use in conformance capture.
 
 ## Consequences
 
 - Decoded fixtures bypass platform decoders and isolate backend/delegate variance.
 - Live camera differences remain attributable because preprocessing is declared and testable.
-- Source-format conversion vectors are added with each native adapter rather than guessed in this platform-neutral milestone.
+- Shared RGB24 geometry is executable in this milestone; source-format YUV conversion vectors are added with each native adapter rather than guessed here.
 - No accuracy tolerance is introduced; preprocessing conformance is an exact byte-level property.

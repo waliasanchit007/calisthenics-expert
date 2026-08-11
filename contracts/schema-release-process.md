@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This procedure governs the observation-contract schemas under `contracts/schema/`. Artifact schema versions are independent of application, harness, model, and analysis-package versions.
+This procedure governs observation schemas under `contracts/schema/` and validator tooling contracts under `contracts/tooling/`. Artifact and tooling versions are independent of application, harness, model, and analysis-package versions.
 
 ## Proposal
 
@@ -46,6 +46,7 @@ Changes affecting raw-data retention, participant linkage, consent, deletion, or
 - `contracts/CHANGELOG.md` records the release date, compatibility class, changed fields, validator version, fixtures, and ADR links.
 - A Git tag identifies the repository commit containing the release.
 - Existing released schema content is never edited in place to represent an incompatible meaning; a new major schema is added instead.
+- Released validator error codes are never renamed, removed without deprecation, or reused for a different condition. New conditions receive new codes; replacement codes retain a deprecation link to the old code.
 
 ## Deprecation
 

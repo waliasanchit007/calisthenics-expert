@@ -15,11 +15,13 @@ Future Android, iOS, and analysis implementations need one executable interpreta
 - Every artifact carries an independent semantic version. Compatible newer minor or patch versions tolerate unknown optional fields; unknown majors fail before processing.
 - Positive synthetic fixtures and declared-negative synthetic fixtures are committed. Negative fixtures include an `expected_failure.json` declaration and are required to fail with the named validator error.
 - A committed `.githooks/pre-commit` runs the staged-path data guard. `make bootstrap` idempotently sets `core.hooksPath=.githooks` before write-mode work.
-- `make verify` and CI scan the complete tracked tree independently of hook installation.
+- A committed GitHub Actions workflow runs `make verify` on pull requests and pushes. `make verify` scans the complete tracked tree independently of hook installation.
+- Validator error codes are a versioned registry. Released codes are never renamed or reused, and declared-negative fixtures are validated against a tooling schema.
 
 ## Consequences
 
 - Both platform exporters are judged by the same structural and semantic behavior.
 - Negative compatibility tests coexist with the data guard without exemptions for arbitrary files.
 - Hook installation changes repository-local Git configuration but does not modify global Git settings.
+- A local commit made before `make bootstrap` remains a documented residual risk; remote integration is still blocked by CI.
 - Schema lifecycle follows `contracts/schema-release-process.md`; released schema files are immutable.
