@@ -10,7 +10,7 @@ Do not silently turn hypotheses into decisions. Record open questions, assumptio
 
 ## Current operating gate
 
-The project is currently planning/documentation-only. Do not create application code, dependency manifests, generated projects, or implementation commits until Sanchit explicitly enables write-mode implementation in the Buzz channel.
+The project is currently planning/documentation-only. Protocol documents, ADRs, open-question records, and language-neutral JSON Schema contracts are allowed. Do not create application code, dependency manifests, generated projects, validators, platform builds, or other implementation artifacts until Sanchit explicitly enables write-mode implementation in the Buzz channel.
 
 ## Collaboration
 
@@ -25,4 +25,3 @@ The project is currently planning/documentation-only. Do not create application 
 - Keep raw observations, canonical poses, derived features, human labels, and predictions as separately versioned artifacts.
 - Prefer `UNCERTAIN` over an unsupported confident result.
 - Do not invent benchmark acceptance thresholds before baseline data exists.
-
