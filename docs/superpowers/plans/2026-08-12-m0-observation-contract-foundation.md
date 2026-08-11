@@ -513,7 +513,7 @@ source_x = (destination_x + 0.5) * source_width / destination_width - 0.5
 source_y = (destination_y + 0.5) * source_height / destination_height - 0.5
 ~~~
 
-Clamp source coordinates to edge pixels. Compute weights with `fractions.Fraction` and round output channels with `floor(value + 1/2)` so golden generation is deterministic.
+Clamp source coordinates to edge pixels. Compute weights with `fractions.Fraction` and round output channels with `floor(value + 1/2)`. Expected test bytes must be hand-derived literals; tests must never call production interpolation logic to calculate their own expected values.
 
 - [ ] **Step 2: Run focused tests and observe missing functions**
 
@@ -527,9 +527,9 @@ Expected: collection fails for missing modules.
 
 Resolve every referenced path beneath the descriptor directory and reject traversal outside the fixture root. Stream file hashing in 64 KiB chunks. Implement scale-to-fit dimensions with half-up rounding, centre placement, odd remainder on right/bottom, and RGB zero fill. Keep YUV conversion out of this function.
 
-- [ ] **Step 4: Generate and verify committed golden bytes**
+- [ ] **Step 4: Add independently derived committed golden bytes**
 
-Use a deterministic 2×2 RGB24 source with four distinct corner colours and a target shape that produces odd padding. The checked-in descriptor contains exact lengths and hashes. Generate bytes once through a small test helper, then freeze the resulting files; production verification reads rather than rewrites them.
+Use a deterministic 2×2 RGB24 source with four distinct corner colours and a target shape that produces odd padding. Calculate every expected output channel independently from the documented rational formula, record the arithmetic in the test case, and commit literal input/output bytes with exact lengths and hashes. Production code and production helpers must not generate expected fixture bytes.
 
 - [ ] **Step 5: Run focused and full tests**
 
@@ -764,19 +764,7 @@ git commit -m "feat: add contract verification command"
 **Interfaces:**
 - Documents the v1 release, commands, outputs, compatibility policy, and synthetic-data boundary.
 
-- [ ] **Step 1: Write a documentation acceptance test**
-
-Add `reference/tests/test_documentation.py` that asserts README contains `make bootstrap`, `make verify`, all four schema names, all four CLI commands, the synthetic-only warning, and a link to the schema release process.
-
-- [ ] **Step 2: Run the documentation test and observe missing content**
-
-~~~bash
-.venv/bin/python -m pytest reference/tests/test_documentation.py -v
-~~~
-
-Expected: assertion failure against the current one-line README.
-
-- [ ] **Step 3: Write release and usage documentation**
+- [ ] **Step 1: Write release and usage documentation**
 
 Document:
 
@@ -788,9 +776,13 @@ Document:
 - hook installation and pre-bootstrap residual risk;
 - schema compatibility and release links.
 
-`contracts/CHANGELOG.md` records v1.0.0 for all four observation schemas and three tooling contracts, validator package version, preprocessing contracts, fixture set, and ADRs.
+`contracts/CHANGELOG.md` records v1.0.0 for all four observation schemas and three tooling contracts, validator package version, preprocessing contracts, fixture set, and ADRs. Human prose receives editorial review rather than brittle tests that assert source wording.
 
-- [ ] **Step 4: Verify from a separate clean clone**
+- [ ] **Step 2: Exercise every documented command**
+
+Run the README's bootstrap, full verification, all four CLI `--help` paths, one valid-session example, one declared-negative example, and one preprocessing-vector example exactly as written. Expected: every command produces the documented exit class and no example references an absent path.
+
+- [ ] **Step 3: Verify from a separate clean clone**
 
 Create a temporary clone outside the repository, then run:
 
@@ -802,7 +794,7 @@ git status --short
 
 Expected: verification exits 0 and `git status --short` is empty. Remove the temporary clone after recording the result.
 
-- [ ] **Step 5: Run final repository verification**
+- [ ] **Step 4: Run final repository verification**
 
 ~~~bash
 make verify
@@ -812,10 +804,10 @@ git status -sb
 
 Expected: all checks exit 0 and the only branch difference is the intentional task commits.
 
-- [ ] **Step 6: Commit Task 10**
+- [ ] **Step 5: Commit Task 10**
 
 ~~~bash
-git add README.md contracts/CHANGELOG.md contracts/schema-release-process.md reference/tests/test_documentation.py
+git add README.md contracts/CHANGELOG.md contracts/schema-release-process.md
 git commit -m "docs: release observation contracts"
 ~~~
 
