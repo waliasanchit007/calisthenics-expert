@@ -221,6 +221,81 @@ def test_admits_all_three_declared_synthetic_fixture_classes(tmp_path: Path) -> 
     assert guard_repository(root, mode="staged") == []
 
 
+def test_admits_committed_nested_preprocessing_vector_layout(tmp_path: Path) -> None:
+    root = _repository(tmp_path)
+    input_bytes = bytes.fromhex("ff00 0000 ff00 0000 ffff ffff")
+    expected_bytes = bytes.fromhex(
+        "ff00 00bf 4000 40bf 0000 ff00 0000 00bf "
+        "0040 9f40 4060 bf40 40ff 4000 0000 4000 "
+        "bf60 40bf 9fbf bfbf ffbf 0000 0000 00ff "
+        "4040 ffbf bfff ffff ff00 0000"
+    )
+    vector_root = "fixtures/synthetic/preprocessing/scale_pad_golden"
+    _write(root, f"{vector_root}/input.rgb24", input_bytes)
+    _write(root, f"{vector_root}/expected.rgb24", expected_bytes)
+    _write(
+        root,
+        f"{vector_root}/vector.json",
+        _json(
+            {
+                "tooling_schema_version": "1.0.0",
+                "synthetic": True,
+                "vector_id": "scale_pad_golden_2x2_to_5x4_v1",
+                "description": "Distinct 2x2 RGB24 corners scale to 4x4 with exact centre-of-pixel bilinear interpolation and one black right-padding column in a 5x4 target.",
+                "input_width": 2,
+                "input_height": 2,
+                "output_width": 5,
+                "output_height": 4,
+                "input_path": "input.rgb24",
+                "input_byte_length": len(input_bytes),
+                "input_sha256": _sha256(input_bytes),
+                "expected_output_path": "expected.rgb24",
+                "expected_output_byte_length": len(expected_bytes),
+                "expected_output_sha256": _sha256(expected_bytes),
+            }
+        ),
+    )
+    _stage(root)
+
+    assert guard_repository(root, mode="staged") == []
+
+
+def test_does_not_admit_preprocessing_bytes_from_a_sibling_vector_directory(
+    tmp_path: Path,
+) -> None:
+    root = _repository(tmp_path)
+    vector_input = b"input"
+    vector_output = b"out"
+    vector_root = "fixtures/synthetic/preprocessing/declared_vector"
+    _write(root, f"{vector_root}/input.rgb24", vector_input)
+    _write(root, f"{vector_root}/output.rgb24", vector_output)
+    _write(
+        root,
+        f"{vector_root}/preprocessing_vector.v1.json",
+        _json(
+            {
+                "tooling_schema_version": "1.0.0",
+                "synthetic": True,
+                "input_width": 1,
+                "input_height": 1,
+                "output_width": 1,
+                "output_height": 1,
+                "input_path": "input.rgb24",
+                "input_byte_length": len(vector_input),
+                "input_sha256": _sha256(vector_input),
+                "expected_output_path": "output.rgb24",
+                "expected_output_byte_length": len(vector_output),
+                "expected_output_sha256": _sha256(vector_output),
+            }
+        ),
+    )
+    sibling_path = "fixtures/synthetic/preprocessing/undeclared_vector/stray.rgb24"
+    _write(root, sibling_path, b"undeclared")
+    _stage(root)
+
+    assert _codes(root, mode="staged") == [(sibling_path, "REPOSITORY.INVALID_FIXTURE_DECLARATION")]
+
+
 @pytest.mark.parametrize(
     ("relative_path", "document"),
     [

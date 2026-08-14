@@ -280,7 +280,9 @@ def _fixture_group(relative_path: str) -> _FixtureGroup | None:
     if parts[2] == "valid":
         return _FixtureGroup("positive", "fixtures/synthetic/valid")
     if parts[2] == "preprocessing":
-        return _FixtureGroup("preprocessing", "fixtures/synthetic/preprocessing")
+        if len(parts) == 4:
+            return _FixtureGroup("preprocessing", "fixtures/synthetic/preprocessing")
+        return _FixtureGroup("preprocessing", "/".join(parts[:4]))
     if parts[2] == "negative":
         if len(parts) < 4:
             return _FixtureGroup("negative", "fixtures/synthetic/negative")
@@ -330,7 +332,7 @@ def _is_descriptor(relative_path: str, kind: str) -> bool:
         return name == "fixture_metadata.json"
     if kind == "negative":
         return name == "expected_failure.json"
-    return name in {"preprocessing_vector.json", "preprocessing_vector.v1.json"}
+    return name in {"preprocessing_vector.json", "preprocessing_vector.v1.json", "vector.json"}
 
 
 def _validate_fixture_declaration(
