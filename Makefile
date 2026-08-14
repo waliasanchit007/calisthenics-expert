@@ -1,13 +1,24 @@
-PYTHON ?= python3
+PYTHON ?= $(shell for candidate in python3.14 python3.13 python3.12 python3; do \
+	if command -v "$$candidate" >/dev/null 2>&1 && "$$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)' >/dev/null 2>&1; then \
+		printf '%s' "$$candidate"; exit 0; \
+	fi; \
+done; printf '%s' python3)
 VENV_PYTHON := .venv/bin/python
-VENV_PIP := .venv/bin/pip
 CLI := $(VENV_PYTHON) -m observation_contracts
 
 .PHONY: bootstrap verify
 
 bootstrap:
-	$(PYTHON) -m venv .venv
-	$(VENV_PIP) install -e 'reference[dev]'
+	@command -v "$(PYTHON)" >/dev/null 2>&1 || { echo "error: Python interpreter '$(PYTHON)' was not found" >&2; exit 1; }
+	@$(PYTHON) -c 'import sys; sys.exit(f"error: Python >= 3.12 is required, got {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}") if sys.version_info < (3, 12) else None'
+	@if [ -x "$(VENV_PYTHON)" ] && ! "$(VENV_PYTHON)" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)' >/dev/null 2>&1; then \
+		echo "error: existing .venv uses an unsupported Python interpreter; remove .venv and rerun make bootstrap" >&2; \
+		"$(VENV_PYTHON)" --version >&2 || true; \
+		exit 1; \
+	fi
+	@if [ ! -x "$(VENV_PYTHON)" ]; then $(PYTHON) -m venv .venv; fi
+	$(VENV_PYTHON) -m pip install --upgrade pip
+	$(VENV_PYTHON) -m pip install -e 'reference[dev]'
 	git config --local core.hooksPath .githooks
 
 verify:
