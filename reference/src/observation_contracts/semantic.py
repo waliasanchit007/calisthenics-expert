@@ -134,6 +134,35 @@ def validate_session_manifest_semantics(
             )
         )
 
+    skipped_by_reason = _mapping(counts, "frames_skipped_before_inference_by_reason")
+    reason_values = list(skipped_by_reason.values())
+    if skipped_by_reason and any(
+        not isinstance(value, int) or isinstance(value, bool) or value < 0
+        for value in reason_values
+    ):
+        issues.append(
+            _session_issue(
+                path,
+                "frames_skipped_before_inference_by_reason values must be non-negative integers",
+                pointer="/counts/frames_skipped_before_inference_by_reason",
+                expected="non-negative integers",
+                actual=skipped_by_reason,
+            )
+        )
+    elif skipped_by_reason and skipped is not None:
+        skipped_by_reason_total = sum(reason_values)
+        if skipped_by_reason_total != skipped:
+            issues.append(
+                _session_issue(
+                    path,
+                    "frames_skipped_before_inference must equal the sum of "
+                    "frames_skipped_before_inference_by_reason",
+                    pointer="/counts/frames_skipped_before_inference_by_reason",
+                    expected=skipped,
+                    actual=skipped_by_reason_total,
+                )
+            )
+
     if (
         submitted is not None
         and emitted is not None
@@ -267,7 +296,7 @@ def validate_session_manifest_semantics(
                     roles.append(role)
 
         study_context = manifest.get("study_context")
-        if isinstance(study_context, Mapping) and study_context:
+        if isinstance(study_context, Mapping):
             static_reference_count = roles.count("static_reference_clip")
             if static_reference_count != 1:
                 issues.append(
