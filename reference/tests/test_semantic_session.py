@@ -61,6 +61,31 @@ def test_counts_close_across_failed_call_and_trailing_skips() -> None:
     assert validate_session(manifest, frames) == []
 
 
+def test_rejects_skip_reason_total_that_includes_a_future_integer_reason() -> None:
+    manifest = minimal_manifest()
+    manifest["counts"]["frames_skipped_before_inference_by_reason"]["future_runtime_reason"] = 1
+
+    issues = validate_session(manifest, [minimal_pose_frame()])
+
+    assert [(issue.code, issue.pointer) for issue in issues] == [
+        ("SESSION.COUNT_MISMATCH", "/counts/frames_skipped_before_inference_by_reason")
+    ]
+
+
+@pytest.mark.parametrize("invalid_count", [True, -1, 1.0, "1"])
+def test_rejects_inappropriate_skip_reason_counts(invalid_count: object) -> None:
+    manifest = minimal_manifest()
+    manifest["counts"]["frames_skipped_before_inference_by_reason"]["future_runtime_reason"] = (
+        invalid_count
+    )
+
+    issues = validate_session(manifest, [minimal_pose_frame()])
+
+    assert [(issue.code, issue.pointer) for issue in issues] == [
+        ("SESSION.COUNT_MISMATCH", "/counts/frames_skipped_before_inference_by_reason")
+    ]
+
+
 @pytest.mark.parametrize(
     ("name", "manifest", "frames"),
     [
@@ -212,6 +237,18 @@ def test_requires_one_static_reference_clip_for_a_study_session() -> None:
     issues = validate_session(manifest, [minimal_pose_frame()])
 
     assert codes(issues) == ["SESSION.COUNT_MISMATCH"]
+
+
+def test_requires_one_static_reference_clip_for_an_empty_study_context() -> None:
+    manifest = minimal_manifest()
+    manifest["study_context"] = {}
+    manifest["media_references"] = []
+
+    issues = validate_session(manifest, [minimal_pose_frame()])
+
+    assert [(issue.code, issue.pointer) for issue in issues] == [
+        ("SESSION.COUNT_MISMATCH", "/media_references")
+    ]
 
 
 def test_rejects_duplicate_media_roles() -> None:
