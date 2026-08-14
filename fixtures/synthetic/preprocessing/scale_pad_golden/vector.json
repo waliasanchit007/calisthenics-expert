@@ -1,0 +1,16 @@
+{
+  "tooling_schema_version": "1.0.0",
+  "synthetic": true,
+  "vector_id": "scale_pad_golden_2x2_to_5x4_v1",
+  "description": "Distinct 2x2 RGB24 corners scale to 4x4 with exact centre-of-pixel bilinear interpolation and one black right-padding column in a 5x4 target.",
+  "input_width": 2,
+  "input_height": 2,
+  "output_width": 5,
+  "output_height": 4,
+  "input_path": "input.rgb24",
+  "input_byte_length": 12,
+  "input_sha256": "6733cdd08e5c7ef0453e2759ef0d28fbd43ea2aa7883b55422a13dac38e23ecc",
+  "expected_output_path": "expected.rgb24",
+  "expected_output_byte_length": 60,
+  "expected_output_sha256": "ce3964c59aab18fd02721b7a472645c1741b2c5c7ecdfe3c10af37c0165a1888"
+}
