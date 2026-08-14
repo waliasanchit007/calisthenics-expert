@@ -1,0 +1,27 @@
+{
+  "fixture_metadata_schema_version": "1.0.0",
+  "fixture_id": "4d5e6f7a-8b9c-4d0e-9f1a-2b3c4d5e6f7a",
+  "synthetic": true,
+  "preprocessing_contract_version": "1.0.0",
+  "frame_width": 2,
+  "frame_height": 1,
+  "pixel_format": "rgb24",
+  "color_space": "srgb",
+  "color_range": "full",
+  "channel_order": "rgb",
+  "orientation": "upright",
+  "frames": [
+    {
+      "frame_index": 0,
+      "timestamp_ns": 0,
+      "path": "decoded/frame_000000.rgb24",
+      "byte_length": 6,
+      "sha256": "7192385c3c0605de55bb9476ce1d90748190ecb32a8eed7f5207b30cf6a1fe89"
+    }
+  ],
+  "generation": {
+    "generator_name": "synthetic_fixture_generator",
+    "generator_version": "1.0.0",
+    "generated_at_utc": "2026-08-12T00:00:00Z"
+  }
+}

@@ -351,10 +351,15 @@ The package exposes:
 ```text
 python -m observation_contracts validate-session <manifest> <frames.ndjson> [annotation ...]
 python -m observation_contracts verify-fixture <fixture-metadata>
-python -m observation_contracts guard-repository [repository]
+python -m observation_contracts verify-preprocessing-vector <vector-metadata>
+python -m observation_contracts guard-repository [--staged] [repository]
 ```
 
-Human output is concise and grouped by artifact. `--format json` returns a stable machine-readable array. Every error contains:
+Human output is concise and grouped by artifact. Successful commands print
+`valid: <command>` and exit 0. `--format json` returns `[]` on success or a
+stable machine-readable issue array on failure. Validation and usage failures
+exit 2; unexpected internal failures exit 3 and are reported separately from
+invalid user data. Every error contains:
 
 - error code
 - artifact path
@@ -369,7 +374,7 @@ When multiple annotation paths are supplied, the validator resolves every adjudi
 
 ### 7.4 Stable error codes
 
-`contracts/tooling/validator_error_codes.v1.json` is the registry for machine-readable validator errors. Codes are uppercase namespaced identifiers such as `FRAME.TIMESTAMP_REGRESSION` and `FIXTURE.CHECKSUM_MISMATCH`. Released codes are never renamed or reused for a different condition; replacement codes are added and old codes may be deprecated through the schema release process.
+`contracts/tooling/validator_error_codes.v1.json` is the registry for machine-readable validator errors. Codes are uppercase namespaced identifiers such as `FRAME.TIMESTAMP_ORDER` and `FIXTURE.CHECKSUM_MISMATCH`. Released codes are never renamed or reused for a different condition; replacement codes are added and old codes may be deprecated through the schema release process.
 
 `contracts/tooling/expected_failure.v1.schema.json` validates each negative fixture's `expected_failure.json`. The tooling contract records its own semantic version, command, expected code, and artifact path. Unknown error codes or malformed expectation files fail the repository guard.
 

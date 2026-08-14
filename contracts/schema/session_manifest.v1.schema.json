@@ -1,0 +1,560 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://calisthenics-movement-intelligence.local/contracts/schema/session_manifest.v1.schema.json",
+  "title": "SessionManifest v1",
+  "description": "Context for one exported capture session and the only authoritative location for session-wide capture and backend metadata. Structure only: sequencing, count identities, media pairing, and cross-artifact consistency are validated by the Python reference validator. Unknown optional properties are tolerated so the contract can evolve within major version 1.",
+  "type": "object",
+  "required": [
+    "session_manifest_schema_version",
+    "session_id",
+    "participant_pseudonym_id",
+    "capture_protocol_version",
+    "harness_git_sha",
+    "device",
+    "pose_pipeline",
+    "camera",
+    "model_input",
+    "inference_drain_timeout_ms",
+    "cadence",
+    "clock",
+    "available_observations",
+    "media_references",
+    "counts",
+    "machine_inference_failures",
+    "capture_quality_observed",
+    "study_context"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "session_manifest_schema_version": {
+      "description": "Semantic version of this artifact, independent of application, harness, model, and analysis versions.",
+      "$ref": "#/$defs/semantic_version"
+    },
+    "session_id": {
+      "description": "Identifier joining this manifest to exactly one raw frame stream and its annotations.",
+      "$ref": "#/$defs/uuid"
+    },
+    "participant_pseudonym_id": {
+      "description": "Pseudonymous participant identifier. The identity mapping is never stored in this repository.",
+      "type": "string",
+      "minLength": 1
+    },
+    "capture_protocol_version": {
+      "description": "Version of the capture protocol the session was recorded under.",
+      "$ref": "#/$defs/semantic_version"
+    },
+    "harness_git_sha": {
+      "description": "Full Git commit SHA-1 of the harness build that produced the session.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "device": {
+      "type": "object",
+      "required": [
+        "platform",
+        "os_version",
+        "device_model",
+        "thermal_api_available"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "platform": {
+          "type": "string",
+          "enum": [
+            "android",
+            "ios"
+          ]
+        },
+        "os_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "device_model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "chipset": {
+          "type": "string",
+          "minLength": 1
+        },
+        "thermal_api_available": {
+          "description": "Whether the platform exposes a thermal state or headroom API on this device.",
+          "type": "boolean"
+        }
+      }
+    },
+    "pose_pipeline": {
+      "description": "Backend, model, delegate, and topology metadata, recorded once per session rather than on every frame.",
+      "type": "object",
+      "required": [
+        "backend_name",
+        "backend_version",
+        "model_asset_name",
+        "model_asset_sha256",
+        "delegate",
+        "running_mode",
+        "num_poses",
+        "min_pose_detection_confidence",
+        "min_pose_presence_confidence",
+        "min_tracking_confidence",
+        "landmark_topology"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "backend_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "backend_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model_asset_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model_asset_sha256": {
+          "description": "SHA-256 of the model asset file, pinning cross-platform comparability.",
+          "$ref": "#/$defs/sha256"
+        },
+        "delegate": {
+          "description": "Backend execution delegate as reported by the platform. Left open because delegate names are platform vocabulary, not a contract decision.",
+          "type": "string",
+          "minLength": 1
+        },
+        "running_mode": {
+          "type": "string",
+          "enum": [
+            "live_stream",
+            "video",
+            "image"
+          ]
+        },
+        "num_poses": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "min_pose_detection_confidence": {
+          "description": "Configured backend value, preserved as a number and never converted into an interpreted state.",
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "min_pose_presence_confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "min_tracking_confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "landmark_topology": {
+          "description": "Name of the declared landmark topology. Deliberately not an enumeration: an unrecognized topology is reported by the semantic validator rather than being misvalidated against a fixed cardinality.",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "camera": {
+      "type": "object",
+      "required": [
+        "facing",
+        "capture_width",
+        "capture_height",
+        "orientation_degrees",
+        "mirrored",
+        "requested_camera_fps"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "facing": {
+          "type": "string",
+          "enum": [
+            "front",
+            "back",
+            "external"
+          ]
+        },
+        "capture_width": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "capture_height": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "orientation_degrees": {
+          "description": "Clockwise rotation applied to reach the upright canonical plane.",
+          "type": "integer",
+          "enum": [
+            0,
+            90,
+            180,
+            270
+          ]
+        },
+        "mirrored": {
+          "type": "boolean"
+        },
+        "requested_camera_fps": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      }
+    },
+    "model_input": {
+      "description": "Canonical model-input plane, distinct from the camera capture resolution.",
+      "type": "object",
+      "required": [
+        "model_input_width",
+        "model_input_height",
+        "live_preprocessing_contract_version"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "model_input_width": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "model_input_height": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "live_preprocessing_contract_version": {
+          "description": "Version of the live camera-to-model-input preprocessing contract the harness implemented.",
+          "$ref": "#/$defs/semantic_version"
+        },
+        "fixture_preprocessing_contract_version": {
+          "description": "Version of the decoded-frame fixture preprocessing contract, present only when the session replayed a fixture.",
+          "$ref": "#/$defs/semantic_version"
+        }
+      }
+    },
+    "inference_drain_timeout_ms": {
+      "description": "Shutdown drain budget. A call still incomplete after this budget becomes a session_teardown_timeout entry in machine_inference_failures.",
+      "type": "integer"
+    },
+    "cadence": {
+      "description": "Configured, achieved, and tracker cadences kept as three distinct observations. Achieved cadence is a time series because a mean hides thermal throttling.",
+      "type": "object",
+      "required": [
+        "configured_inference_fps",
+        "achieved_inference_fps_timeseries"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "configured_inference_fps": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "achieved_inference_fps_timeseries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/cadence_sample"
+          }
+        },
+        "tracker_update_cadence_hz": {
+          "description": "Backend tracker update cadence when the backend exposes it, otherwise null.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        }
+      }
+    },
+    "clock": {
+      "description": "One monotonic time base per session. Wall-clock values are context only and are never used to order frames.",
+      "type": "object",
+      "required": [
+        "monotonic_time_base",
+        "t0_monotonic_ns",
+        "started_at_utc",
+        "ended_at_utc"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "monotonic_time_base": {
+          "type": "string",
+          "minLength": 1
+        },
+        "t0_monotonic_ns": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "started_at_utc": {
+          "$ref": "#/$defs/utc_timestamp"
+        },
+        "ended_at_utc": {
+          "$ref": "#/$defs/utc_timestamp"
+        }
+      }
+    },
+    "available_observations": {
+      "description": "Which coordinate families the backend supplied for this session. Reconciled against every frame by the semantic validator.",
+      "type": "object",
+      "required": [
+        "normalized_image_landmarks_available",
+        "world_landmarks_available"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "normalized_image_landmarks_available": {
+          "type": "boolean"
+        },
+        "world_landmarks_available": {
+          "type": "boolean"
+        }
+      }
+    },
+    "media_references": {
+      "description": "Media and fixture artifacts associated with the session. The bytes themselves are never committed.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/media_reference"
+      }
+    },
+    "counts": {
+      "description": "Capture-path counts. Their exact identities are reconciled by the semantic validator, not here.",
+      "type": "object",
+      "required": [
+        "camera_frames_received",
+        "inference_frames_submitted",
+        "inference_records_emitted",
+        "pose_detected_records",
+        "frames_skipped_before_inference",
+        "frames_skipped_before_inference_by_reason",
+        "trailing_frames_skipped_after_last_emitted_record",
+        "inference_failures"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "camera_frames_received": {
+          "description": "Buffers delivered by the camera source.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "inference_frames_submitted": {
+          "description": "Buffers submitted to the pose backend.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "inference_records_emitted": {
+          "description": "NDJSON records written after completed backend calls.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "pose_detected_records": {
+          "description": "Emitted records carrying pose_present true.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "frames_skipped_before_inference": {
+          "description": "Received frames never submitted to inference.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "frames_skipped_before_inference_by_reason": {
+          "type": "object",
+          "required": [
+            "cadence_selection",
+            "backpressure",
+            "session_stopping"
+          ],
+          "additionalProperties": true,
+          "properties": {
+            "cadence_selection": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "backpressure": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "session_stopping": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "trailing_frames_skipped_after_last_emitted_record": {
+          "description": "Skipped frames not attributable to a later emitted record at session end, or every skipped frame when no record was emitted.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "inference_failures": {
+          "description": "Submitted calls that failed before a RawPoseFrame could be emitted.",
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "machine_inference_failures": {
+      "description": "Structured machine failures, separate from the human capture-quality failure log. These classifications are runtime observations and are never validator error codes.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/machine_inference_failure"
+      }
+    },
+    "capture_quality_observed": {
+      "description": "Human-checked setup observations. Observations only: no capture-quality engine, score, or threshold exists in Phase 0.",
+      "type": "object",
+      "required": [
+        "full_body_visible_at_hang",
+        "required_joints_visible",
+        "subject_scale_acceptable",
+        "lighting_class",
+        "visible_occlusion"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "full_body_visible_at_hang": {
+          "type": "boolean"
+        },
+        "required_joints_visible": {
+          "type": "boolean"
+        },
+        "subject_scale_acceptable": {
+          "type": "boolean"
+        },
+        "lighting_class": {
+          "type": "string",
+          "minLength": 1
+        },
+        "visible_occlusion": {
+          "type": "boolean"
+        },
+        "setup_failure_log": {
+          "description": "Free-text record of setup problems observed by the operator.",
+          "type": "string"
+        }
+      }
+    },
+    "study_context": {
+      "description": "Extensible study-design labels such as angle, distance, camera height, environment, lighting, and clothing. Deliberately open so protocol labels stay versioned with the study rather than becoming rigid runtime fields.",
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "$defs": {
+    "semantic_version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    },
+    "uuid": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "utc_timestamp": {
+      "description": "RFC 3339 UTC timestamp. Context only; never used for frame ordering.",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+    },
+    "cadence_sample": {
+      "description": "One achieved-cadence observation on the session monotonic time base.",
+      "type": "object",
+      "required": [
+        "t_monotonic_ns",
+        "achieved_inference_fps"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "t_monotonic_ns": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "achieved_inference_fps": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "media_reference": {
+      "description": "One media or fixture artifact. Cross-device synchronization records both an offset and a drift estimate, because monotonic clocks are device-local.",
+      "type": "object",
+      "required": [
+        "role",
+        "path_ref",
+        "sha256"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "role": {
+          "type": "string",
+          "enum": [
+            "session_video",
+            "static_reference_clip",
+            "conformance_fixture"
+          ]
+        },
+        "path_ref": {
+          "description": "Reference to the artifact in the access-controlled store. The bytes never enter this repository.",
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "sync_offset_ns": {
+          "description": "Estimated offset between this media time base and the session monotonic time base.",
+          "type": "integer"
+        },
+        "sync_drift_ns_per_s": {
+          "description": "Estimated drift of that offset. Required alongside an offset; the pairing rule is enforced by the semantic validator.",
+          "type": "number"
+        }
+      }
+    },
+    "machine_inference_failure": {
+      "type": "object",
+      "required": [
+        "submission_index",
+        "capture_timestamp_ns",
+        "failure_source",
+        "classification"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "submission_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "capture_timestamp_ns": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failure_source": {
+          "type": "string",
+          "enum": [
+            "harness",
+            "backend"
+          ]
+        },
+        "classification": {
+          "description": "Stable harness classification. Runtime failure classifications live in this namespace and never masquerade as validator error codes.",
+          "type": "string",
+          "enum": [
+            "backend_call_failed",
+            "session_teardown_timeout"
+          ]
+        },
+        "source_error_code": {
+          "description": "Opaque source or backend code, retained verbatim for diagnosis.",
+          "type": "string"
+        },
+        "detail": {
+          "description": "Sanitized detail. Never contains participant information.",
+          "type": "string"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "tooling_schema_version": "1.0.0",
+  "command": "validate-session",
+  "expected_error_code": "STREAM.SESSION_CHANGED",
+  "artifact_path": "fixtures/synthetic/negative/session_switch/frames.ndjson",
+  "description": "synthetic session switch"
+}

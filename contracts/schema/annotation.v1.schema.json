@@ -1,0 +1,311 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://calisthenics-movement-intelligence.local/contracts/schema/annotation.v1.schema.json",
+  "title": "Annotation v1",
+  "description": "One annotation pass over one session, recorded as a study timeline rather than an exercise ontology. Labels are observations about an annotator's judgement, not machine movement interpretations. Cross-artifact linkage, duplicate identifiers, and session consistency are validated by the Python reference validator. Unknown optional properties are tolerated so the contract can evolve within major version 1.",
+  "type": "object",
+  "required": [
+    "annotation_schema_version",
+    "annotation_id",
+    "session_id",
+    "annotation_protocol_version",
+    "annotator_pseudonym",
+    "label_tier",
+    "annotation_stage",
+    "input_annotation_ids",
+    "events",
+    "set_level",
+    "media_reference",
+    "created_at"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "annotation_schema_version": {
+      "description": "Semantic version of this artifact, independent of the observation artifacts it describes.",
+      "$ref": "#/$defs/semantic_version"
+    },
+    "annotation_id": {
+      "description": "Identifier of this annotation artifact, referenced by adjudicated artifacts.",
+      "$ref": "#/$defs/uuid"
+    },
+    "session_id": {
+      "description": "Session this pass annotates. Every linked annotation must share it.",
+      "$ref": "#/$defs/uuid"
+    },
+    "annotation_protocol_version": {
+      "$ref": "#/$defs/semantic_version"
+    },
+    "annotator_pseudonym": {
+      "description": "Pseudonymous annotator identifier. For an adjudicated artifact this identifies the adjudicator.",
+      "type": "string",
+      "minLength": 1
+    },
+    "label_tier": {
+      "description": "Provenance tier of these labels. Phase 0 human annotation is gold; rule or heuristic output is bronze and never enters benchmark ground truth.",
+      "type": "string",
+      "enum": [
+        "gold",
+        "silver",
+        "bronze"
+      ]
+    },
+    "annotation_stage": {
+      "type": "string",
+      "enum": [
+        "independent",
+        "adjudicated"
+      ]
+    },
+    "input_annotation_ids": {
+      "description": "Independent annotation artifacts this pass consumed. Empty for an independent pass; at least two distinct entries for an adjudicated one.",
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/uuid"
+      }
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/annotation_event"
+      }
+    },
+    "set_level": {
+      "type": "object",
+      "required": [
+        "athlete_reported_reps"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "athlete_reported_reps": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    },
+    "media_reference": {
+      "description": "Integrity reference to the media the annotator labelled. The media itself is never committed.",
+      "type": "object",
+      "required": [
+        "video_sha256"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "video_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "created_at": {
+      "$ref": "#/$defs/utc_timestamp"
+    }
+  },
+  "allOf": [
+    {
+      "description": "An independent pass records no consumed inputs, which is what keeps inter-annotator agreement measurable.",
+      "if": {
+        "type": "object",
+        "required": [
+          "annotation_stage"
+        ],
+        "properties": {
+          "annotation_stage": {
+            "const": "independent"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "input_annotation_ids": {
+            "maxItems": 0
+          }
+        }
+      }
+    },
+    {
+      "description": "An adjudicated artifact resolves at least two independent passes, making consensus selection explicit.",
+      "if": {
+        "type": "object",
+        "required": [
+          "annotation_stage"
+        ],
+        "properties": {
+          "annotation_stage": {
+            "const": "adjudicated"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "input_annotation_ids": {
+            "minItems": 2
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "semantic_version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    },
+    "uuid": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "utc_timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+    },
+    "annotation_event": {
+      "description": "One observed event on the session timeline, timed either as an instant or as a closed range.",
+      "type": "object",
+      "required": [
+        "event_id",
+        "type",
+        "rep_index",
+        "label",
+        "invalid_reasons",
+        "annotator_confidence",
+        "source"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "rep_start",
+            "rep_top",
+            "rep_bottom",
+            "rep_end",
+            "rep_label",
+            "tracking_failure"
+          ]
+        },
+        "timestamp_ns": {
+          "description": "Instant form. The event time is the first frame at which the protocol criterion is met.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "start_timestamp_ns": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "end_timestamp_ns": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "rep_index": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "label": {
+          "description": "Closed Phase 0 judgement. uncertain is a first-class label meaning the annotator could not tell from the media, and it is reported rather than discarded.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "valid",
+            "invalid",
+            "uncertain",
+            null
+          ]
+        },
+        "invalid_reasons": {
+          "description": "Closed Phase 0 enumeration. Non-empty only for an invalid label.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "partial_rom_top",
+              "partial_rom_bottom",
+              "kipping_or_leg_drive",
+              "assisted",
+              "non_continuous"
+            ]
+          }
+        },
+        "annotator_confidence": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "value": {
+          "description": "Optional event-specific observational detail. Any JSON value; meaning is defined by the annotation protocol, not by this schema."
+        },
+        "source": {
+          "description": "Origin of the label. Version 1 admits human annotation only; the field exists so a later major can distinguish rule, user-feedback, teacher-model, and coach labels without redesigning the event envelope.",
+          "const": "human"
+        },
+        "notes": {
+          "type": "string"
+        }
+      },
+      "oneOf": [
+        {
+          "description": "Instant timing.",
+          "required": [
+            "timestamp_ns"
+          ]
+        },
+        {
+          "description": "Closed-range timing.",
+          "required": [
+            "start_timestamp_ns",
+            "end_timestamp_ns"
+          ]
+        }
+      ],
+      "allOf": [
+        {
+          "description": "An invalid judgement names at least one closed reason; every other judgement carries none.",
+          "if": {
+            "type": "object",
+            "required": [
+              "label"
+            ],
+            "properties": {
+              "label": {
+                "const": "invalid"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "invalid_reasons": {
+                "minItems": 1
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "invalid_reasons": {
+                "maxItems": 0
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

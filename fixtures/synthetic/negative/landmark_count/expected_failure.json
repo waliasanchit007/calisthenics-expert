@@ -1,0 +1,7 @@
+{
+  "tooling_schema_version": "1.0.0",
+  "command": "validate-session",
+  "expected_error_code": "FRAME.LANDMARK_COUNT",
+  "artifact_path": "fixtures/synthetic/negative/landmark_count/frames.ndjson",
+  "description": "synthetic landmark cardinality mismatch"
+}

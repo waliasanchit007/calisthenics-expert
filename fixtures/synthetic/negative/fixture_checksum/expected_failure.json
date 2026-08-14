@@ -1,0 +1,7 @@
+{
+  "tooling_schema_version": "1.0.0",
+  "command": "verify-fixture",
+  "expected_error_code": "FIXTURE.CHECKSUM_MISMATCH",
+  "artifact_path": "fixtures/synthetic/negative/fixture_checksum/fixture_metadata.json",
+  "description": "synthetic checksum mismatch"
+}

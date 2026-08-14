@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://calisthenics-movement-intelligence.local/contracts/tooling/expected_failure.v1.schema.json",
+  "title": "ExpectedFailure v1",
+  "description": "Declares the validator failure a synthetic negative fixture must produce. Unknown optional properties are tolerated so the contract can evolve within major version 1.",
+  "type": "object",
+  "required": [
+    "tooling_schema_version",
+    "command",
+    "expected_error_code",
+    "artifact_path"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "tooling_schema_version": {
+      "description": "Semantic version of this tooling contract, independent of the observation schemas.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    },
+    "command": {
+      "description": "Validator subcommand that must be run to reproduce the failure.",
+      "type": "string",
+      "enum": [
+        "validate-session",
+        "verify-fixture",
+        "guard-repository"
+      ]
+    },
+    "expected_error_code": {
+      "description": "Error code from contracts/tooling/validator_error_codes.v1.json that the command must emit.",
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9]*(_[A-Z0-9]+)*\\.[A-Z][A-Z0-9]*(_[A-Z0-9]+)*$"
+    },
+    "artifact_path": {
+      "description": "Repository-relative path of the artifact the failure must be reported against.",
+      "type": "string",
+      "minLength": 1
+    },
+    "description": {
+      "description": "Human-readable summary of the declared negative case.",
+      "type": "string"
+    }
+  }
+}

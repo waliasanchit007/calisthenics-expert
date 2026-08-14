@@ -1,0 +1,173 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://calisthenics-movement-intelligence.local/contracts/schema/raw_pose_frame.v1.schema.json",
+  "title": "RawPoseFrame v1",
+  "description": "One NDJSON record per completed inference call, including calls where no pose was detected. Backend, model, delegate, and topology metadata live in the session manifest and are joined by session_id. Landmark cardinality, ordering, timing sequence, and manifest reconciliation are validated by the Python reference validator. Unknown optional properties are tolerated so the contract can evolve within major version 1.",
+  "type": "object",
+  "required": [
+    "raw_pose_frame_schema_version",
+    "session_id",
+    "frame_index",
+    "capture_timestamp_ns",
+    "inference_start_ns",
+    "inference_end_ns",
+    "pose_present",
+    "normalized_image_landmarks",
+    "world_landmarks",
+    "image_width",
+    "image_height",
+    "frames_skipped_since_last_emitted_record"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "raw_pose_frame_schema_version": {
+      "description": "Semantic version of this artifact. It must stay constant across an entire NDJSON stream.",
+      "$ref": "#/$defs/semantic_version"
+    },
+    "session_id": {
+      "description": "Identifier of the one session manifest this record belongs to.",
+      "$ref": "#/$defs/uuid"
+    },
+    "frame_index": {
+      "description": "Index of the emitted record within the stream. Strict increase is a semantic rule.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "capture_timestamp_ns": {
+      "description": "Monotonic capture time of the source buffer. Inference latency is stored separately so tempo comparisons stay valid.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "inference_start_ns": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "inference_end_ns": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "pose_present": {
+      "description": "Whether the backend reported a pose. Records with no detected pose are still emitted, so dropout is an observable row rather than an absent one.",
+      "type": "boolean"
+    },
+    "normalized_image_landmarks": {
+      "description": "Normalized image-space landmarks, or null when the backend supplied none for this call.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "$ref": "#/$defs/landmark"
+      }
+    },
+    "world_landmarks": {
+      "description": "World-space landmarks, or null when the backend supplied none for this call. Partial arrays are rejected semantically because they cannot be aligned safely.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "$ref": "#/$defs/landmark"
+      }
+    },
+    "image_width": {
+      "description": "Width of the image the backend consumed for this call.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "image_height": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "frames_skipped_since_last_emitted_record": {
+      "description": "Camera frames received but not submitted since the previous record-emitting completed call; on the first record, counted from session start. Skips before failed submissions accumulate here rather than being lost.",
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "allOf": [
+    {
+      "description": "A record with no detected pose carries null in both coordinate families rather than an empty or fabricated array.",
+      "if": {
+        "type": "object",
+        "required": [
+          "pose_present"
+        ],
+        "properties": {
+          "pose_present": {
+            "const": false
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "normalized_image_landmarks": {
+            "type": "null"
+          },
+          "world_landmarks": {
+            "type": "null"
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "semantic_version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    },
+    "uuid": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "landmark": {
+      "description": "One landmark exactly as the backend reported it. No smoothing, imputation, clamping, or conversion of confidences into booleans.",
+      "type": "object",
+      "required": [
+        "index",
+        "x",
+        "y",
+        "z",
+        "visibility",
+        "presence"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "index": {
+          "description": "Position of this landmark in the manifest's declared topology.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "name": {
+          "description": "Optional topology name, retained for readability only. The declared topology remains authoritative.",
+          "type": "string",
+          "minLength": 1
+        },
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "z": {
+          "type": "number"
+        },
+        "visibility": {
+          "description": "Backend visibility value, including low values, or null when the backend did not supply one. No numeric sentinel is permitted.",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "presence": {
+          "description": "Backend presence value, including low values, or null when the backend did not supply one. No numeric sentinel is permitted.",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}
