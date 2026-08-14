@@ -106,8 +106,7 @@ def test_rejects_pose_dump_outside_synthetic_fixture_roots(tmp_path: Path) -> No
     _write(
         root,
         "exports/pose.ndjson",
-        '{"pose_present":true,"normalized_image_landmarks":[],'
-        '"world_landmarks":[]}\n',
+        '{"pose_present":true,"normalized_image_landmarks":[],"world_landmarks":[]}\n',
     )
     _stage(root)
 
@@ -135,9 +134,7 @@ def test_rejects_sensitive_filenames(tmp_path: Path, relative_path: str) -> None
     _write(root, relative_path, b"synthetic sensitive placeholder")
     _stage(root)
 
-    assert _codes(root, mode="staged") == [
-        (relative_path, "REPOSITORY.PROHIBITED_PATH")
-    ]
+    assert _codes(root, mode="staged") == [(relative_path, "REPOSITORY.PROHIBITED_PATH")]
 
 
 def test_rejects_pem_private_key_content_even_with_benign_filename(tmp_path: Path) -> None:
@@ -149,9 +146,7 @@ def test_rejects_pem_private_key_content_even_with_benign_filename(tmp_path: Pat
     )
     _stage(root)
 
-    assert _codes(root, mode="staged") == [
-        ("notes/example.txt", "REPOSITORY.PROHIBITED_CONTENT")
-    ]
+    assert _codes(root, mode="staged") == [("notes/example.txt", "REPOSITORY.PROHIBITED_CONTENT")]
 
 
 def test_accepts_documentation_containing_benign_consent_word(tmp_path: Path) -> None:
@@ -367,9 +362,7 @@ def test_does_not_follow_symlink_outside_repository(tmp_path: Path) -> None:
     link.symlink_to(outside)
     _stage(root)
 
-    assert _codes(root, mode="tracked") == [
-        ("docs/linked.txt", "REPOSITORY.PROHIBITED_PATH")
-    ]
+    assert _codes(root, mode="tracked") == [("docs/linked.txt", "REPOSITORY.PROHIBITED_PATH")]
 
 
 def test_signature_scan_is_bounded_to_64_kibibytes(tmp_path: Path) -> None:

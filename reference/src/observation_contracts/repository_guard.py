@@ -201,7 +201,9 @@ def _path_issue(
     if _has_prohibited_suffix(relative_path):
         return _path_issue_for(relative_path, "prohibited media or key suffix")
     if _has_prohibited_filename(relative_path):
-        return _path_issue_for(relative_path, "prohibited credential, consent, or identity filename")
+        return _path_issue_for(
+            relative_path, "prohibited credential, consent, or identity filename"
+        )
 
     if mode == "staged" and _staged_symlink_escapes(root, relative_path, source):
         return _path_issue_for(relative_path, "indexed symlink resolves outside the repository")
@@ -266,10 +268,14 @@ def _content_issue(relative_path: str, content: bytes) -> ValidationIssue | None
     path_tokens = set(filter(None, re.split(r"[^a-z0-9]+", path.stem.lower())))
     looks_like_pose_path = bool(path_tokens & {"pose", "poses", "landmark", "landmarks"})
     looks_like_pose_content = _POSE_CONTENT_RE.search(content) is not None
-    if path.suffix.lower() in _POSE_SUFFIXES and not is_schema and (
-        looks_like_pose_path or looks_like_pose_content
+    if (
+        path.suffix.lower() in _POSE_SUFFIXES
+        and not is_schema
+        and (looks_like_pose_path or looks_like_pose_content)
     ):
-        return _path_issue_for(relative_path, "raw pose or landmark dump outside synthetic fixtures")
+        return _path_issue_for(
+            relative_path, "raw pose or landmark dump outside synthetic fixtures"
+        )
     return None
 
 
@@ -312,7 +318,9 @@ def _fixture_admissions(
         if not candidates:
             admissions[group_root] = False
             first_path = next(path for path in paths if _fixture_group(path) == group)
-            issues.append(_declaration_issue(first_path, "approved fixture class has no declaration"))
+            issues.append(
+                _declaration_issue(first_path, "approved fixture class has no declaration")
+            )
             continue
 
         valid = False
@@ -404,7 +412,14 @@ def _validate_positive_fixture(
         if not isinstance(frame, Mapping):
             return "fixture frame descriptor must be an object"
         error = _validate_hashed_reference(
-            frame, descriptor_path, "path", "byte_length", "sha256", "fixtures/synthetic/valid", inventory_paths, source
+            frame,
+            descriptor_path,
+            "path",
+            "byte_length",
+            "sha256",
+            "fixtures/synthetic/valid",
+            inventory_paths,
+            source,
         )
         if error is not None:
             return error
@@ -474,7 +489,11 @@ def _validate_preprocessing_vector(
         group_root,
         inventory_paths,
         source,
-        output_fields=("expected_output_path", "expected_output_byte_length", "expected_output_sha256"),
+        output_fields=(
+            "expected_output_path",
+            "expected_output_byte_length",
+            "expected_output_sha256",
+        ),
     )
 
 

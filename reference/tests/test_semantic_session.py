@@ -113,7 +113,10 @@ def test_counts_close_across_failed_call_and_trailing_skips() -> None:
                 frames_skipped_before_inference=6,
                 trailing_frames_skipped_after_last_emitted_record=2,
             ),
-            [minimal_pose_frame(index=0, capture_ns=100, skipped=0), minimal_pose_frame(index=1, capture_ns=300, skipped=5)],
+            [
+                minimal_pose_frame(index=0, capture_ns=100, skipped=0),
+                minimal_pose_frame(index=1, capture_ns=300, skipped=5),
+            ],
         ),
     ],
 )

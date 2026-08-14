@@ -232,10 +232,7 @@ def test_ndjson_schema_failure_carries_its_line_number(tmp_path: Path) -> None:
     del broken["image_height"]
     path = tmp_path / "frames.ndjson"
     path.write_text(
-        json.dumps(minimal_pose_frame(index=0, capture_ns=100))
-        + "\n"
-        + json.dumps(broken)
-        + "\n",
+        json.dumps(minimal_pose_frame(index=0, capture_ns=100)) + "\n" + json.dumps(broken) + "\n",
         encoding="utf-8",
     )
 

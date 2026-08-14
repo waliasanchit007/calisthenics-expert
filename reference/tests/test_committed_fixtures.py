@@ -54,9 +54,7 @@ def test_committed_positive_session_is_fully_valid() -> None:
     issues = validate_document(manifest, "session_manifest", str(manifest_path))
     frames, frame_schema_issues = validate_ndjson(frames_path)
     issues.extend(frame_schema_issues)
-    issues.extend(
-        validate_frame_stream(manifest, frames, str(manifest_path), str(frames_path))
-    )
+    issues.extend(validate_frame_stream(manifest, frames, str(manifest_path), str(frames_path)))
     issues.extend(validate_session_manifest_semantics(manifest, frames, str(manifest_path)))
 
     annotation_paths = [
@@ -94,9 +92,7 @@ def test_committed_positive_session_is_fully_valid() -> None:
 
 
 def test_every_committed_fixture_metadata_declares_synthetic_provenance() -> None:
-    metadata_paths = sorted(
-        repository_root().glob("fixtures/synthetic/**/fixture_metadata.json")
-    )
+    metadata_paths = sorted(repository_root().glob("fixtures/synthetic/**/fixture_metadata.json"))
 
     assert metadata_paths
     assert all(_json(path)["synthetic"] is True for path in metadata_paths)

@@ -42,9 +42,7 @@ _MANIFEST_KIND = "session_manifest"
 _NORMALIZED = "normalized_image_landmarks"
 _WORLD = "world_landmarks"
 _SESSION_COUNT_CODE = "SESSION.COUNT_MISMATCH"
-_FAILURE_CLASSIFICATIONS = frozenset(
-    {"backend_call_failed", "session_teardown_timeout"}
-)
+_FAILURE_CLASSIFICATIONS = frozenset({"backend_call_failed", "session_teardown_timeout"})
 
 
 @dataclass(frozen=True)
@@ -228,9 +226,7 @@ def validate_session_manifest_semantics(
                     )
                 )
 
-    frame_skips = [
-        _integer(frame, "frames_skipped_since_last_emitted_record") for frame in frames
-    ]
+    frame_skips = [_integer(frame, "frames_skipped_since_last_emitted_record") for frame in frames]
     if (
         skipped is not None
         and trailing is not None
@@ -405,7 +401,8 @@ def validate_annotations(
                 )
             )
         elif stage == "adjudicated" and (
-            len(inputs) < 2 or len({item for item in inputs if isinstance(item, str)}) != len(inputs)
+            len(inputs) < 2
+            or len({item for item in inputs if isinstance(item, str)}) != len(inputs)
         ):
             issues.append(
                 _annotation_issue(
@@ -487,7 +484,9 @@ def _annotation_event_issues(
         reason_values = reasons if isinstance(reasons, list) else []
 
         if event_type == "rep_label" and (
-            "rep_index" not in event or not isinstance(rep_index, int) or isinstance(rep_index, bool)
+            "rep_index" not in event
+            or not isinstance(rep_index, int)
+            or isinstance(rep_index, bool)
         ):
             issues.append(
                 _annotation_issue(

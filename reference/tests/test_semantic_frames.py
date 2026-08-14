@@ -37,6 +37,7 @@ def register(monkeypatch: pytest.MonkeyPatch, topology: LandmarkTopology) -> Non
     """
     monkeypatch.setitem(topology_module._TOPOLOGIES, topology.name, topology)
 
+
 MEDIAPIPE_POSE_33_NAMES = (
     "nose",
     "left_eye_inner",
@@ -236,8 +237,14 @@ def test_reports_session_change_for_every_diverging_record() -> None:
 
 def test_rejects_timestamp_regression() -> None:
     manifest = minimal_manifest()
-    frames = [minimal_pose_frame(index=0, capture_ns=100), minimal_pose_frame(index=1, capture_ns=99)]
-    assert validate_frame_stream(manifest, frames, "m.json", "f.ndjson")[0].code == "FRAME.TIMESTAMP_ORDER"
+    frames = [
+        minimal_pose_frame(index=0, capture_ns=100),
+        minimal_pose_frame(index=1, capture_ns=99),
+    ]
+    assert (
+        validate_frame_stream(manifest, frames, "m.json", "f.ndjson")[0].code
+        == "FRAME.TIMESTAMP_ORDER"
+    )
 
 
 def test_rejects_repeated_capture_timestamp() -> None:

@@ -31,11 +31,14 @@ def test_adjudicated_annotation_resolves_two_independent_inputs() -> None:
         input_annotation_ids=[ANNOTATION_ID_A, ANNOTATION_ID_B],
     )
 
-    assert validate_annotations(
-        minimal_manifest(),
-        [first, second, consensus],
-        ["a.json", "b.json", "c.json"],
-    ) == []
+    assert (
+        validate_annotations(
+            minimal_manifest(),
+            [first, second, consensus],
+            ["a.json", "b.json", "c.json"],
+        )
+        == []
+    )
 
 
 def test_missing_input_id_is_reported_on_the_adjudicated_artifact() -> None:
