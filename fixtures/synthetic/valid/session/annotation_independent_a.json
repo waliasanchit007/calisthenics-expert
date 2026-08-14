@@ -1,0 +1,27 @@
+{
+  "annotation_schema_version": "1.0.0",
+  "annotation_id": "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+  "session_id": "3f1c2a90-7b45-4c8e-9d21-6a0e5b4c3d27",
+  "annotation_protocol_version": "1.0.0",
+  "annotator_pseudonym": "synthetic-rater-a",
+  "label_tier": "gold",
+  "annotation_stage": "independent",
+  "input_annotation_ids": [],
+  "events": [
+    {
+      "event_id": "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b",
+      "type": "rep_label",
+      "timestamp_ns": 100,
+      "rep_index": 0,
+      "label": "valid",
+      "invalid_reasons": [],
+      "annotator_confidence": 0.9,
+      "source": "human"
+    }
+  ],
+  "set_level": {"athlete_reported_reps": 1},
+  "media_reference": {
+    "video_sha256": "0000000000000000000000000000000000000000000000000000000000000002"
+  },
+  "created_at": "2026-08-12T00:01:00Z"
+}

@@ -5,12 +5,40 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from observation_contracts.errors import ValidationIssue
+from observation_contracts.semantic import validate_frame_stream
+from observation_contracts.structural import validate_document, validate_ndjson
 
 _FIXTURE_KIND = "fixture_metadata"
 _INVALID_REFERENCE = "PREPROCESSING.VECTOR_INVALID"
+
+
+@dataclass(frozen=True)
+class NegativeFixtureCase:
+    """One declared synthetic negative fixture and the validator it exercises."""
+
+    name: str
+    root: Path
+    repository_root: Path
+    command: str
+    expected_error_code: str
+    artifact_path: str
+
+
+@dataclass(frozen=True)
+class ValidationResult:
+    """Stable validation output used by committed declared-negative fixtures."""
+
+    issues: tuple[ValidationIssue, ...]
+
+    @property
+    def codes(self) -> list[str]:
+        """Return issue codes in validator order."""
+        return [issue.code for issue in self.issues]
 
 
 def sha256_file(path: Path) -> str:
@@ -125,6 +153,70 @@ def verify_fixture(metadata_path: Path) -> list[ValidationIssue]:
                 )
             )
     return issues
+
+
+def discover_negative_fixtures(root: Path) -> list[NegativeFixtureCase]:
+    """Discover every committed negative case declared by ``expected_failure.json``."""
+    negative_root = root / "fixtures" / "synthetic" / "negative"
+    if not negative_root.is_dir():
+        return []
+
+    cases: list[NegativeFixtureCase] = []
+    for case_root in sorted(path for path in negative_root.iterdir() if path.is_dir()):
+        declaration_path = case_root / "expected_failure.json"
+        if not declaration_path.is_file():
+            continue
+        document = _read_object(declaration_path)
+        command = document.get("command")
+        expected_code = document.get("expected_error_code")
+        artifact_path = document.get("artifact_path")
+        if (
+            not isinstance(command, str)
+            or not isinstance(expected_code, str)
+            or not isinstance(artifact_path, str)
+        ):
+            raise TypeError(f"malformed expected failure declaration: {declaration_path}")
+        cases.append(
+            NegativeFixtureCase(
+                name=case_root.name,
+                root=case_root,
+                repository_root=root,
+                command=command,
+                expected_error_code=expected_code,
+                artifact_path=artifact_path,
+            )
+        )
+    return cases
+
+
+def run_declared_validation(case: NegativeFixtureCase) -> ValidationResult:
+    """Execute the validator named by one committed negative fixture declaration."""
+    artifact = case.repository_root / Path(*case.artifact_path.split("/"))
+    if case.command == "verify-fixture":
+        issues = verify_fixture(artifact)
+    elif case.command == "validate-session":
+        issues = _validate_negative_session(case)
+    else:
+        raise ValueError(f"unsupported declared validation command: {case.command!r}")
+    return ValidationResult(tuple(issues))
+
+
+def _validate_negative_session(case: NegativeFixtureCase) -> list[ValidationIssue]:
+    manifest_path = case.root / "manifest.json"
+    frames_path = case.root / "frames.ndjson"
+    manifest = _read_object(manifest_path)
+    issues = validate_document(manifest, "session_manifest", str(manifest_path))
+    frames, frame_issues = validate_ndjson(frames_path)
+    issues.extend(frame_issues)
+    issues.extend(validate_frame_stream(manifest, frames, str(manifest_path), str(frames_path)))
+    return issues
+
+
+def _read_object(path: Path) -> Mapping[str, Any]:
+    document = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(document, Mapping):
+        raise TypeError(f"expected a JSON object: {path}")
+    return document
 
 
 def resolve_fixture_path(root: Path, raw_path: str) -> Path | None:

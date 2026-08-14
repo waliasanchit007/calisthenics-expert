@@ -1,0 +1,7 @@
+{
+  "tooling_schema_version": "1.0.0",
+  "command": "validate-session",
+  "expected_error_code": "FRAME.TIMESTAMP_ORDER",
+  "artifact_path": "fixtures/synthetic/negative/timestamp_regression/frames.ndjson",
+  "description": "synthetic timestamp regression"
+}
