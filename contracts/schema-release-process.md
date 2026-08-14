@@ -4,6 +4,16 @@
 
 This procedure governs observation schemas under `contracts/schema/` and validator tooling contracts under `contracts/tooling/`. Artifact and tooling versions are independent of application, harness, model, and analysis-package versions.
 
+M0 v1.0.0 contains four stable observation contracts: `SessionManifest`,
+`RawPoseFrame`, `Annotation`, and `FixtureMetadata`. It also contains three
+tooling contracts: `ExpectedFailure`, `PreprocessingVector`, and the validator
+error-code registry. The decoded-frame fixture and live-capture preprocessing
+documents are companion contracts. Interpretation artifacts such as
+`ReliablePoseFrame`, `CanonicalPoseFrame`, `DerivedFeatures`, `MovementEvent`,
+`RepEvent`, and `HoldEvent` are explicitly deferred; they are not v1 aliases or
+placeholder schemas. See [`contracts/CHANGELOG.md`](CHANGELOG.md) and
+[ADR-0001](../docs/adr/ADR-0001-observation-before-interpretation.md).
+
 ## Proposal
 
 Every schema change starts as a reviewed change containing:
@@ -47,6 +57,13 @@ Changes affecting raw-data retention, participant linkage, consent, deletion, or
 - A Git tag identifies the repository commit containing the release.
 - Existing released schema content is never edited in place to represent an incompatible meaning; a new major schema is added instead.
 - Released validator error codes are never renamed, removed without deprecation, or reused for a different condition. New conditions receive new codes; replacement codes retain a deprecation link to the old code.
+
+The v1.0.0 release inventory, fixture set, validator package version, and
+decision-record links are maintained in [`contracts/CHANGELOG.md`](CHANGELOG.md).
+The release commit is identified by an immutable Git tag. A release checklist
+must confirm that `make verify` succeeds locally and from a clean clone, that
+the positive and declared-negative synthetic fixtures exercise the published
+contracts, and that no real study data is included.
 
 ## Deprecation
 
