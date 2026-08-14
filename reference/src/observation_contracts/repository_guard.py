@@ -50,6 +50,12 @@ _KNOWN_SECRET_NAMES = {
     "service-account.json",
     "token.json",
 }
+_NORMALIZED_IDENTITY_KEY_DIRECTORIES = {
+    "identitykey",
+    "identitykeys",
+    "identitieskey",
+    "identitieskeys",
+}
 _PRIVATE_KEY_RE = re.compile(
     rb"-----BEGIN (?:[A-Z0-9 ]*PRIVATE KEY|RSA PRIVATE KEY|EC PRIVATE KEY)-----"
 )
@@ -64,6 +70,7 @@ _SEMVER_RE = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 _ERROR_CODE_RE = re.compile(r"^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*\.[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*$")
+_ERROR_CODE_REGISTRY_PATH = "contracts/tooling/validator_error_codes.v1.json"
 
 
 @dataclass(frozen=True)
@@ -145,7 +152,7 @@ def guard_repository(root: Path, mode: GuardMode = "tracked") -> list[Validation
             safe_paths.append(relative_path)
 
     fixture_admissions, fixture_issues = _fixture_admissions(
-        repository_root, inventory_paths, source
+        repository_root, inventory_paths, source, _load_error_code_registry(source)
     )
     issues.extend(fixture_issues)
 
@@ -246,6 +253,12 @@ def _has_prohibited_suffix(relative_path: str) -> bool:
 
 def _has_prohibited_filename(relative_path: str) -> bool:
     path = PurePosixPath(relative_path)
+    if any(
+        re.sub(r"[^a-z0-9]", "", component.lower()) in _NORMALIZED_IDENTITY_KEY_DIRECTORIES
+        for component in path.parts[:-1]
+    ):
+        return True
+
     name = path.name.lower()
     if name == ".env" or name.startswith(".env.") or name in _KNOWN_SECRET_NAMES:
         return True
@@ -284,6 +297,8 @@ def _fixture_group(relative_path: str) -> _FixtureGroup | None:
     if len(parts) < 3 or parts[:2] != ("fixtures", "synthetic"):
         return None
     if parts[2] == "valid":
+        if len(parts) >= 5:
+            return _FixtureGroup("positive", "/".join(parts[:4]))
         return _FixtureGroup("positive", "fixtures/synthetic/valid")
     if parts[2] == "preprocessing":
         if len(parts) == 4:
@@ -297,7 +312,10 @@ def _fixture_group(relative_path: str) -> _FixtureGroup | None:
 
 
 def _fixture_admissions(
-    root: Path, inventory_paths: Iterable[str], source: _RepositoryContent
+    root: Path,
+    inventory_paths: Iterable[str],
+    source: _RepositoryContent,
+    error_codes: frozenset[str] | None,
 ) -> tuple[dict[str, bool], list[ValidationIssue]]:
     paths = sorted(inventory_paths)
     groups: dict[str, _FixtureGroup] = {}
@@ -325,7 +343,9 @@ def _fixture_admissions(
 
         valid = False
         for descriptor in candidates:
-            error = _validate_fixture_declaration(root, group, descriptor, paths, source)
+            error = _validate_fixture_declaration(
+                root, group, descriptor, paths, source, error_codes
+            )
             if error is None:
                 valid = True
             else:
@@ -349,6 +369,7 @@ def _validate_fixture_declaration(
     descriptor_path: str,
     inventory_paths: list[str],
     source: _RepositoryContent,
+    error_codes: frozenset[str] | None,
 ) -> str | None:
     raw = source.read_prefix(descriptor_path)
     if raw is None:
@@ -360,9 +381,11 @@ def _validate_fixture_declaration(
     if not isinstance(document, Mapping):
         return "declaration must be a JSON object"
     if group.kind == "positive":
-        return _validate_positive_fixture(document, descriptor_path, inventory_paths, source)
+        return _validate_positive_fixture(
+            document, descriptor_path, group.root, inventory_paths, source
+        )
     if group.kind == "negative":
-        return _validate_negative_fixture(document, group.root, inventory_paths)
+        return _validate_negative_fixture(document, group.root, inventory_paths, error_codes)
     return _validate_preprocessing_vector(
         document, descriptor_path, group.root, inventory_paths, source
     )
@@ -371,6 +394,7 @@ def _validate_fixture_declaration(
 def _validate_positive_fixture(
     document: Mapping[str, Any],
     descriptor_path: str,
+    group_root: str,
     inventory_paths: list[str],
     source: _RepositoryContent,
 ) -> str | None:
@@ -417,7 +441,7 @@ def _validate_positive_fixture(
             "path",
             "byte_length",
             "sha256",
-            "fixtures/synthetic/valid",
+            group_root,
             inventory_paths,
             source,
         )
@@ -427,7 +451,10 @@ def _validate_positive_fixture(
 
 
 def _validate_negative_fixture(
-    document: Mapping[str, Any], group_root: str, inventory_paths: list[str]
+    document: Mapping[str, Any],
+    group_root: str,
+    inventory_paths: list[str],
+    error_codes: frozenset[str] | None,
 ) -> str | None:
     required = {"tooling_schema_version", "command", "expected_error_code", "artifact_path"}
     missing = sorted(required - document.keys())
@@ -441,6 +468,10 @@ def _validate_negative_fixture(
         document["expected_error_code"]
     ):
         return "expected error code is malformed"
+    if error_codes is None:
+        return "released error-code registry cannot be read"
+    if document["expected_error_code"] not in error_codes:
+        return "expected error code is not present in the released registry"
     artifact_path = document["artifact_path"]
     if not isinstance(artifact_path, str) or not _reference_inside(artifact_path, group_root):
         return "expected artifact path escapes its negative fixture case"
@@ -569,6 +600,22 @@ def _digest(source: _RepositoryContent, relative_path: str) -> tuple[int, str]:
 
 def _positive_integer(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _load_error_code_registry(source: _RepositoryContent) -> frozenset[str] | None:
+    raw = source.read_prefix(_ERROR_CODE_REGISTRY_PATH)
+    if raw is None:
+        return None
+    try:
+        document = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(document, Mapping):
+        return None
+    codes = document.get("codes")
+    if not isinstance(codes, list) or not all(isinstance(code, str) for code in codes):
+        return None
+    return frozenset(codes)
 
 
 def _is_semver(value: Any) -> bool:
