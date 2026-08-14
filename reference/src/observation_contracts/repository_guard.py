@@ -14,6 +14,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
 from observation_contracts.errors import ValidationIssue
+from observation_contracts.schema_loader import load_strict_json
 
 GuardMode = Literal["tracked", "staged"]
 
@@ -71,6 +72,15 @@ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 _ERROR_CODE_RE = re.compile(r"^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*\.[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*$")
 _ERROR_CODE_REGISTRY_PATH = "contracts/tooling/validator_error_codes.v1.json"
+_POSITIVE_SESSION_ARTIFACT_NAMES = frozenset(
+    {
+        "manifest.json",
+        "frames.ndjson",
+        "annotation_independent_a.json",
+        "annotation_independent_b.json",
+        "annotation_adjudicated.json",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -159,7 +169,15 @@ def guard_repository(root: Path, mode: GuardMode = "tracked") -> list[Validation
     for relative_path in safe_paths:
         group = _fixture_group(relative_path)
         if group is not None:
-            if not fixture_admissions.get(group.root, False):
+            admission = fixture_admissions.get(group.root, False)
+            if admission is False:
+                continue
+            if isinstance(admission, frozenset) and relative_path not in admission:
+                issues.append(
+                    _declaration_issue(
+                        relative_path, "path is not declared by the positive fixture"
+                    )
+                )
                 continue
             if _has_prohibited_suffix(relative_path):
                 issues.append(_path_issue_for(relative_path, "prohibited media or key suffix"))
@@ -316,7 +334,7 @@ def _fixture_admissions(
     inventory_paths: Iterable[str],
     source: _RepositoryContent,
     error_codes: frozenset[str] | None,
-) -> tuple[dict[str, bool], list[ValidationIssue]]:
+) -> tuple[dict[str, bool | frozenset[str]], list[ValidationIssue]]:
     paths = sorted(inventory_paths)
     groups: dict[str, _FixtureGroup] = {}
     descriptors: dict[str, list[str]] = {}
@@ -328,7 +346,7 @@ def _fixture_admissions(
         if _is_descriptor(relative_path, group.kind):
             descriptors.setdefault(group.root, []).append(relative_path)
 
-    admissions: dict[str, bool] = {}
+    admissions: dict[str, bool | frozenset[str]] = {}
     issues: list[ValidationIssue] = []
     for group_root in sorted(groups):
         group = groups[group_root]
@@ -342,15 +360,19 @@ def _fixture_admissions(
             continue
 
         valid = False
+        allowed_paths: set[str] = set()
         for descriptor in candidates:
-            error = _validate_fixture_declaration(
+            error, descriptor_paths = _validate_fixture_declaration(
                 root, group, descriptor, paths, source, error_codes
             )
             if error is None:
                 valid = True
+                allowed_paths.update(descriptor_paths)
             else:
                 issues.append(_declaration_issue(descriptor, error))
-        admissions[group_root] = valid
+        admissions[group_root] = (
+            frozenset(allowed_paths) if group.kind == "positive" and valid else valid
+        )
     return admissions, issues
 
 
@@ -370,24 +392,30 @@ def _validate_fixture_declaration(
     inventory_paths: list[str],
     source: _RepositoryContent,
     error_codes: frozenset[str] | None,
-) -> str | None:
+) -> tuple[str | None, frozenset[str]]:
     raw = source.read_prefix(descriptor_path)
     if raw is None:
-        return "declaration cannot be read"
+        return "declaration cannot be read", frozenset()
     try:
-        document = json.loads(raw.decode("utf-8"))
+        document = load_strict_json(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
-        return "declaration is not valid UTF-8 JSON"
+        return "declaration is not valid UTF-8 JSON", frozenset()
     if not isinstance(document, Mapping):
-        return "declaration must be a JSON object"
+        return "declaration must be a JSON object", frozenset()
     if group.kind == "positive":
         return _validate_positive_fixture(
             document, descriptor_path, group.root, inventory_paths, source
         )
     if group.kind == "negative":
-        return _validate_negative_fixture(document, group.root, inventory_paths, error_codes)
-    return _validate_preprocessing_vector(
-        document, descriptor_path, group.root, inventory_paths, source
+        return (
+            _validate_negative_fixture(document, group.root, inventory_paths, error_codes),
+            frozenset(),
+        )
+    return (
+        _validate_preprocessing_vector(
+            document, descriptor_path, group.root, inventory_paths, source
+        ),
+        frozenset(),
     )
 
 
@@ -397,7 +425,7 @@ def _validate_positive_fixture(
     group_root: str,
     inventory_paths: list[str],
     source: _RepositoryContent,
-) -> str | None:
+) -> tuple[str | None, frozenset[str]]:
     required = {
         "fixture_metadata_schema_version",
         "fixture_id",
@@ -414,27 +442,28 @@ def _validate_positive_fixture(
     }
     missing = sorted(required - document.keys())
     if missing:
-        return f"fixture metadata is missing required fields: {', '.join(missing)}"
+        return f"fixture metadata is missing required fields: {', '.join(missing)}", frozenset()
     if document["synthetic"] is not True:
-        return "fixture metadata must declare synthetic=true"
+        return "fixture metadata must declare synthetic=true", frozenset()
     if not _is_semver(document["fixture_metadata_schema_version"]):
-        return "fixture metadata schema version is malformed"
+        return "fixture metadata schema version is malformed", frozenset()
     if not _is_uuid(document["fixture_id"]):
-        return "fixture id is malformed"
+        return "fixture id is malformed", frozenset()
     if not _is_semver(document["preprocessing_contract_version"]):
-        return "preprocessing contract version is malformed"
+        return "preprocessing contract version is malformed", frozenset()
     if document["pixel_format"] != "rgb24" or document["color_space"] != "srgb":
-        return "fixture metadata does not declare the canonical pixel format"
+        return "fixture metadata does not declare the canonical pixel format", frozenset()
     if document["color_range"] != "full" or document["channel_order"] != "rgb":
-        return "fixture metadata does not declare the canonical color representation"
+        return "fixture metadata does not declare the canonical color representation", frozenset()
     if document["orientation"] != "upright":
-        return "fixture metadata must declare upright orientation"
+        return "fixture metadata must declare upright orientation", frozenset()
     frames = document["frames"]
     if not isinstance(frames, list) or not frames:
-        return "fixture metadata must contain at least one frame"
+        return "fixture metadata must contain at least one frame", frozenset()
+    allowed_paths = {descriptor_path}
     for frame in frames:
         if not isinstance(frame, Mapping):
-            return "fixture frame descriptor must be an object"
+            return "fixture frame descriptor must be an object", frozenset()
         error = _validate_hashed_reference(
             frame,
             descriptor_path,
@@ -446,8 +475,60 @@ def _validate_positive_fixture(
             source,
         )
         if error is not None:
-            return error
-    return None
+            return error, frozenset()
+        reference = _resolve_reference(descriptor_path, frame.get("path"))
+        if reference is not None:
+            allowed_paths.add(reference)
+
+    allowed_paths.update(
+        relative_path
+        for relative_path in inventory_paths
+        if _is_positive_session_artifact(relative_path, group_root)
+    )
+    manifest_path = f"{group_root}/manifest.json"
+    if manifest_path in inventory_paths:
+        allowed_paths.update(
+            _validated_manifest_references(manifest_path, group_root, inventory_paths, source)
+        )
+    return None, frozenset(allowed_paths)
+
+
+def _is_positive_session_artifact(relative_path: str, group_root: str) -> bool:
+    path = PurePosixPath(relative_path)
+    return path.parent.as_posix() == group_root and path.name in _POSITIVE_SESSION_ARTIFACT_NAMES
+
+
+def _validated_manifest_references(
+    manifest_path: str,
+    group_root: str,
+    inventory_paths: list[str],
+    source: _RepositoryContent,
+) -> frozenset[str]:
+    raw = source.read_prefix(manifest_path)
+    if raw is None:
+        return frozenset()
+    try:
+        document = load_strict_json(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return frozenset()
+    if not isinstance(document, Mapping):
+        return frozenset()
+    media_references = document.get("media_references")
+    if not isinstance(media_references, list):
+        return frozenset()
+
+    references: set[str] = set()
+    for media_reference in media_references:
+        if not isinstance(media_reference, Mapping):
+            continue
+        reference = _resolve_reference(manifest_path, media_reference.get("path_ref"))
+        if (
+            reference is not None
+            and reference in inventory_paths
+            and _reference_inside(reference, group_root)
+        ):
+            references.add(reference)
+    return frozenset(references)
 
 
 def _validate_negative_fixture(
@@ -607,7 +688,7 @@ def _load_error_code_registry(source: _RepositoryContent) -> frozenset[str] | No
     if raw is None:
         return None
     try:
-        document = json.loads(raw.decode("utf-8"))
+        document = load_strict_json(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
         return None
     if not isinstance(document, Mapping):

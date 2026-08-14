@@ -265,6 +265,43 @@ def test_rejects_undeclared_positive_fixture_sibling_in_both_index_modes(
     assert _codes(root, mode=mode) == [(sibling_path, "REPOSITORY.INVALID_FIXTURE_DECLARATION")]
 
 
+@pytest.mark.parametrize("mode", ["staged", "tracked"])
+def test_rejects_undeclared_artifact_inside_admitted_positive_fixture(
+    tmp_path: Path, mode: str
+) -> None:
+    root = _repository(tmp_path)
+    frame = b"\x01\x02\x03"
+    session_root = "fixtures/synthetic/valid/session"
+    _write(root, f"{session_root}/decoded/frame.rgb24", frame)
+    _write(
+        root,
+        f"{session_root}/fixture_metadata.json",
+        _json(_fixture_metadata("decoded/frame.rgb24", frame)),
+    )
+    undeclared_path = f"{session_root}/undeclared/pose.ndjson"
+    _write(root, undeclared_path, b"undeclared pose data\n")
+    _stage(root)
+
+    assert _codes(root, mode=mode) == [(undeclared_path, "REPOSITORY.INVALID_FIXTURE_DECLARATION")]
+
+
+@pytest.mark.parametrize("mode", ["staged", "tracked"])
+@pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])
+def test_rejects_non_json_constant_in_positive_fixture_declaration(
+    tmp_path: Path, mode: str, constant: str
+) -> None:
+    root = _repository(tmp_path)
+    frame = b"\x01\x02\x03"
+    declaration = _fixture_metadata("frame.rgb24", frame)
+    declaration["ignored_constant"] = float(constant)
+    declaration_path = "fixtures/synthetic/valid/session/fixture_metadata.json"
+    _write(root, "fixtures/synthetic/valid/session/frame.rgb24", frame)
+    _write(root, declaration_path, _json(declaration))
+    _stage(root)
+
+    assert _codes(root, mode=mode) == [(declaration_path, "REPOSITORY.INVALID_FIXTURE_DECLARATION")]
+
+
 def test_admits_committed_nested_preprocessing_vector_layout(tmp_path: Path) -> None:
     root = _repository(tmp_path)
     input_bytes = bytes.fromhex("ff00 0000 ff00 0000 ffff ffff")
