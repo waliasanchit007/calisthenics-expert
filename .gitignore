@@ -8,3 +8,26 @@ dist/
 .mypy_cache/
 .ruff_cache/
 .DS_Store
+
+# Raw study media and secret material are never repository content.
+*.aac
+*.aiff
+*.avi
+*.caf
+*.flac
+*.key
+*.m4a
+*.m4v
+*.mkv
+*.mov
+*.mp3
+*.mp4
+*.ogg
+*.opus
+*.p12
+*.pem
+*.pfx
+*.wav
+*.webm
+.env
+.env.*
