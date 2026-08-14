@@ -325,6 +325,230 @@ def validate_session_manifest_semantics(
     return issues
 
 
+def validate_annotations(
+    manifest: Mapping[str, Any],
+    annotations: Sequence[Mapping[str, Any]],
+    paths: Sequence[str],
+) -> list[ValidationIssue]:
+    """Return deterministic provenance and observational-label issues.
+
+    Structural validation owns required fields, primitive types, and closed enumerations.
+    This pass checks relationships between annotation artifacts and the label invariants that
+    need an artifact-level semantic interpretation. Annotation labels remain observations:
+    this function does not infer movement, apply thresholds, or validate predictions.
+    """
+    issues: list[ValidationIssue] = []
+    by_id: dict[str, tuple[Mapping[str, Any], str]] = {}
+
+    for index, annotation in enumerate(annotations):
+        path = _annotation_path(paths, index)
+        annotation_id = _text(annotation, "annotation_id")
+        if annotation_id is None:
+            continue
+        if annotation_id in by_id:
+            issues.append(
+                _annotation_issue(
+                    "ANNOTATION.LINK_DUPLICATE",
+                    path,
+                    "annotation_id is duplicated by another annotation artifact",
+                    pointer="/annotation_id",
+                    actual=annotation_id,
+                )
+            )
+            continue
+        by_id[annotation_id] = (annotation, path)
+
+    manifest_session_id = _text(manifest, "session_id")
+    for index, annotation in enumerate(annotations):
+        path = _annotation_path(paths, index)
+        session_id = _text(annotation, "session_id")
+        if (
+            session_id is not None
+            and manifest_session_id is not None
+            and session_id != manifest_session_id
+        ):
+            issues.append(
+                _annotation_issue(
+                    "ANNOTATION.LINK_MISSING",
+                    path,
+                    "annotation session_id does not match the manifest session_id",
+                    pointer="/session_id",
+                    expected=manifest_session_id,
+                    actual=session_id,
+                )
+            )
+
+        stage = _text(annotation, "annotation_stage")
+        input_ids = annotation.get("input_annotation_ids")
+        inputs = input_ids if isinstance(input_ids, list) else []
+
+        if stage not in {"independent", "adjudicated"}:
+            issues.append(
+                _annotation_issue(
+                    "ANNOTATION.INVALID_STAGE",
+                    path,
+                    "annotation_stage must be independent or adjudicated",
+                    pointer="/annotation_stage",
+                    expected=["adjudicated", "independent"],
+                    actual=stage,
+                )
+            )
+        elif stage == "independent" and inputs:
+            issues.append(
+                _annotation_issue(
+                    "ANNOTATION.INVALID_STAGE",
+                    path,
+                    "independent annotations must not link input annotations",
+                    pointer="/input_annotation_ids",
+                    expected=[],
+                    actual=inputs,
+                )
+            )
+        elif stage == "adjudicated" and (
+            len(inputs) < 2 or len({item for item in inputs if isinstance(item, str)}) != len(inputs)
+        ):
+            issues.append(
+                _annotation_issue(
+                    "ANNOTATION.INVALID_STAGE",
+                    path,
+                    "adjudicated annotations must link at least two distinct inputs",
+                    pointer="/input_annotation_ids",
+                    expected="at least two distinct annotation IDs",
+                    actual=inputs,
+                )
+            )
+
+        if stage == "adjudicated":
+            for input_index, input_id in enumerate(inputs):
+                if not isinstance(input_id, str) or input_id not in by_id:
+                    issues.append(
+                        _annotation_issue(
+                            "ANNOTATION.LINK_MISSING",
+                            path,
+                            "input_annotation_id does not identify a supplied annotation",
+                            pointer=f"/input_annotation_ids/{input_index}",
+                            actual=input_id,
+                        )
+                    )
+                    continue
+
+                linked, _linked_path = by_id[input_id]
+                linked_stage = _text(linked, "annotation_stage")
+                if linked_stage != "independent":
+                    issues.append(
+                        _annotation_issue(
+                            "ANNOTATION.INVALID_STAGE",
+                            path,
+                            "adjudicated annotations may link only independent annotations",
+                            pointer=f"/input_annotation_ids/{input_index}",
+                            expected="independent",
+                            actual=linked_stage,
+                        )
+                    )
+
+                linked_session_id = _text(linked, "session_id")
+                if (
+                    session_id is not None
+                    and linked_session_id is not None
+                    and linked_session_id != session_id
+                ):
+                    issues.append(
+                        _annotation_issue(
+                            "ANNOTATION.LINK_MISSING",
+                            path,
+                            "linked annotation belongs to a different session",
+                            pointer=f"/input_annotation_ids/{input_index}",
+                            expected=session_id,
+                            actual=linked_session_id,
+                        )
+                    )
+
+        events = annotation.get("events")
+        if isinstance(events, list):
+            issues.extend(_annotation_event_issues(events, path))
+
+    return issues
+
+
+def _annotation_event_issues(
+    events: list[Any],
+    path: str,
+) -> list[ValidationIssue]:
+    """Return semantic issues for the observational label fields of each event."""
+    issues: list[ValidationIssue] = []
+    for event_index, event in enumerate(events):
+        if not isinstance(event, Mapping):
+            continue
+        prefix = f"/events/{event_index}"
+        event_type = _text(event, "type")
+        rep_index = event.get("rep_index")
+        label = _text(event, "label")
+        reasons = event.get("invalid_reasons")
+        reason_values = reasons if isinstance(reasons, list) else []
+
+        if event_type == "rep_label" and (
+            "rep_index" not in event or not isinstance(rep_index, int) or isinstance(rep_index, bool)
+        ):
+            issues.append(
+                _annotation_issue(
+                    "ANNOTATION.INVALID_LABEL",
+                    path,
+                    "rep_label events require rep_index",
+                    pointer=f"{prefix}/rep_index",
+                )
+            )
+
+        if label == "invalid" and not reason_values:
+            issues.append(
+                _annotation_issue(
+                    "ANNOTATION.INVALID_LABEL",
+                    path,
+                    "invalid labels require at least one invalid reason",
+                    pointer=f"{prefix}/invalid_reasons",
+                    expected="at least one reason",
+                    actual=reason_values,
+                )
+            )
+        elif label != "invalid" and reason_values:
+            issues.append(
+                _annotation_issue(
+                    "ANNOTATION.INVALID_LABEL",
+                    path,
+                    "only invalid labels may carry invalid reasons",
+                    pointer=f"{prefix}/invalid_reasons",
+                    expected=[],
+                    actual=reason_values,
+                )
+            )
+    return issues
+
+
+def _annotation_issue(
+    code: str,
+    path: str,
+    message: str,
+    *,
+    pointer: str | None = None,
+    expected: Any = None,
+    actual: Any = None,
+) -> ValidationIssue:
+    """Return one annotation issue with the stable artifact identity."""
+    return ValidationIssue(
+        code=code,
+        artifact_path=path,
+        artifact_kind="annotation",
+        message=message,
+        pointer=pointer,
+        expected=expected,
+        actual=actual,
+    )
+
+
+def _annotation_path(paths: Sequence[str], index: int) -> str:
+    """Return the supplied path for an annotation, with a stable fallback for malformed input."""
+    return paths[index] if index < len(paths) else f"annotation[{index}]"
+
+
 def _session_issue(
     path: str,
     message: str,
