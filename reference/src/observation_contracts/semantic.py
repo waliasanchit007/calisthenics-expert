@@ -41,6 +41,10 @@ _MANIFEST_KIND = "session_manifest"
 
 _NORMALIZED = "normalized_image_landmarks"
 _WORLD = "world_landmarks"
+_SESSION_COUNT_CODE = "SESSION.COUNT_MISMATCH"
+_FAILURE_CLASSIFICATIONS = frozenset(
+    {"backend_call_failed", "session_teardown_timeout"}
+)
 
 
 @dataclass(frozen=True)
@@ -90,6 +94,255 @@ def validate_frame_stream(
         issues.extend(_landmark_issues(frame, position, rules))
         previous = frame
     return issues
+
+
+def validate_session_manifest_semantics(
+    manifest: Mapping[str, Any],
+    frames: Sequence[Mapping[str, Any]],
+    path: str,
+) -> list[ValidationIssue]:
+    """Return deterministic session-level count, failure, and media issues.
+
+    Structural validation owns required fields and primitive types. This pass therefore only
+    evaluates values that have the expected shape and reports contradictions using the one
+    released session-level error code. Runtime failure classifications remain distinct from
+    validator error codes, but unknown classifications still make the session inconsistent.
+    """
+    issues: list[ValidationIssue] = []
+    counts = _mapping(manifest, "counts")
+
+    camera_received = _integer(counts, "camera_frames_received")
+    submitted = _integer(counts, "inference_frames_submitted")
+    emitted = _integer(counts, "inference_records_emitted")
+    detected = _integer(counts, "pose_detected_records")
+    skipped = _integer(counts, "frames_skipped_before_inference")
+    trailing = _integer(counts, "trailing_frames_skipped_after_last_emitted_record")
+    failures = _integer(counts, "inference_failures")
+
+    if (
+        camera_received is not None
+        and submitted is not None
+        and skipped is not None
+        and camera_received != submitted + skipped
+    ):
+        issues.append(
+            _session_issue(
+                path,
+                "camera_frames_received must equal inference_frames_submitted plus "
+                "frames_skipped_before_inference",
+                pointer="/counts/camera_frames_received",
+                expected=submitted + skipped,
+                actual=camera_received,
+            )
+        )
+
+    if (
+        submitted is not None
+        and emitted is not None
+        and failures is not None
+        and submitted != emitted + failures
+    ):
+        issues.append(
+            _session_issue(
+                path,
+                "inference_frames_submitted must equal inference_records_emitted plus "
+                "inference_failures",
+                pointer="/counts/inference_frames_submitted",
+                expected=emitted + failures,
+                actual=submitted,
+            )
+        )
+
+    if emitted is not None and emitted != len(frames):
+        issues.append(
+            _session_issue(
+                path,
+                "inference_records_emitted must equal the number of emitted frame records",
+                pointer="/counts/inference_records_emitted",
+                expected=len(frames),
+                actual=emitted,
+            )
+        )
+
+    detected_rows = sum(1 for frame in frames if _flag(frame, "pose_present") is True)
+    if detected is not None and detected != detected_rows:
+        issues.append(
+            _session_issue(
+                path,
+                "pose_detected_records must equal emitted records with pose_present true",
+                pointer="/counts/pose_detected_records",
+                expected=detected_rows,
+                actual=detected,
+            )
+        )
+
+    machine_failures = manifest.get("machine_inference_failures")
+    if isinstance(machine_failures, list):
+        submission_indices: set[int] = set()
+        if failures is not None and len(machine_failures) != failures:
+            issues.append(
+                _session_issue(
+                    path,
+                    "machine_inference_failures length must equal inference_failures",
+                    pointer="/machine_inference_failures",
+                    expected=failures,
+                    actual=len(machine_failures),
+                )
+            )
+        for index, failure in enumerate(machine_failures):
+            if not isinstance(failure, Mapping):
+                continue
+            submission_index = _integer(failure, "submission_index")
+            if submission_index is not None:
+                if submitted is not None and not 0 <= submission_index < submitted:
+                    issues.append(
+                        _session_issue(
+                            path,
+                            "machine inference failure submission_index must identify a "
+                            "submitted call",
+                            pointer=f"/machine_inference_failures/{index}/submission_index",
+                            expected=f"0 <= index < {submitted}",
+                            actual=submission_index,
+                        )
+                    )
+                elif submission_index in submission_indices:
+                    issues.append(
+                        _session_issue(
+                            path,
+                            "machine inference failure submission_index values must be unique",
+                            pointer=f"/machine_inference_failures/{index}/submission_index",
+                            actual=submission_index,
+                        )
+                    )
+                else:
+                    submission_indices.add(submission_index)
+            classification = _text(failure, "classification")
+            if classification not in _FAILURE_CLASSIFICATIONS:
+                issues.append(
+                    _session_issue(
+                        path,
+                        "machine inference failure has an unknown runtime classification",
+                        pointer=f"/machine_inference_failures/{index}/classification",
+                        expected=sorted(_FAILURE_CLASSIFICATIONS),
+                        actual=classification,
+                    )
+                )
+
+    frame_skips = [
+        _integer(frame, "frames_skipped_since_last_emitted_record") for frame in frames
+    ]
+    if (
+        skipped is not None
+        and trailing is not None
+        and all(value is not None for value in frame_skips)
+    ):
+        skipped_from_frames = sum(value for value in frame_skips if value is not None)
+        if skipped_from_frames + trailing != skipped:
+            issues.append(
+                _session_issue(
+                    path,
+                    "per-frame skipped counts plus trailing skipped frames must equal "
+                    "frames_skipped_before_inference",
+                    pointer="/counts/frames_skipped_before_inference",
+                    expected=skipped_from_frames + trailing,
+                    actual=skipped,
+                )
+            )
+
+    timeout = _integer(manifest, "inference_drain_timeout_ms")
+    if timeout is not None and timeout <= 0:
+        issues.append(
+            _session_issue(
+                path,
+                "inference_drain_timeout_ms must be positive",
+                pointer="/inference_drain_timeout_ms",
+                expected="> 0",
+                actual=timeout,
+            )
+        )
+
+    media_references = manifest.get("media_references")
+    if isinstance(media_references, list):
+        roles: list[str] = []
+        for reference in media_references:
+            if isinstance(reference, Mapping):
+                role = _text(reference, "role")
+                if role is not None:
+                    roles.append(role)
+
+        study_context = manifest.get("study_context")
+        if isinstance(study_context, Mapping) and study_context:
+            static_reference_count = roles.count("static_reference_clip")
+            if static_reference_count != 1:
+                issues.append(
+                    _session_issue(
+                        path,
+                        "a study session must contain exactly one static_reference_clip",
+                        pointer="/media_references",
+                        expected=1,
+                        actual=static_reference_count,
+                    )
+                )
+
+        seen_roles: set[str] = set()
+        for index, reference in enumerate(media_references):
+            if not isinstance(reference, Mapping):
+                continue
+            role = _text(reference, "role")
+            if role is not None and role in seen_roles:
+                issues.append(
+                    _session_issue(
+                        path,
+                        "media reference roles must be unique",
+                        pointer=f"/media_references/{index}/role",
+                        actual=role,
+                    )
+                )
+            if role is not None:
+                seen_roles.add(role)
+
+            has_offset = "sync_offset_ns" in reference
+            has_drift = "sync_drift_ns_per_s" in reference
+            if has_offset != has_drift:
+                issues.append(
+                    _session_issue(
+                        path,
+                        "synchronized media must include both sync_offset_ns and "
+                        "sync_drift_ns_per_s",
+                        pointer=f"/media_references/{index}",
+                        expected="sync_offset_ns and sync_drift_ns_per_s together",
+                        actual=sorted(
+                            key
+                            for key, present in (
+                                ("sync_offset_ns", has_offset),
+                                ("sync_drift_ns_per_s", has_drift),
+                            )
+                            if present
+                        ),
+                    )
+                )
+
+    return issues
+
+
+def _session_issue(
+    path: str,
+    message: str,
+    *,
+    pointer: str,
+    expected: Any = None,
+    actual: Any = None,
+) -> ValidationIssue:
+    """Return one session-level issue with the stable artifact identity."""
+    return ValidationIssue(
+        code=_SESSION_COUNT_CODE,
+        artifact_path=path,
+        artifact_kind=_MANIFEST_KIND,
+        message=message,
+        pointer=pointer,
+        expected=expected,
+        actual=actual,
+    )
 
 
 def _resolve_topology(
