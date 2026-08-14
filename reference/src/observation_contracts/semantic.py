@@ -54,6 +54,7 @@ class _StreamRules:
 
     topology: LandmarkTopology | None
     session_id: str | None
+    normalized_available: bool | None
     world_available: bool | None
     schema_version: str | None
     frame_path: str
@@ -76,6 +77,7 @@ def validate_frame_stream(
     rules = _StreamRules(
         topology=topology,
         session_id=_text(manifest, "session_id"),
+        normalized_available=_flag(available, "normalized_image_landmarks_available"),
         world_available=_flag(available, "world_landmarks_available"),
         schema_version=_text(frames[0], "raw_pose_frame_schema_version") if frames else None,
         frame_path=frame_path,
@@ -269,6 +271,18 @@ def _landmark_issues(
     issues: list[ValidationIssue] = []
     if rules.topology is not None:
         issues.extend(_count_issues(normalized, world, position, rules.topology, rules))
+
+    if normalized is not None and rules.normalized_available is False:
+        issues.append(
+            _issue(
+                "FRAME.NORMALIZED_AVAILABILITY",
+                rules,
+                position,
+                "normalized image landmarks are present but the manifest declares them "
+                "unavailable for this session",
+                pointer=f"/{_NORMALIZED}",
+            )
+        )
 
     if world is not None and rules.world_available is False:
         issues.append(

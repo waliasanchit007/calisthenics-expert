@@ -362,6 +362,25 @@ def test_accepts_null_world_landmarks_when_the_manifest_declares_them_unavailabl
     assert validate_frame_stream(manifest, [frame], "m.json", "f.ndjson") == []
 
 
+def test_rejects_normalized_landmarks_when_the_manifest_declares_them_unavailable() -> None:
+    manifest = minimal_manifest()
+    manifest["available_observations"]["normalized_image_landmarks_available"] = False
+    frame = minimal_pose_frame()
+    frame["world_landmarks"] = None
+    assert codes(validate_frame_stream(manifest, [frame], "m.json", "f.ndjson")) == [
+        "FRAME.NORMALIZED_AVAILABILITY"
+    ]
+
+
+def test_accepts_null_normalized_landmarks_when_the_manifest_declares_them_unavailable() -> None:
+    manifest = minimal_manifest()
+    manifest["available_observations"]["normalized_image_landmarks_available"] = False
+    frame = minimal_pose_frame(pose_present=False)
+    assert "FRAME.NORMALIZED_AVAILABILITY" not in codes(
+        validate_frame_stream(manifest, [frame], "m.json", "f.ndjson")
+    )
+
+
 def test_rejects_exactly_duplicated_coordinate_arrays() -> None:
     frame = minimal_pose_frame()
     frame["world_landmarks"] = copy.deepcopy(frame["normalized_image_landmarks"])
