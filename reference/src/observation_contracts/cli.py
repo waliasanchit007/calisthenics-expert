@@ -13,7 +13,7 @@ from observation_contracts.errors import ValidationIssue
 from observation_contracts.fixture_integrity import verify_fixture
 from observation_contracts.preprocessing import verify_preprocessing_vector
 from observation_contracts.repository_guard import GuardMode, guard_repository
-from observation_contracts.schema_loader import ArtifactKind
+from observation_contracts.schema_loader import ArtifactKind, load_strict_json
 from observation_contracts.semantic import (
     validate_annotations,
     validate_frame_stream,
@@ -117,22 +117,32 @@ def _validate_session(arguments: argparse.Namespace) -> list[ValidationIssue]:
     manifest_path: Path = arguments.manifest
     frames_path: Path = arguments.frames
     manifest, issues = _load_json(manifest_path, "session_manifest")
+    manifest_unknown_major = _has_unknown_major(issues)
     frames, frame_issues = _load_frames(frames_path)
     issues.extend(frame_issues)
+    frames_unknown_major = _has_unknown_major(frame_issues)
 
     annotations: list[Mapping[str, Any]] = []
     annotation_paths: list[str] = []
+    annotations_unknown_major = False
     for annotation_path in arguments.annotations:
         annotation, annotation_issues = _load_json(annotation_path, "annotation")
         issues.extend(annotation_issues)
+        annotations_unknown_major = annotations_unknown_major or _has_unknown_major(
+            annotation_issues
+        )
         if isinstance(annotation, Mapping):
             annotations.append(annotation)
             annotation_paths.append(str(annotation_path))
 
-    if isinstance(manifest, Mapping):
-        issues.extend(validate_frame_stream(manifest, frames, str(manifest_path), str(frames_path)))
-        issues.extend(validate_session_manifest_semantics(manifest, frames, str(manifest_path)))
-        issues.extend(validate_annotations(manifest, annotations, annotation_paths))
+    if isinstance(manifest, Mapping) and not manifest_unknown_major:
+        if not frames_unknown_major:
+            issues.extend(
+                validate_frame_stream(manifest, frames, str(manifest_path), str(frames_path))
+            )
+            issues.extend(validate_session_manifest_semantics(manifest, frames, str(manifest_path)))
+        if not annotations_unknown_major:
+            issues.extend(validate_annotations(manifest, annotations, annotation_paths))
     return issues
 
 
@@ -156,10 +166,14 @@ def _guard_repository(arguments: argparse.Namespace) -> list[ValidationIssue]:
 
 def _load_json(path: Path, kind: ArtifactKind) -> tuple[object | None, list[ValidationIssue]]:
     try:
-        document = json.loads(path.read_text(encoding="utf-8"))
+        document = load_strict_json(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         return None, [_input_issue(path, kind, f"could not read JSON: {error}")]
     return document, list(validate_document(document, kind, str(path)))
+
+
+def _has_unknown_major(issues: list[ValidationIssue]) -> bool:
+    return any(issue.code == "VERSION.UNKNOWN_MAJOR" for issue in issues)
 
 
 def _load_frames(path: Path) -> tuple[list[dict[str, object]], list[ValidationIssue]]:

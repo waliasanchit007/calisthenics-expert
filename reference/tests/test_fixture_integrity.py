@@ -11,6 +11,9 @@ from observation_contracts.preprocessing import verify_preprocessing_vector
 def _write_metadata(
     directory: Path,
     frames: list[dict[str, object]],
+    *,
+    frame_width: int = 1,
+    frame_height: int = 1,
 ) -> Path:
     metadata_path = directory / "fixture.json"
     metadata_path.write_text(
@@ -20,8 +23,8 @@ def _write_metadata(
                 "fixture_id": "4d5e6f7a-8b9c-4d0e-9f1a-2b3c4d5e6f7a",
                 "synthetic": True,
                 "preprocessing_contract_version": "1.0.0",
-                "frame_width": 1,
-                "frame_height": 1,
+                "frame_width": frame_width,
+                "frame_height": frame_height,
                 "pixel_format": "rgb24",
                 "color_space": "srgb",
                 "color_range": "full",
@@ -84,6 +87,31 @@ def test_verify_fixture_reports_byte_length_mismatch(tmp_path: Path) -> None:
     frame = _frame("frame.rgb24", content)
     frame["byte_length"] = 4
     metadata_path = _write_metadata(tmp_path, [frame])
+
+    issues = verify_fixture(metadata_path)
+
+    assert [issue.code for issue in issues] == ["FIXTURE.BYTE_LENGTH"]
+
+
+def test_verify_fixture_rejects_non_json_nan_metadata(tmp_path: Path) -> None:
+    metadata_path = tmp_path / "fixture.json"
+    metadata_path.write_text('{"frames": NaN}', encoding="utf-8")
+
+    issues = verify_fixture(metadata_path)
+
+    assert [issue.code for issue in issues] == ["SCHEMA.INVALID"]
+    assert issues[0].artifact_path == str(metadata_path)
+
+
+def test_verify_fixture_rejects_lengths_that_do_not_match_rgb24_geometry(tmp_path: Path) -> None:
+    content = b"\x01\x02\x03"
+    (tmp_path / "frame.rgb24").write_bytes(content)
+    metadata_path = _write_metadata(
+        tmp_path,
+        [_frame("frame.rgb24", content)],
+        frame_width=2,
+        frame_height=2,
+    )
 
     issues = verify_fixture(metadata_path)
 

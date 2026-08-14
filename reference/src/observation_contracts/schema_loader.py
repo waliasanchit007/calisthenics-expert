@@ -44,6 +44,16 @@ def repository_root() -> Path:
     return Path(__file__).parents[3]
 
 
+def load_strict_json(serialized: str) -> object:
+    """Parse JSON while rejecting constants outside the JSON grammar."""
+    return json.loads(serialized, parse_constant=_reject_non_json_constant)
+
+
+def _reject_non_json_constant(constant: str) -> object:
+    """Raise the standard decoder error for Python-only non-finite constants."""
+    raise json.JSONDecodeError(f"invalid JSON constant: {constant}", constant, 0)
+
+
 def schema_path(kind: ArtifactKind, major: int = SUPPORTED_MAJOR) -> Path:
     """Return the immutable released schema path for one artifact kind and major version."""
     if kind not in ARTIFACT_KINDS:
@@ -56,11 +66,28 @@ def schema_path(kind: ArtifactKind, major: int = SUPPORTED_MAJOR) -> Path:
     return repository_root() / "contracts" / "schema" / f"{kind}.v{major}.schema.json"
 
 
+def preprocessing_vector_schema_path() -> Path:
+    """Return the released preprocessing-vector tooling schema path."""
+    return repository_root() / "contracts" / "tooling" / "preprocessing_vector.v1.schema.json"
+
+
 @cache
 def load_schema(kind: ArtifactKind, major: int = SUPPORTED_MAJOR) -> Mapping[str, object]:
     """Return the parsed Draft 2020-12 schema for one artifact kind and major version."""
     with schema_path(kind, major).open(encoding="utf-8") as handle:
-        schema: Mapping[str, object] = json.load(handle)
+        schema = load_strict_json(handle.read())
+    if not isinstance(schema, Mapping):
+        raise TypeError(f"schema is not a JSON object: {schema_path(kind, major)}")
+    return schema
+
+
+@cache
+def load_preprocessing_vector_schema() -> Mapping[str, object]:
+    """Return the parsed released preprocessing-vector tooling schema."""
+    path = preprocessing_vector_schema_path()
+    schema = load_strict_json(path.read_text(encoding="utf-8"))
+    if not isinstance(schema, Mapping):
+        raise TypeError(f"schema is not a JSON object: {path}")
     return schema
 
 
@@ -68,3 +95,9 @@ def load_schema(kind: ArtifactKind, major: int = SUPPORTED_MAJOR) -> Mapping[str
 def schema_validator(kind: ArtifactKind, major: int = SUPPORTED_MAJOR) -> Draft202012Validator:
     """Return a cached Draft 2020-12 validator for one artifact kind and major version."""
     return Draft202012Validator(load_schema(kind, major))
+
+
+@cache
+def preprocessing_vector_schema_validator() -> Draft202012Validator:
+    """Return a cached validator for the released preprocessing-vector tooling schema."""
+    return Draft202012Validator(load_preprocessing_vector_schema())

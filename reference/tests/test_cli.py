@@ -79,6 +79,49 @@ def test_validate_session_reports_malformed_frame_line_in_human_output(
     assert "line is not valid JSON" in captured.out
 
 
+def test_validate_session_rejects_non_json_nan_in_a_json_artifact(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    frames_path = tmp_path / "frames.ndjson"
+    manifest = minimal_manifest()
+    manifest["pose_pipeline"]["min_pose_detection_confidence"] = float("nan")
+    _write_json(manifest_path, manifest)
+    frames_path.write_text(json.dumps(minimal_pose_frame()) + "\n", encoding="utf-8")
+
+    result = cli.main(
+        ["--format", "json", "validate-session", str(manifest_path), str(frames_path)]
+    )
+
+    assert result == 2
+    issues = json.loads(capsys.readouterr().out)
+    assert [(issue["code"], issue["artifact_path"]) for issue in issues] == [
+        ("SCHEMA.INVALID", str(manifest_path))
+    ]
+
+
+def test_validate_session_rejects_non_json_nan_in_an_ndjson_artifact(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    frames_path = tmp_path / "frames.ndjson"
+    frame = minimal_pose_frame()
+    frame["normalized_image_landmarks"][0]["x"] = float("nan")
+    _write_json(manifest_path, minimal_manifest())
+    frames_path.write_text(json.dumps(frame) + "\n", encoding="utf-8")
+
+    result = cli.main(
+        ["--format", "json", "validate-session", str(manifest_path), str(frames_path)]
+    )
+
+    assert result == 2
+    issues = json.loads(capsys.readouterr().out)
+    schema_issues = [issue for issue in issues if issue["code"] == "SCHEMA.INVALID"]
+    assert [(issue["code"], issue["artifact_path"], issue["line"]) for issue in schema_issues] == [
+        ("SCHEMA.INVALID", str(frames_path), 1)
+    ]
+
+
 def test_json_output_is_a_stable_issue_array_with_exact_keys(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -108,6 +151,87 @@ def test_json_output_is_a_stable_issue_array_with_exact_keys(
             "message": "line is not valid JSON: Expecting value",
             "line": 1,
         }
+    ]
+
+
+def test_validate_session_skips_v1_semantics_for_an_unknown_manifest_major(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    frames_path = tmp_path / "frames.ndjson"
+    _write_json(
+        manifest_path,
+        minimal_manifest(
+            schema_version="2.0.0",
+            camera_frames_received=2,
+            inference_frames_submitted=1,
+        ),
+    )
+    frames_path.write_text(json.dumps(minimal_pose_frame()) + "\n", encoding="utf-8")
+
+    result = cli.main(
+        ["--format", "json", "validate-session", str(manifest_path), str(frames_path)]
+    )
+
+    assert result == 2
+    issues = json.loads(capsys.readouterr().out)
+    assert [(issue["code"], issue["artifact_path"]) for issue in issues] == [
+        ("VERSION.UNKNOWN_MAJOR", str(manifest_path))
+    ]
+
+
+def test_validate_session_skips_v1_semantics_for_an_unknown_frame_stream_major(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    frames_path = tmp_path / "frames.ndjson"
+    _write_json(
+        manifest_path,
+        minimal_manifest(camera_frames_received=2, inference_frames_submitted=1),
+    )
+    frames_path.write_text(
+        json.dumps(minimal_pose_frame(schema_version="2.0.0")) + "\n", encoding="utf-8"
+    )
+
+    result = cli.main(
+        ["--format", "json", "validate-session", str(manifest_path), str(frames_path)]
+    )
+
+    assert result == 2
+    issues = json.loads(capsys.readouterr().out)
+    assert [(issue["code"], issue["artifact_path"]) for issue in issues] == [
+        ("VERSION.UNKNOWN_MAJOR", str(frames_path))
+    ]
+
+
+def test_validate_session_skips_v1_semantics_for_an_unknown_annotation_major(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    frames_path = tmp_path / "frames.ndjson"
+    annotation_path = tmp_path / "annotation.json"
+    _write_json(manifest_path, minimal_manifest())
+    frames_path.write_text(json.dumps(minimal_pose_frame()) + "\n", encoding="utf-8")
+    _write_json(
+        annotation_path,
+        minimal_annotation(schema_version="2.0.0", session_id="different-session"),
+    )
+
+    result = cli.main(
+        [
+            "--format",
+            "json",
+            "validate-session",
+            str(manifest_path),
+            str(frames_path),
+            str(annotation_path),
+        ]
+    )
+
+    assert result == 2
+    issues = json.loads(capsys.readouterr().out)
+    assert [(issue["code"], issue["artifact_path"]) for issue in issues] == [
+        ("VERSION.UNKNOWN_MAJOR", str(annotation_path))
     ]
 
 

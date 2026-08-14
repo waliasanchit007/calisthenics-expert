@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping
+from dataclasses import replace
 from fractions import Fraction
+from json import JSONDecodeError
 from math import floor
 from pathlib import Path
 
-from observation_contracts.errors import ValidationIssue
+from observation_contracts.errors import ValidationFailure, ValidationIssue
 from observation_contracts.fixture_integrity import resolve_fixture_path, sha256_file
+from observation_contracts.schema_loader import (
+    SUPPORTED_MAJOR,
+    load_strict_json,
+    preprocessing_vector_schema_validator,
+)
+from observation_contracts.structural import json_pointer
+from observation_contracts.versions import ensure_supported_major
 
 _VECTOR_KIND = "preprocessing_vector"
 _VECTOR_INVALID = "PREPROCESSING.VECTOR_INVALID"
@@ -66,26 +74,28 @@ def verify_preprocessing_vector(descriptor_path: Path) -> list[ValidationIssue]:
     """Verify descriptor hashes and that the reference transform matches expected output bytes."""
     artifact_path = str(descriptor_path)
     try:
-        descriptor = json.loads(descriptor_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
+        descriptor = load_strict_json(descriptor_path.read_text(encoding="utf-8"))
+    except OSError as error:
         return [_vector_issue(artifact_path, f"could not read vector descriptor: {error}")]
-    if not isinstance(descriptor, Mapping) or descriptor.get("synthetic") is not True:
-        return [_vector_issue(artifact_path, "vector descriptor must declare synthetic: true")]
+    except JSONDecodeError as error:
+        return [_schema_issue(artifact_path, f"could not read vector descriptor: {error}")]
 
-    required = (
-        "input_width",
-        "input_height",
-        "output_width",
-        "output_height",
-        "input_path",
-        "input_byte_length",
-        "input_sha256",
-        "expected_output_path",
-        "expected_output_byte_length",
-        "expected_output_sha256",
-    )
-    if any(name not in descriptor for name in required):
-        return [_vector_issue(artifact_path, "vector descriptor is missing a required field")]
+    schema_issues = _schema_issues(descriptor, artifact_path)
+    if schema_issues:
+        return schema_issues
+    if not isinstance(descriptor, Mapping):
+        return [_schema_issue(artifact_path, "vector descriptor must be a JSON object")]
+    tooling_schema_version = descriptor.get("tooling_schema_version")
+    if not isinstance(tooling_schema_version, str):
+        return [_schema_issue(artifact_path, "tooling_schema_version must be a string")]
+    try:
+        ensure_supported_major(tooling_schema_version, SUPPORTED_MAJOR, _VECTOR_KIND)
+    except ValidationFailure as failure:
+        return [
+            replace(issue, artifact_path=artifact_path, artifact_kind=_VECTOR_KIND)
+            for issue in failure.issues
+        ]
+
     input_path = descriptor.get("input_path")
     output_path = descriptor.get("expected_output_path")
     if not isinstance(input_path, str) or not isinstance(output_path, str):
@@ -162,3 +172,26 @@ def _vector_issue(artifact_path: str, message: str) -> ValidationIssue:
         artifact_kind=_VECTOR_KIND,
         message=message,
     )
+
+
+def _schema_issue(artifact_path: str, message: str) -> ValidationIssue:
+    return ValidationIssue(
+        code="SCHEMA.INVALID",
+        artifact_path=artifact_path,
+        artifact_kind=_VECTOR_KIND,
+        message=message,
+    )
+
+
+def _schema_issues(descriptor: object, artifact_path: str) -> list[ValidationIssue]:
+    """Return released tooling-schema failures before vector-specific verification."""
+    return [
+        ValidationIssue(
+            code="SCHEMA.INVALID",
+            artifact_path=artifact_path,
+            artifact_kind=_VECTOR_KIND,
+            message=error.message,
+            pointer=json_pointer(error.absolute_path),
+        )
+        for error in preprocessing_vector_schema_validator().iter_errors(descriptor)
+    ]

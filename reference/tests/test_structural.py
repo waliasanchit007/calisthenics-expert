@@ -227,6 +227,19 @@ def test_malformed_ndjson_line_is_reported_and_valid_lines_remain(tmp_path: Path
     assert issues[0].line == 2
 
 
+@pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])
+def test_ndjson_rejects_non_json_numeric_constants(tmp_path: Path, constant: str) -> None:
+    path = tmp_path / "frames.ndjson"
+    path.write_text(f'{{"coordinate": {constant}}}\n', encoding="utf-8")
+
+    records, issues = validate_ndjson(path)
+
+    assert records == []
+    assert [(issue.code, issue.artifact_path, issue.line) for issue in issues] == [
+        ("SCHEMA.INVALID", str(path), 1)
+    ]
+
+
 def test_ndjson_schema_failure_carries_its_line_number(tmp_path: Path) -> None:
     broken = minimal_pose_frame(index=1, capture_ns=200)
     del broken["image_height"]

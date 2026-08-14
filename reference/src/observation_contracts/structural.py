@@ -23,6 +23,7 @@ from observation_contracts.schema_loader import (
     SCHEMA_VERSION_FIELDS,
     SUPPORTED_MAJOR,
     ArtifactKind,
+    load_strict_json,
     schema_validator,
 )
 from observation_contracts.versions import ensure_supported_major
@@ -81,7 +82,7 @@ def validate_ndjson(
             if not line.strip():
                 continue
             try:
-                record = json.loads(line)
+                record = load_strict_json(line)
             except json.JSONDecodeError as error:
                 issues.append(
                     ValidationIssue(

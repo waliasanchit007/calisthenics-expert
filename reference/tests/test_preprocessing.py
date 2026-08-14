@@ -262,7 +262,7 @@ def test_verify_preprocessing_vector_accepts_matching_descriptor_hashes(tmp_path
     (tmp_path / "input.rgb24").write_bytes(input_bytes)
     (tmp_path / "output.rgb24").write_bytes(output_bytes)
     descriptor = {
-        "tooling_schema_version": "1.0.0",
+        "tooling_schema_version": "1.8.3",
         "synthetic": True,
         "input_width": 1,
         "input_height": 1,
@@ -280,6 +280,69 @@ def test_verify_preprocessing_vector_accepts_matching_descriptor_hashes(tmp_path
     issues = verify_preprocessing_vector(tmp_path / "vector.json")
 
     assert issues == []
+
+
+def test_verify_preprocessing_vector_rejects_a_descriptor_missing_its_schema_version(
+    tmp_path: Path,
+) -> None:
+    content = b"\x01\x02\x03"
+    (tmp_path / "input.rgb24").write_bytes(content)
+    (tmp_path / "output.rgb24").write_bytes(content)
+    descriptor = {
+        "synthetic": True,
+        "input_width": 1,
+        "input_height": 1,
+        "output_width": 1,
+        "output_height": 1,
+        "input_path": "input.rgb24",
+        "input_byte_length": 3,
+        "input_sha256": "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81",
+        "expected_output_path": "output.rgb24",
+        "expected_output_byte_length": 3,
+        "expected_output_sha256": "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81",
+    }
+    descriptor_path = tmp_path / "vector.json"
+    descriptor_path.write_text(json.dumps(descriptor), encoding="utf-8")
+
+    issues = verify_preprocessing_vector(descriptor_path)
+
+    assert [issue.code for issue in issues] == ["SCHEMA.INVALID"]
+
+
+def test_verify_preprocessing_vector_rejects_an_unknown_schema_major(tmp_path: Path) -> None:
+    content = b"\x01\x02\x03"
+    (tmp_path / "input.rgb24").write_bytes(content)
+    (tmp_path / "output.rgb24").write_bytes(content)
+    descriptor = {
+        "tooling_schema_version": "2.0.0",
+        "synthetic": True,
+        "input_width": 1,
+        "input_height": 1,
+        "output_width": 1,
+        "output_height": 1,
+        "input_path": "input.rgb24",
+        "input_byte_length": 3,
+        "input_sha256": "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81",
+        "expected_output_path": "output.rgb24",
+        "expected_output_byte_length": 3,
+        "expected_output_sha256": "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81",
+    }
+    descriptor_path = tmp_path / "vector.json"
+    descriptor_path.write_text(json.dumps(descriptor), encoding="utf-8")
+
+    issues = verify_preprocessing_vector(descriptor_path)
+
+    assert [issue.code for issue in issues] == ["VERSION.UNKNOWN_MAJOR"]
+
+
+def test_verify_preprocessing_vector_rejects_non_json_nan_descriptor(tmp_path: Path) -> None:
+    descriptor_path = tmp_path / "vector.json"
+    descriptor_path.write_text('{"tooling_schema_version": NaN}', encoding="utf-8")
+
+    issues = verify_preprocessing_vector(descriptor_path)
+
+    assert [issue.code for issue in issues] == ["SCHEMA.INVALID"]
+    assert issues[0].artifact_path == str(descriptor_path)
 
 
 def test_verify_preprocessing_vector_rejects_path_traversal(tmp_path: Path) -> None:
