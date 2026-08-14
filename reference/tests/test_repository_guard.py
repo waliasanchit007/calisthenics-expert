@@ -32,6 +32,10 @@ def _repository(tmp_path: Path) -> Path:
     _git(root, "init", "--quiet")
     _git(root, "config", "user.email", "tests@example.invalid")
     _git(root, "config", "user.name", "Repository Guard Tests")
+    registry = (
+        Path(__file__).resolve().parents[2] / "contracts/tooling/validator_error_codes.v1.json"
+    )
+    _write(root, "contracts/tooling/validator_error_codes.v1.json", registry.read_bytes())
     return root
 
 
@@ -149,6 +153,31 @@ def test_rejects_pem_private_key_content_even_with_benign_filename(tmp_path: Pat
     assert _codes(root, mode="staged") == [("notes/example.txt", "REPOSITORY.PROHIBITED_CONTENT")]
 
 
+@pytest.mark.parametrize("mode", ["staged", "tracked"])
+@pytest.mark.parametrize("relative_path", ["identity_keys/key.jwk", "identity-keys/key.jwk"])
+def test_rejects_private_jwk_below_identity_key_directories(
+    tmp_path: Path, mode: str, relative_path: str
+) -> None:
+    root = _repository(tmp_path)
+    _write(root, relative_path, b'{"kty":"RSA","n":"public","e":"AQAB","d":"private"}\n')
+    _stage(root)
+
+    assert _codes(root, mode=mode) == [(relative_path, "REPOSITORY.PROHIBITED_PATH")]
+
+
+@pytest.mark.parametrize("mode", ["staged", "tracked"])
+def test_accepts_documentation_mentioning_identities(tmp_path: Path, mode: str) -> None:
+    root = _repository(tmp_path)
+    _write(
+        root,
+        "docs/identity-policy.md",
+        "This documentation explains how identities are handled outside the repository.\n",
+    )
+    _stage(root)
+
+    assert guard_repository(root, mode=mode) == []
+
+
 def test_accepts_documentation_containing_benign_consent_word(tmp_path: Path) -> None:
     root = _repository(tmp_path)
     _write(
@@ -214,6 +243,26 @@ def test_admits_all_three_declared_synthetic_fixture_classes(tmp_path: Path) -> 
     _stage(root)
 
     assert guard_repository(root, mode="staged") == []
+
+
+@pytest.mark.parametrize("mode", ["staged", "tracked"])
+def test_rejects_undeclared_positive_fixture_sibling_in_both_index_modes(
+    tmp_path: Path, mode: str
+) -> None:
+    root = _repository(tmp_path)
+    frame = b"\x01\x02\x03"
+    session_root = "fixtures/synthetic/valid/session"
+    _write(root, f"{session_root}/frame.rgb24", frame)
+    _write(
+        root,
+        f"{session_root}/fixture_metadata.json",
+        _json(_fixture_metadata("frame.rgb24", frame)),
+    )
+    sibling_path = "fixtures/synthetic/valid/undeclared/pose.ndjson"
+    _write(root, sibling_path, b"undeclared pose data\n")
+    _stage(root)
+
+    assert _codes(root, mode=mode) == [(sibling_path, "REPOSITORY.INVALID_FIXTURE_DECLARATION")]
 
 
 def test_admits_committed_nested_preprocessing_vector_layout(tmp_path: Path) -> None:
@@ -317,6 +366,31 @@ def test_rejects_malformed_fixture_declarations(
     assert _codes(root, mode="staged") == [
         (relative_path, "REPOSITORY.INVALID_FIXTURE_DECLARATION")
     ]
+
+
+@pytest.mark.parametrize("mode", ["staged", "tracked"])
+def test_rejects_unknown_expected_failure_code_from_released_registry(
+    tmp_path: Path, mode: str
+) -> None:
+    root = _repository(tmp_path)
+    declaration_path = "fixtures/synthetic/negative/unknown_code/expected_failure.json"
+    artifact_path = "fixtures/synthetic/negative/unknown_code/manifest.json"
+    _write(
+        root,
+        declaration_path,
+        _json(
+            {
+                "tooling_schema_version": "1.0.0",
+                "command": "validate-session",
+                "expected_error_code": "FAKE.NOT_REAL",
+                "artifact_path": artifact_path,
+            }
+        ),
+    )
+    _write(root, artifact_path, b"not a valid manifest\n")
+    _stage(root)
+
+    assert _codes(root, mode=mode) == [(declaration_path, "REPOSITORY.INVALID_FIXTURE_DECLARATION")]
 
 
 def test_rejects_fixture_declaration_path_traversal(tmp_path: Path) -> None:
