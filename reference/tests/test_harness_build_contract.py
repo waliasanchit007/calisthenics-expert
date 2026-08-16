@@ -56,6 +56,28 @@ def test_android_shell_has_exported_launcher_activity() -> None:
     assert '<category android:name="android.intent.category.LAUNCHER" />' in manifest
 
 
+def test_android_probe_has_executable_instrumentation_wiring() -> None:
+    probe_test = (
+        HARNESS
+        / "androidApp/src/androidTest/kotlin/com/calisthenics/diagnostic/probe/CameraCapabilityProbeTest.kt"
+    ).read_text()
+
+    assert (
+        'testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"'
+        in (HARNESS / "androidApp/build.gradle.kts").read_text()
+    )
+    assert (
+        'buildConfigField("String", "PROBE_GIT_SHA"'
+        in (HARNESS / "androidApp/build.gradle.kts").read_text()
+    )
+    assert "CameraCapabilityProbe(" in probe_test
+    assert ".runAndPersist()" in probe_test
+    assert "cacheDir" in probe_test
+    assert "CameraCapabilityProbe.RESULT_FILE" in probe_test
+    assert "ProbeResult(" not in probe_test
+    assert "BuildConfig.PROBE_GIT_SHA" in probe_test
+
+
 def test_ios_host_embeds_shared_compose_controller() -> None:
     app = (HARNESS / "iosApp/iosApp/iOSApp.swift").read_text()
     project = (HARNESS / "iosApp/iosApp.xcodeproj/project.pbxproj").read_text()

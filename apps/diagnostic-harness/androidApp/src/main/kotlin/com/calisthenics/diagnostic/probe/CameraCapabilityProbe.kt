@@ -4,29 +4,46 @@ import android.content.Context
 import android.hardware.DataSpace
 import android.hardware.camera2.CameraCharacteristics
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.system.Os
 import android.system.OsConstants
 import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.core.CameraSelector
-import androidx.camera.core.ExperimentalGetImage
 import androidx.camera.core.ImageAnalysis
-import androidx.camera.core.ImageProxy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.lifecycle.LifecycleOwner
 import java.io.File
 import java.io.FileOutputStream
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.Executors
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
+import java.util.concurrent.atomic.AtomicBoolean
 
 class CameraCapabilityProbe(
     private val context: Context,
     private val lifecycleOwner: LifecycleOwner,
     private val timeoutMillis: Long = DEFAULT_TIMEOUT_MILLIS,
-    private val probeGitSha: String = "unknown",
+    private val probeGitSha: String,
 ) {
-    @OptIn(ExperimentalGetImage::class)
+    private var lifecycleDispatcher: CameraLifecycleDispatcher = AndroidCameraLifecycleDispatcher()
+
+    internal constructor(
+        context: Context,
+        lifecycleOwner: LifecycleOwner,
+        timeoutMillis: Long,
+        probeGitSha: String,
+        lifecycleDispatcher: CameraLifecycleDispatcher,
+    ) : this(context, lifecycleOwner, timeoutMillis, probeGitSha) {
+        this.lifecycleDispatcher = lifecycleDispatcher
+    }
+
+    init {
+        require(SHA_PATTERN.matches(probeGitSha)) { "probeGitSha must be a 40-hex commit SHA" }
+    }
+
     fun run(): ProbeResult {
         val provider = ProcessCameraProvider.getInstance(context).get(timeoutMillis, TimeUnit.MILLISECONDS)
         val cameraInfo = provider.availableCameraInfos.firstOrNull { info ->
@@ -61,15 +78,21 @@ class CameraCapabilityProbe(
                     image.close()
                 }
             }
-            provider.unbindAll()
-            provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, analysis)
-            // CameraX delivers asynchronously; a real device run uses this bounded wait.
+            lifecycleDispatcher.dispatch(timeoutMillis) { provider.unbindAll() }
+            lifecycleDispatcher.dispatch(timeoutMillis) {
+                provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, analysis)
+            }
             check(firstFrame.await(timeoutMillis, TimeUnit.MILLISECONDS)) { "analysis callback timeout" }
         } finally {
             analysis.clearAnalyzer()
-            provider.unbindAll()
-            executor.shutdownNow()
-            executor.awaitTermination(timeoutMillis, TimeUnit.MILLISECONDS)
+            try {
+                lifecycleDispatcher.dispatch(timeoutMillis) { provider.unbindAll() }
+            } finally {
+                executor.shutdownNow()
+                check(executor.awaitTermination(timeoutMillis, TimeUnit.MILLISECONDS)) {
+                    "analysis executor did not terminate"
+                }
+            }
         }
         val durability = exerciseCacheDurability()
         return ProbeResult(
@@ -93,43 +116,50 @@ class CameraCapabilityProbe(
         val directory = context.cacheDir
         val staging = File(directory, TEMP_RESULT_FILE)
         val output = File(directory, RESULT_FILE)
-        FileOutputStream(staging).use { stream ->
-            stream.write(result.toCanonicalJson().toByteArray(Charsets.UTF_8))
-            stream.fd.sync()
-        }
-        Os.rename(staging.absolutePath, output.absolutePath)
-        runCatching {
-            val fd = Os.open(directory.absolutePath, OsConstants.O_RDONLY, 0)
-            try {
-                Os.fsync(fd)
-            } finally {
-                Os.close(fd)
+        var renamed = false
+        try {
+            FileOutputStream(staging).use { stream ->
+                stream.write(result.toCanonicalJson().toByteArray(Charsets.UTF_8))
+                stream.fd.sync()
             }
+            Os.rename(staging.absolutePath, output.absolutePath)
+            renamed = true
+            fsyncDirectory(directory)
+        } catch (failure: Throwable) {
+            staging.delete()
+            if (renamed) output.delete()
+            throw failure
         }
         return result
     }
 
     private fun exerciseCacheDurability(): Pair<Boolean, Boolean> {
         val directory = context.cacheDir
-        val directoryFsync = runCatching {
-            val fd = Os.open(directory.absolutePath, OsConstants.O_RDONLY, 0)
-            try {
-                Os.fsync(fd)
-            } finally {
-                Os.close(fd)
-            }
-        }.isSuccess
+        val directoryFsync = runCatching { fsyncDirectory(directory) }.isSuccess
         val atomicRename = runCatching {
             val source = File(directory, TEMP_FILE)
             val target = File(directory, RENAMED_FILE)
-            FileOutputStream(source).use { stream ->
-                stream.write(0)
-                stream.fd.sync()
+            try {
+                FileOutputStream(source).use { stream ->
+                    stream.write(0)
+                    stream.fd.sync()
+                }
+                Os.rename(source.absolutePath, target.absolutePath)
+            } finally {
+                source.delete()
+                target.delete()
             }
-            Os.rename(source.absolutePath, target.absolutePath)
-            target.delete()
         }.isSuccess
         return directoryFsync to atomicRename
+    }
+
+    private fun fsyncDirectory(directory: File) {
+        val fd = Os.open(directory.absolutePath, OsConstants.O_RDONLY, 0)
+        try {
+            Os.fsync(fd)
+        } finally {
+            Os.close(fd)
+        }
     }
 
     private fun unavailableResult(
@@ -158,6 +188,7 @@ class CameraCapabilityProbe(
         private const val TEMP_RESULT_FILE = ".camera-capability-probe.json.tmp"
         private const val TEMP_FILE = ".camera-capability-probe.tmp"
         private const val RENAMED_FILE = ".camera-capability-probe.committed"
+        private val SHA_PATTERN = Regex("[0-9a-f]{40}")
 
         private fun timestampLabel(source: Int?): String = when (source) {
             CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME -> "REALTIME"
@@ -177,6 +208,26 @@ class CameraCapabilityProbe(
             DataSpace.RANGE_FULL -> "FULL"
             DataSpace.RANGE_LIMITED -> "LIMITED"
             else -> null
+        }
+    }
+}
+
+internal interface CameraLifecycleDispatcher {
+    fun <T> dispatch(timeoutMillis: Long, operation: () -> T): T
+}
+
+internal class AndroidCameraLifecycleDispatcher : CameraLifecycleDispatcher {
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    override fun <T> dispatch(timeoutMillis: Long, operation: () -> T): T {
+        if (Looper.myLooper() == Looper.getMainLooper()) return operation()
+        val task = FutureTask(operation)
+        check(mainHandler.post(task)) { "unable to post CameraX lifecycle operation" }
+        return try {
+            task.get(timeoutMillis, TimeUnit.MILLISECONDS)
+        } catch (timeout: TimeoutException) {
+            task.cancel(true)
+            throw timeout
         }
     }
 }

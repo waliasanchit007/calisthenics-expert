@@ -34,5 +34,8 @@ data class ProbeResult(
             explicitNulls = true
             prettyPrint = false
         }
+
+        fun fromCanonicalJson(value: String): ProbeResult =
+            canonicalJson.decodeFromString(serializer(), value)
     }
 }

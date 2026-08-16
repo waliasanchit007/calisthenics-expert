@@ -4,6 +4,10 @@ plugins {
     alias(libs.plugins.kotlinSerialization)
 }
 
+val probeGitSha = providers.exec {
+    commandLine("git", "rev-parse", "HEAD")
+}.standardOutput.asText.map { it.trim() }
+
 android {
     namespace = "com.calisthenics.diagnostic.android"
     compileSdk = libs.versions.android.compileSdk.get().toInt()
@@ -14,6 +18,12 @@ android {
         targetSdk = libs.versions.android.targetSdk.get().toInt()
         versionCode = 1
         versionName = "0.1"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("String", "PROBE_GIT_SHA", "\"${probeGitSha.get()}\"")
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 }
 
@@ -29,5 +39,6 @@ dependencies {
     testImplementation(libs.kotlin.test)
     testImplementation(libs.junit4)
     androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.core)
     androidTestImplementation(libs.kotlin.test)
 }
