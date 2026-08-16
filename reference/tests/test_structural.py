@@ -28,6 +28,45 @@ def test_unknown_optional_field_is_tolerated() -> None:
     assert validate_document(manifest, "session_manifest", "manifest.json") == []
 
 
+def test_session_manifest_accepts_1_1_camera_provenance_and_fixture_facing() -> None:
+    manifest = minimal_manifest(schema_version="1.1.0")
+    manifest["session_kind"] = "fixture_replay"
+    manifest["camera"].update(
+        {
+            "facing": "fixture",
+            "source_pixel_format": "rgb24",
+            "source_color_matrix": "sRGB",
+            "source_color_range": "full",
+            "source_dataspace_raw": 42,
+            "timestamp_source": "fixture_monotonic",
+            "delivery_semantics": "ordered",
+        }
+    )
+    assert validate_document(manifest, "session_manifest", "manifest.json") == []
+
+
+@pytest.mark.parametrize("session_kind", ["unknown", "fixture", "live"])
+def test_session_manifest_rejects_unknown_session_kind(session_kind: str) -> None:
+    manifest = minimal_manifest()
+    manifest["session_kind"] = session_kind
+    issues = validate_document(manifest, "session_manifest", "manifest.json")
+    assert issues[0].pointer == "/session_kind"
+
+
+@pytest.mark.parametrize("timestamp", [True, 1.5, "100", -1])
+def test_raw_pose_frame_rejects_non_integer_backend_timestamp(timestamp: object) -> None:
+    frame = minimal_pose_frame()
+    frame["backend_timestamp_ms"] = timestamp
+    issues = validate_document(frame, "raw_pose_frame", "frames.ndjson")
+    assert issues[0].pointer == "/backend_timestamp_ms"
+
+
+def test_raw_pose_frame_accepts_non_negative_backend_timestamp() -> None:
+    frame = minimal_pose_frame()
+    frame["backend_timestamp_ms"] = 0
+    assert validate_document(frame, "raw_pose_frame", "frames.ndjson") == []
+
+
 def test_missing_required_field_reports_json_pointer() -> None:
     frame = minimal_pose_frame()
     del frame["capture_timestamp_ns"]

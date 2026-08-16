@@ -38,6 +38,11 @@
       "type": "integer",
       "minimum": 0
     },
+    "backend_timestamp_ms": {
+      "description": "Non-negative monotonic timestamp in milliseconds passed to the pose backend after quantization.",
+      "type": "integer",
+      "minimum": 0
+    },
     "inference_start_ns": {
       "type": "integer",
       "minimum": 0

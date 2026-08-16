@@ -42,6 +42,7 @@ _MANIFEST_KIND = "session_manifest"
 _NORMALIZED = "normalized_image_landmarks"
 _WORLD = "world_landmarks"
 _SESSION_COUNT_CODE = "SESSION.COUNT_MISMATCH"
+_SESSION_MEDIA_ROLE_CODE = "SESSION.MEDIA_ROLE"
 _FAILURE_CLASSIFICATIONS = frozenset({"backend_call_failed", "session_teardown_timeout"})
 
 
@@ -295,17 +296,34 @@ def validate_session_manifest_semantics(
                 if role is not None:
                     roles.append(role)
 
-        study_context = manifest.get("study_context")
-        if isinstance(study_context, Mapping):
-            static_reference_count = roles.count("static_reference_clip")
-            if static_reference_count != 1:
+        session_kind = _text(manifest, "session_kind") or "live_study"
+        static_reference_count = roles.count("static_reference_clip")
+        conformance_fixture_count = roles.count("conformance_fixture")
+        role_rule_valid = True
+        if session_kind == "fixture_replay":
+            role_rule_valid = conformance_fixture_count == 1 and static_reference_count == 0
+            if not role_rule_valid:
                 issues.append(
                     _session_issue(
                         path,
-                        "a study session must contain exactly one static_reference_clip",
+                        "fixture_replay must contain exactly one conformance_fixture and no static_reference_clip",
+                        pointer="/media_references",
+                        expected="exactly one conformance_fixture and no static_reference_clip",
+                        actual=roles,
+                        code=_SESSION_MEDIA_ROLE_CODE,
+                    )
+                )
+        elif session_kind == "live_study":
+            role_rule_valid = static_reference_count == 1
+            if not role_rule_valid:
+                issues.append(
+                    _session_issue(
+                        path,
+                        "live_study must contain exactly one static_reference_clip",
                         pointer="/media_references",
                         expected=1,
                         actual=static_reference_count,
+                        code=_SESSION_MEDIA_ROLE_CODE,
                     )
                 )
 
@@ -314,7 +332,7 @@ def validate_session_manifest_semantics(
             if not isinstance(reference, Mapping):
                 continue
             role = _text(reference, "role")
-            if role is not None and role in seen_roles:
+            if role_rule_valid and role is not None and role in seen_roles:
                 issues.append(
                     _session_issue(
                         path,
@@ -584,10 +602,11 @@ def _session_issue(
     pointer: str,
     expected: Any = None,
     actual: Any = None,
+    code: str = _SESSION_COUNT_CODE,
 ) -> ValidationIssue:
     """Return one session-level issue with the stable artifact identity."""
     return ValidationIssue(
-        code=_SESSION_COUNT_CODE,
+        code=code,
         artifact_path=path,
         artifact_kind=_MANIFEST_KIND,
         message=message,

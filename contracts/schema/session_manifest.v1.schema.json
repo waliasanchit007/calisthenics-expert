@@ -34,6 +34,15 @@
       "description": "Identifier joining this manifest to exactly one raw frame stream and its annotations.",
       "$ref": "#/$defs/uuid"
     },
+    "session_kind": {
+      "description": "Session purpose. When absent, readers preserve the v1.0 live_study semantics.",
+      "type": "string",
+      "enum": [
+        "live_study",
+        "live_conformance",
+        "fixture_replay"
+      ]
+    },
     "participant_pseudonym_id": {
       "description": "Pseudonymous participant identifier. The identity mapping is never stored in this repository.",
       "type": "string",
@@ -174,7 +183,8 @@
           "enum": [
             "front",
             "back",
-            "external"
+            "external",
+            "fixture"
           ]
         },
         "capture_width": {
@@ -201,6 +211,29 @@
         "requested_camera_fps": {
           "type": "number",
           "exclusiveMinimum": 0
+        },
+        "source_pixel_format": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_color_matrix": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_color_range": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_dataspace_raw": {
+          "type": "integer"
+        },
+        "timestamp_source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "delivery_semantics": {
+          "type": "string",
+          "minLength": 1
         }
       }
     },

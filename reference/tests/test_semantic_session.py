@@ -236,7 +236,7 @@ def test_requires_one_static_reference_clip_for_a_study_session() -> None:
 
     issues = validate_session(manifest, [minimal_pose_frame()])
 
-    assert codes(issues) == ["SESSION.COUNT_MISMATCH"]
+    assert codes(issues) == ["SESSION.MEDIA_ROLE"]
 
 
 def test_requires_one_static_reference_clip_for_an_empty_study_context() -> None:
@@ -247,7 +247,7 @@ def test_requires_one_static_reference_clip_for_an_empty_study_context() -> None
     issues = validate_session(manifest, [minimal_pose_frame()])
 
     assert [(issue.code, issue.pointer) for issue in issues] == [
-        ("SESSION.COUNT_MISMATCH", "/media_references")
+        ("SESSION.MEDIA_ROLE", "/media_references")
     ]
 
 
@@ -261,6 +261,92 @@ def test_rejects_duplicate_media_roles() -> None:
     issues = validate_session(manifest, [minimal_pose_frame()])
 
     assert codes(issues) == ["SESSION.COUNT_MISMATCH"]
+
+
+def test_missing_session_kind_preserves_live_study_semantics() -> None:
+    manifest = minimal_manifest()
+    manifest["media_references"] = []
+
+    issues = validate_session(manifest, [minimal_pose_frame()])
+
+    assert [(issue.code, issue.pointer) for issue in issues] == [
+        ("SESSION.MEDIA_ROLE", "/media_references")
+    ]
+
+
+def test_fixture_replay_accepts_exactly_one_conformance_fixture() -> None:
+    manifest = minimal_manifest()
+    manifest["session_kind"] = "fixture_replay"
+    manifest["camera"]["facing"] = "fixture"
+    manifest["media_references"] = [
+        {
+            "role": "conformance_fixture",
+            "path_ref": "fixtures/replay.rgb24",
+            "sha256": "0" * 64,
+        }
+    ]
+
+    assert validate_session(manifest, [minimal_pose_frame()]) == []
+
+
+@pytest.mark.parametrize(
+    "media_references",
+    [
+        [
+            {
+                "role": "static_reference_clip",
+                "path_ref": "media/static_reference.mp4",
+                "sha256": "0" * 64,
+            }
+        ],
+        [],
+        [
+            {
+                "role": "conformance_fixture",
+                "path_ref": "fixtures/one.rgb24",
+                "sha256": "0" * 64,
+            },
+            {
+                "role": "conformance_fixture",
+                "path_ref": "fixtures/two.rgb24",
+                "sha256": "1" * 64,
+            },
+        ],
+    ],
+)
+def test_fixture_replay_reports_one_media_role_issue_for_incompatible_media(
+    media_references: list[dict[str, Any]],
+) -> None:
+    manifest = minimal_manifest()
+    manifest["session_kind"] = "fixture_replay"
+    manifest["camera"]["facing"] = "fixture"
+    manifest["media_references"] = media_references
+
+    issues = validate_session(manifest, [minimal_pose_frame()])
+
+    assert [(issue.code, issue.pointer) for issue in issues] == [
+        ("SESSION.MEDIA_ROLE", "/media_references")
+    ]
+
+
+def test_live_study_requires_one_static_reference_clip_with_stable_role_code() -> None:
+    manifest = minimal_manifest()
+    manifest["media_references"] = []
+
+    issues = validate_session(manifest, [minimal_pose_frame()])
+
+    assert [(issue.code, issue.pointer) for issue in issues] == [
+        ("SESSION.MEDIA_ROLE", "/media_references")
+    ]
+
+
+def test_live_conformance_does_not_require_a_static_reference_clip() -> None:
+    manifest = minimal_manifest()
+    manifest["session_kind"] = "live_conformance"
+    manifest["media_references"] = []
+    del manifest["study_context"]
+
+    assert validate_session(manifest, [minimal_pose_frame()]) == []
 
 
 def test_requires_sync_offset_and_drift_together() -> None:
