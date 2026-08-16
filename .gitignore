@@ -9,6 +9,13 @@ dist/
 .ruff_cache/
 .DS_Store
 
+# Local Android/Gradle and Xcode state for the diagnostic harness.
+apps/diagnostic-harness/.gradle/
+apps/diagnostic-harness/local.properties
+apps/diagnostic-harness/iosApp/DerivedData/
+apps/diagnostic-harness/iosApp/iosApp.xcodeproj/xcuserdata/
+apps/diagnostic-harness/model-assets/
+
 # Raw study media and secret material are never repository content.
 *.aac
 *.aiff

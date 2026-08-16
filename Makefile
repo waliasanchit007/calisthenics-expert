@@ -6,7 +6,7 @@ done; printf '%s' python3)
 VENV_PYTHON := .venv/bin/python
 CLI := $(VENV_PYTHON) -m observation_contracts
 
-.PHONY: bootstrap verify
+.PHONY: bootstrap verify verify-harness-foundation
 
 bootstrap:
 	@command -v "$(PYTHON)" >/dev/null 2>&1 || { echo "error: Python interpreter '$(PYTHON)' was not found" >&2; exit 1; }
@@ -20,6 +20,9 @@ bootstrap:
 	$(VENV_PYTHON) -m pip install --upgrade pip
 	$(VENV_PYTHON) -m pip install -e 'reference[dev]'
 	git config --local core.hooksPath .githooks
+
+verify-harness-foundation:
+	cd apps/diagnostic-harness && ./gradlew --no-daemon :shared:allTests :composeApp:allTests :androidApp:assembleDebug :composeApp:linkDebugFrameworkIosArm64 :composeApp:linkDebugFrameworkIosSimulatorArm64
 
 verify:
 	$(VENV_PYTHON) -m ruff format --check reference
