@@ -23,6 +23,8 @@ bootstrap:
 
 verify-harness-foundation:
 	cd apps/diagnostic-harness && ./gradlew --no-daemon :shared:allTests :composeApp:allTests :androidApp:assembleDebug :composeApp:linkDebugFrameworkIosArm64 :composeApp:linkDebugFrameworkIosSimulatorArm64
+	test -d apps/diagnostic-harness/composeApp/build/bin/iosArm64/debugFramework/DiagnosticHarness.framework
+	test -d apps/diagnostic-harness/composeApp/build/bin/iosSimulatorArm64/debugFramework/DiagnosticHarness.framework
 
 verify:
 	$(VENV_PYTHON) -m ruff format --check reference

@@ -22,6 +22,7 @@ EXPECTED_VERSIONS = {
 def test_harness_build_contract() -> None:
     versions = tomllib.loads((HARNESS / "gradle" / "libs.versions.toml").read_text())["versions"]
     settings = (HARNESS / "settings.gradle.kts").read_text()
+    compose_build = (HARNESS / "composeApp" / "build.gradle.kts").read_text()
     all_gradle_text = "\n".join(
         path.read_text()
         for path in HARNESS.rglob("*")
@@ -36,4 +37,11 @@ def test_harness_build_contract() -> None:
 
     assert {key: versions[key] for key in EXPECTED_VERSIONS} == EXPECTED_VERSIONS
     assert includes == {":shared", ":composeApp", ":androidApp"}
+    assert 'baseName = "DiagnosticHarness"' in compose_build
+    marker = (
+        HARNESS
+        / "composeApp/src/commonMain/kotlin/com/calisthenics/diagnostic/foundation/FrameworkCompileMarker.kt"
+    )
+    assert marker.is_file()
+    assert "public object FrameworkCompileMarker" in marker.read_text()
     assert "latest" not in all_gradle_text.lower()

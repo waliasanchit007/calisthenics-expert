@@ -14,7 +14,11 @@ apps/diagnostic-harness/.gradle/
 apps/diagnostic-harness/local.properties
 apps/diagnostic-harness/iosApp/DerivedData/
 apps/diagnostic-harness/iosApp/iosApp.xcodeproj/xcuserdata/
-apps/diagnostic-harness/model-assets/
+apps/diagnostic-harness/model-assets/cache/
+apps/diagnostic-harness/model-assets/*.bin
+apps/diagnostic-harness/model-assets/*.onnx
+apps/diagnostic-harness/model-assets/*.task
+apps/diagnostic-harness/model-assets/*.tflite
 
 # Raw study media and secret material are never repository content.
 *.aac
