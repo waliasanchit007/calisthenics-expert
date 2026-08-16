@@ -22,11 +22,12 @@ released schemas remain under their immutable v1 filenames.
 - `RawPoseFrame v1.1.0` adds optional non-negative integer
   `backend_timestamp_ms`, the monotonic millisecond timestamp passed to the
   pose backend after quantization.
-- `SessionManifest v1.1.0` adds `conformance_fixture` to the
-  `media_references.role` vocabulary. A `fixture_replay` session must contain
-  exactly one `conformance_fixture` and no `static_reference_clip`; a
-  `live_study` session retains its exactly-one `static_reference_clip` rule;
-  `live_conformance` has no study-only media requirement.
+- `SessionManifest v1.1.0` adds session-kind-dependent semantics for the
+  existing `media_references.role=conformance_fixture` value. A
+  `fixture_replay` session must contain exactly one `conformance_fixture` and
+  no `static_reference_clip`; a `live_study` session retains its exactly-one
+  `static_reference_clip` rule; `live_conformance` has no study-only media
+  requirement. The role vocabulary itself is unchanged by 1.1.0.
 
 ### Validator tooling
 
@@ -34,6 +35,17 @@ released schemas remain under their immutable v1 filenames.
   session-kind/media-role combination. It is distinct from
   `SESSION.COUNT_MISMATCH` and is exercised by the declared-negative
   `replay_media_role` fixture.
+- In the older live-study behavior, the missing or invalid static-reference
+  media-role condition was reported as `SESSION.COUNT_MISMATCH`; 1.1.0
+  replaces that media-role use with `SESSION.MEDIA_ROLE`. The legacy code
+  remains active for numeric/count accounting and is not removed or reused.
+  Machine consumers supporting both validator behaviors must accept
+  `SESSION.COUNT_MISMATCH` for the legacy media-role condition and
+  `SESSION.MEDIA_ROLE` for the 1.1.0 condition, while continuing to treat
+  `SESSION.COUNT_MISMATCH` as the count-accounting code elsewhere. See the
+  [deprecation policy](schema-release-process.md#deprecation) and
+  [migration policy](schema-release-process.md#migration).
+- The reference validator package remains version `0.1.0` for this release.
 
 ### Fixtures and provenance
 

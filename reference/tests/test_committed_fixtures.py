@@ -46,6 +46,16 @@ def test_every_negative_fixture_fails_with_declared_code() -> None:
         assert result.codes == [case.expected_error_code]
 
 
+def test_declared_negative_artifact_paths_match_reported_issue_artifacts() -> None:
+    root = repository_root()
+    for case in discover_negative_fixtures(root):
+        result = run_declared_validation(case)
+        declared_artifact = (root / Path(*case.artifact_path.split("/"))).resolve()
+        reported_artifacts = {Path(issue.artifact_path).resolve() for issue in result.issues}
+
+        assert reported_artifacts == {declared_artifact}, case.name
+
+
 def test_committed_positive_session_is_fully_valid() -> None:
     session = repository_root() / "fixtures/synthetic/valid/session"
     manifest_path = session / "manifest.json"
@@ -112,10 +122,13 @@ def test_committed_fixture_replay_group_is_fully_valid() -> None:
 
     media_reference = manifest["media_references"][0]
     media_path = replay / media_reference["path_ref"]
-    fixture_frame = fixture_metadata["frames"][0]
-    assert media_reference["path_ref"] == fixture_frame["path"]
-    assert sha256_file(media_path) == media_reference["sha256"] == fixture_frame["sha256"]
-    assert media_path.stat().st_size == fixture_frame["byte_length"]
+    fixture_frames = fixture_metadata["frames"]
+    for fixture_frame in fixture_frames:
+        fixture_media_path = replay / fixture_frame["path"]
+        assert sha256_file(fixture_media_path) == fixture_frame["sha256"]
+        assert fixture_media_path.stat().st_size == fixture_frame["byte_length"]
+    assert media_reference["path_ref"] == fixture_frames[0]["path"]
+    assert sha256_file(media_path) == media_reference["sha256"] == fixture_frames[0]["sha256"]
     assert manifest["session_manifest_schema_version"] == "1.1.0"
     assert manifest["participant_pseudonym_id"] == "synthetic-fixture-replay-01"
     assert manifest["session_kind"] == "fixture_replay"
@@ -132,6 +145,28 @@ def test_committed_fixture_replay_group_is_fully_valid() -> None:
     )
     assert fixture_metadata["synthetic"] is True
     assert issues == []
+
+
+def test_committed_fixture_replay_sequence_matches_raw_stream_and_accounting() -> None:
+    replay = repository_root() / "fixtures/synthetic/valid/fixture_replay"
+    manifest = _json(replay / "manifest.json")
+    fixture_metadata = _json(replay / "fixture_metadata.json")
+    frames, frame_issues = validate_ndjson(replay / "frames.ndjson")
+
+    fixture_frames = fixture_metadata["frames"]
+    assert frame_issues == []
+    assert len(fixture_frames) == len(frames) == 2
+    assert [descriptor["frame_index"] for descriptor in fixture_frames] == [
+        frame["frame_index"] for frame in frames
+    ]
+    assert [descriptor["timestamp_ns"] for descriptor in fixture_frames] == [
+        frame["capture_timestamp_ns"] - manifest["clock"]["t0_monotonic_ns"] for frame in frames
+    ]
+    counts = manifest["counts"]
+    assert counts["camera_frames_received"] == len(fixture_frames)
+    assert counts["inference_frames_submitted"] == len(frames)
+    assert counts["inference_records_emitted"] == len(frames)
+    assert counts["pose_detected_records"] == sum(frame["pose_present"] for frame in frames)
 
 
 def test_every_committed_fixture_metadata_declares_synthetic_provenance() -> None:

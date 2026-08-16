@@ -17,6 +17,13 @@
       "path": "decoded/frame_000000.rgb24",
       "byte_length": 15,
       "sha256": "84b7bc00740374f68f0a704b0d5a26b3a39d43a8c08e8b3f15f03694b8d396f2"
+    },
+    {
+      "frame_index": 1,
+      "timestamp_ns": 33333333,
+      "path": "decoded/frame_000001.rgb24",
+      "byte_length": 15,
+      "sha256": "8ea3c68f8eccedc68109f0e4fc03da3a0bba96d6ca1e5a3590b83855be12aa1d"
     }
   ],
   "generation": {
