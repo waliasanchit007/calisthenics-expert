@@ -45,3 +45,23 @@ def test_harness_build_contract() -> None:
     assert marker.is_file()
     assert "public object FrameworkCompileMarker" in marker.read_text()
     assert "latest" not in all_gradle_text.lower()
+
+
+def test_android_shell_has_exported_launcher_activity() -> None:
+    manifest = (HARNESS / "androidApp/src/main/AndroidManifest.xml").read_text()
+
+    assert 'android:name="com.calisthenics.diagnostic.MainActivity"' in manifest
+    assert 'android:exported="true"' in manifest
+    assert '<action android:name="android.intent.action.MAIN" />' in manifest
+    assert '<category android:name="android.intent.category.LAUNCHER" />' in manifest
+
+
+def test_ios_host_embeds_shared_compose_controller() -> None:
+    app = (HARNESS / "iosApp/iosApp/iOSApp.swift").read_text()
+    project = (HARNESS / "iosApp/iosApp.xcodeproj/project.pbxproj").read_text()
+
+    assert "import DiagnosticHarness" in app
+    assert "MainViewControllerKt.MainViewController()" in app
+    assert "ContentView()" not in app
+    assert "DiagnosticHarness.framework" in project
+    assert "ContentView.swift in Sources" not in project
