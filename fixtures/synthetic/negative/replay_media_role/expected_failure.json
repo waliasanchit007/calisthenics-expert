@@ -1,0 +1,7 @@
+{
+  "tooling_schema_version": "1.0.0",
+  "command": "validate-session",
+  "expected_error_code": "SESSION.MEDIA_ROLE",
+  "artifact_path": "fixtures/synthetic/negative/replay_media_role/manifest.json",
+  "description": "synthetic fixture_replay with one replaced media role"
+}
