@@ -11,7 +11,10 @@ from typing import Any
 
 from observation_contracts.errors import ValidationIssue
 from observation_contracts.schema_loader import load_strict_json
-from observation_contracts.semantic import validate_frame_stream
+from observation_contracts.semantic import (
+    validate_frame_stream,
+    validate_session_manifest_semantics,
+)
 from observation_contracts.structural import validate_document, validate_ndjson
 
 _FIXTURE_KIND = "fixture_metadata"
@@ -231,6 +234,7 @@ def _validate_negative_session(case: NegativeFixtureCase) -> list[ValidationIssu
     frames, frame_issues = validate_ndjson(frames_path)
     issues.extend(frame_issues)
     issues.extend(validate_frame_stream(manifest, frames, str(manifest_path), str(frames_path)))
+    issues.extend(validate_session_manifest_semantics(manifest, frames, str(manifest_path)))
     return issues
 
 

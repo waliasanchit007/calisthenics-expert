@@ -1,0 +1,27 @@
+{
+  "fixture_metadata_schema_version": "1.0.0",
+  "fixture_id": "6a7b8c9d-0e1f-4a2b-8c3d-4e5f6a7b8c9d",
+  "synthetic": true,
+  "preprocessing_contract_version": "1.0.0",
+  "frame_width": 5,
+  "frame_height": 1,
+  "pixel_format": "rgb24",
+  "color_space": "srgb",
+  "color_range": "full",
+  "channel_order": "rgb",
+  "orientation": "upright",
+  "frames": [
+    {
+      "frame_index": 0,
+      "timestamp_ns": 0,
+      "path": "decoded/frame_000000.rgb24",
+      "byte_length": 15,
+      "sha256": "84b7bc00740374f68f0a704b0d5a26b3a39d43a8c08e8b3f15f03694b8d396f2"
+    }
+  ],
+  "generation": {
+    "generator_name": "synthetic_fixture_generator",
+    "generator_version": "1.1.0",
+    "description": "synthetic RGB24 bytes for contract replay validation"
+  }
+}

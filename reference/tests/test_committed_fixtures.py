@@ -39,6 +39,7 @@ def test_every_negative_fixture_fails_with_declared_code() -> None:
         "session_switch",
         "landmark_count",
         "fixture_checksum",
+        "replay_media_role",
     }
     for case in cases:
         result = run_declared_validation(case)
@@ -88,6 +89,48 @@ def test_committed_positive_session_is_fully_valid() -> None:
     assert fixture_metadata["synthetic"] is True
     assert [frame["pose_present"] for frame in frames] == [False, True]
     assert frames[1]["normalized_image_landmarks"] != frames[1]["world_landmarks"]
+    assert issues == []
+
+
+def test_committed_fixture_replay_group_is_fully_valid() -> None:
+    replay = repository_root() / "fixtures/synthetic/valid/fixture_replay"
+    manifest_path = replay / "manifest.json"
+    frames_path = replay / "frames.ndjson"
+    fixture_metadata_path = replay / "fixture_metadata.json"
+    manifest = _json(manifest_path)
+    fixture_metadata = _json(fixture_metadata_path)
+
+    issues = validate_document(manifest, "session_manifest", str(manifest_path))
+    frames, frame_schema_issues = validate_ndjson(frames_path)
+    issues.extend(frame_schema_issues)
+    issues.extend(validate_frame_stream(manifest, frames, str(manifest_path), str(frames_path)))
+    issues.extend(validate_session_manifest_semantics(manifest, frames, str(manifest_path)))
+    issues.extend(
+        validate_document(fixture_metadata, "fixture_metadata", str(fixture_metadata_path))
+    )
+    issues.extend(verify_fixture(fixture_metadata_path))
+
+    media_reference = manifest["media_references"][0]
+    media_path = replay / media_reference["path_ref"]
+    fixture_frame = fixture_metadata["frames"][0]
+    assert media_reference["path_ref"] == fixture_frame["path"]
+    assert sha256_file(media_path) == media_reference["sha256"] == fixture_frame["sha256"]
+    assert media_path.stat().st_size == fixture_frame["byte_length"]
+    assert manifest["session_manifest_schema_version"] == "1.1.0"
+    assert manifest["participant_pseudonym_id"] == "synthetic-fixture-replay-01"
+    assert manifest["session_kind"] == "fixture_replay"
+    assert manifest["camera"]["facing"] == "fixture"
+    assert [reference["role"] for reference in manifest["media_references"]] == [
+        "conformance_fixture"
+    ]
+    assert manifest["capture_quality_observed"]["lighting_class"].startswith("synthetic_")
+    assert manifest["study_context"]["environment"].startswith("synthetic_")
+    assert all(frame["raw_pose_frame_schema_version"] == "1.1.0" for frame in frames)
+    assert all(
+        "backend_timestamp_ms" not in frame or frame["backend_timestamp_ms"] >= 0
+        for frame in frames
+    )
+    assert fixture_metadata["synthetic"] is True
     assert issues == []
 
 

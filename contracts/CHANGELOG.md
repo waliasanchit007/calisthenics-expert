@@ -4,6 +4,55 @@ This changelog records releases of the observation schemas and their supporting
 tooling contracts. Application, harness, model, and analysis-package versions
 are independent of these contracts.
 
+## [1.1.0] - 2026-08-16
+
+Backward-compatible minor release of the observation contracts required by the
+Phase 0 diagnostic harness. Existing 1.0.0 artifacts remain valid; the
+released schemas remain under their immutable v1 filenames.
+
+### Observation contract changes
+
+- `SessionManifest v1.1.0` adds optional `session_kind`, with the recognized
+  values `live_study`, `live_conformance`, and `fixture_replay`. When
+  `session_kind` is absent, readers preserve the 1.0.0 `live_study` semantics.
+- `SessionManifest v1.1.0` adds `fixture` to the `camera.facing` vocabulary.
+- `SessionManifest v1.1.0` adds these optional camera provenance fields:
+  `source_pixel_format`, `source_color_matrix`, `source_color_range`,
+  `source_dataspace_raw`, `timestamp_source`, and `delivery_semantics`.
+- `RawPoseFrame v1.1.0` adds optional non-negative integer
+  `backend_timestamp_ms`, the monotonic millisecond timestamp passed to the
+  pose backend after quantization.
+- `SessionManifest v1.1.0` adds `conformance_fixture` to the
+  `media_references.role` vocabulary. A `fixture_replay` session must contain
+  exactly one `conformance_fixture` and no `static_reference_clip`; a
+  `live_study` session retains its exactly-one `static_reference_clip` rule;
+  `live_conformance` has no study-only media requirement.
+
+### Validator tooling
+
+- `SESSION.MEDIA_ROLE` is the stable validator error code for an invalid
+  session-kind/media-role combination. It is distinct from
+  `SESSION.COUNT_MISMATCH` and is exercised by the declared-negative
+  `replay_media_role` fixture.
+
+### Fixtures and provenance
+
+- The positive synthetic replay fixture is
+  [`fixtures/synthetic/valid/fixture_replay`](../fixtures/synthetic/valid/fixture_replay/).
+- The declared-negative synthetic replay fixture is
+  [`fixtures/synthetic/negative/replay_media_role`](../fixtures/synthetic/negative/replay_media_role/)
+  and must produce only `SESSION.MEDIA_ROLE` through `validate-session`.
+- The existing synthetic session, four earlier declared-negative cases, and
+  preprocessing vector remain part of the release inventory. No real
+  participant data, video, audio, identifiers, or downloaded media is added.
+
+### Decision records
+
+- [`ADR-0004`](../docs/adr/ADR-0004-kmp-android-first-diagnostic-harness.md)
+  records the diagnostic-harness architecture that consumes this release.
+- The [locked Phase 0 diagnostic harness design](../docs/superpowers/specs/2026-08-16-phase-0-diagnostic-harness-design.md)
+  defines the 1.1.0 contract boundary and replay semantics.
+
 ## [1.0.0] - 2026-08-14
 
 Initial stable observation-contract release for the Phase 0 observation boundary.
