@@ -235,27 +235,40 @@ Push, submit through the control plane, drain the outbox. No independent review 
 
 **Pre-implementation gate:** mandatory scoped Codex Sol challenge on the extraction design in design spec §6.2 before any test/production code is written for this task — not conditional on a proposed deviation, unlike Tasks 5/6 of the prior plan. The challenge specifically probes: whether `FaultInjectingStoragePort` wrapping a real `AndroidStoragePort` forces the identical code paths the fake's inline fault injection forced; whether `precreateDestination` as a harness-only backdoor legitimately substitutes for filesystem state the protocol itself cannot produce; and whether every probe the brief enumerates (fault sweep, destination cases, abort/crash classification, corruption scan, staging uniqueness, `filesDir` enforcement) is actually writable against the real-port harness as designed. Record the challenge transcript/outcome in the ignored run ledger before Step 1 begins. If the challenge surfaces a required design change, update design spec §6.2 in the same task branch before implementing against the revised design — do not implement against a design the challenge has already invalidated.
 
+**Challenge outcome: CHANGES_REQUIRED, resolved before Step 1.** The scoped Sol challenge (run ledger `port-conformance-challenge.md`) adopted five corrections, folded into design spec §5.2/§6.1/§6.2 and into this task's steps below:
+
+1. `AndroidStoragePort.renameNoReplace` uses plain `android.system.Os.rename`, not `Files.move` — `Files.move` without `REPLACE_EXISTING` already refuses an existing (including empty) destination, which would make Step 5's mutation inert on Android.
+2. `FaultInjectingStoragePort` preserves `FakeStorage`'s existing ordinal semantics exactly: `appendLine`, `flush`, `fsyncFile`, `reconcile`, `writeManifest`, `fsyncDirectory`, `destinationExists`, `renameNoReplace`, `writeAbortMarker` consume ordinals and are fault-injectable; `createStagingAttempt`, `scanCommittedRoot`, `scanStagingResidues` delegate without consuming an ordinal or being injectable.
+3. `StoragePortTestHarness` exposes a backend-neutral destination snapshot/fingerprint/readback capability (test-only, `shared/commonTest` and the concrete harnesses) sufficient to prove a populated destination is byte-for-byte untouched on both the fake and Android — no observation API is added to production `StoragePort`.
+4. The shared `StoragePortConformanceSuite` root-enforcement probe proves only lexical `filesDir` containment and root distinctness; same-mount identity is asserted solely by `AndroidStoragePortConformanceTest`/its harness via `AndroidStorageRoots.from` and `st_dev`, never claimed against the fake.
+5. Connected instrumentation may not honour Gradle `--tests`; Steps 3–5 below invoke instrumentation-runner class arguments or the full connected-test task, never `--tests` against a connected-device task.
+
 **Files:**
 - Create: `apps/diagnostic-harness/shared/src/commonTest/kotlin/com/calisthenics/diagnostic/export/StoragePortTestHarness.kt`
 - Create: `apps/diagnostic-harness/shared/src/commonTest/kotlin/com/calisthenics/diagnostic/export/FaultInjectingStoragePort.kt`
 - Create: `apps/diagnostic-harness/shared/src/commonTest/kotlin/com/calisthenics/diagnostic/export/StoragePortConformanceSuite.kt`
 - Modify: `apps/diagnostic-harness/shared/src/commonTest/kotlin/com/calisthenics/diagnostic/export/FakeStorage.kt`
 - Modify: `apps/diagnostic-harness/shared/src/commonTest/kotlin/com/calisthenics/diagnostic/export/SessionExporterTest.kt`
+- Modify: `apps/diagnostic-harness/shared/src/androidMain/kotlin/com/calisthenics/diagnostic/export/AndroidStoragePort.kt` (correction 1: `renameNoReplace` switches to `android.system.Os.rename`)
 - Create: `apps/diagnostic-harness/shared/src/jvmTest/kotlin/com/calisthenics/diagnostic/export/FakeStoragePortConformanceTest.kt`
 - Create: `apps/diagnostic-harness/shared/src/androidDeviceTest/kotlin/com/calisthenics/diagnostic/export/AndroidStoragePortConformanceTest.kt`
 
 **Interfaces:**
-- `StoragePortTestHarness { fun freshPort(): StoragePort; fun precreateDestination(destinationPath: String, populated: Boolean); fun dispose() }`
-- `FaultInjectingStoragePort(delegate: StoragePort, failOnOrdinal: Int? = null, failOnOrdinals: Set<Int> = emptySet(), dropAppends: Boolean = false) : StoragePort` — records `operations: List<String>` identically to the current `FakeStorage.operations` shape, then delegates.
-- `abstract class StoragePortConformanceSuite { abstract fun harness(): StoragePortTestHarness; /* eleven-plus test methods */ }`
+- `StoragePortTestHarness { fun freshPort(): StoragePort; fun precreateDestination(destinationPath: String, populated: Boolean); fun destinationFingerprint(destinationPath: String): DestinationFingerprint?; fun dispose() }` — `destinationFingerprint` is correction 3's backend-neutral readback capability.
+- `FaultInjectingStoragePort(delegate: StoragePort, failOnOrdinal: Int? = null, failOnOrdinals: Set<Int> = emptySet(), dropAppends: Boolean = false) : StoragePort` — records `operations: List<String>` identically to the current `FakeStorage.operations` shape for the nine ordinal-gated operations only (correction 2), then delegates every call including the three non-gated ones.
+- `abstract class StoragePortConformanceSuite { abstract fun harness(): StoragePortTestHarness; /* eleven-plus test methods, root-enforcement probe lexical/distinctness-only per correction 4 */ }`
 
 - [ ] **Step 1: RED — write the harness and decorator with failing/uncompilable suite references**
 
-Extract `FaultInjectingStoragePort` from `FakeStorage.before()`, generalized to wrap any `StoragePort` delegate. Write `StoragePortTestHarness` and a `FakeStoragePortTestHarness` implementation. Write `StoragePortConformanceSuite` with every probe design spec §6.2 lists, referencing `harness()` — this will not compile until `FakeStoragePortConformanceTest`/`AndroidStoragePortConformanceTest` exist, which is the expected RED.
+Extract `FaultInjectingStoragePort` from `FakeStorage.before()`, generalized to wrap any `StoragePort` delegate, preserving the exact nine-operation ordinal/label mapping (correction 2) — `createStagingAttempt`/`scanCommittedRoot`/`scanStagingResidues` delegate without touching the ordinal. Write `StoragePortTestHarness`, including `destinationFingerprint` (correction 3), and a `FakeStoragePortTestHarness` implementation. Write `StoragePortConformanceSuite` with every probe design spec §6.2 lists, referencing `harness()`, with the root-enforcement probe asserting lexical containment/distinctness only (correction 4, no same-mount claim) — this will not compile until `FakeStoragePortConformanceTest`/`AndroidStoragePortConformanceTest` exist, which is the expected RED.
 
 - [ ] **Step 2: Strip `FakeStorage` down to a pure in-memory port**
 
-Remove `failOnOrdinal`/`failOnOrdinals`/`dropAppends`/`before()`/`precreateDestination`/`abortMarkerFor` from `FakeStorage`; move the ordinal/operation-log behaviour into `FaultInjectingStoragePort` and the destination-precreation behaviour into `FakeStoragePortTestHarness`. Update `SessionExporterTest` to construct `FaultInjectingStoragePort(FakeStorage(), ...)` where it previously constructed `FakeStorage(failOnOrdinal = ...)` directly, keeping only the exporter-level assertions design spec §6.2 says stay JVM/fake-only (fixed operation order, idempotent second-finalize, sanitized-error-detail). The pre-check mutation check is not part of this JVM/fake-only set — it is verified in Step 5 below against both concrete suites, per design spec §6.1 point 3/§6.2.
+Remove `failOnOrdinal`/`failOnOrdinals`/`dropAppends`/`before()`/`precreateDestination`/`abortMarkerFor` from `FakeStorage`; move the ordinal/operation-log behaviour into `FaultInjectingStoragePort` and the destination-precreation/fingerprint behaviour into `FakeStoragePortTestHarness`. Update `SessionExporterTest` to construct `FaultInjectingStoragePort(FakeStorage(), ...)` where it previously constructed `FakeStorage(failOnOrdinal = ...)` directly, keeping only the exporter-level assertions design spec §6.2 says stay JVM/fake-only (fixed operation order, idempotent second-finalize, sanitized-error-detail). The pre-check mutation check is not part of this JVM/fake-only set — it is verified in Step 5 below against both concrete suites, per design spec §6.1 point 3/§6.2.
+
+- [ ] **Step 2a: Apply correction 1 to `AndroidStoragePort.renameNoReplace`**
+
+Change `renameNoReplace` from `Files.move(Paths.get(attempt.path), Paths.get(destinationPath))` to `android.system.Os.rename(attempt.path, destinationPath)`, keeping the method's existing no-flag, no-retry, check-then-rename semantics (design spec §5.2, §5.3). This is a production change required before Step 5 can be meaningful on Android, not part of the docs-only reconciliation commit.
 
 - [ ] **Step 3: Concrete JVM suite — GREEN on the fake**
 
@@ -267,10 +280,10 @@ Expected: `FakeStoragePortConformanceTest` and the modified `SessionExporterTest
 
 - [ ] **Step 4: Concrete Android suite — GREEN on the real port**
 
-Write `AndroidStoragePortConformanceTest : StoragePortConformanceSuite()` wired to a `AndroidStoragePortTestHarness` (implements `precreateDestination` via direct `java.io.File`/`Files` operations against a scratch subtree of the instrumented test's own `context.filesDir`, entirely outside the port under test, and `dispose()` by deleting that scratch subtree).
+Write `AndroidStoragePortConformanceTest : StoragePortConformanceSuite()` wired to a `AndroidStoragePortTestHarness` (implements `precreateDestination`/`destinationFingerprint` via direct `java.io.File`/`Files` operations against a scratch subtree of the instrumented test's own `context.filesDir`, entirely outside the port under test, and `dispose()` by deleting that scratch subtree), plus its own additional same-mount assertion via `AndroidStorageRoots.from`/`st_dev` (correction 4).
 
 ```bash
-cd apps/diagnostic-harness && ./gradlew --no-daemon :shared:connectedDebugAndroidTest   # or confirmed device-test task name
+cd apps/diagnostic-harness && ./gradlew --no-daemon :shared:connectedAndroidDeviceTest   # run the full connected-test task; do not filter with --tests (correction 5)
 ```
 
 If no device/emulator is attached, record pending in the task dogfood note; the JVM suite in Step 3 must still be fully green and is the CI-covered half of this task's acceptance.
@@ -281,10 +294,10 @@ Per design spec §6.1 point 3/§6.2, temporarily delete the `destinationExists` 
 
 ```bash
 cd apps/diagnostic-harness && ./gradlew --no-daemon :shared:jvmTest --tests "*FakeStoragePortConformanceTest*"
-cd apps/diagnostic-harness && ./gradlew --no-daemon :shared:connectedDebugAndroidTest --tests "*AndroidStoragePortConformanceTest*"   # or confirmed device-test task name; requires a connected device/emulator
+cd apps/diagnostic-harness && ./gradlew --no-daemon :shared:connectedAndroidDeviceTest   # full connected task, or instrumentation-runner -e class filtering; never --tests against this task (correction 5); requires a connected device/emulator
 ```
 
-Expected: both fail with the mutation applied, because each backend's underlying rename (`FakeStorage`'s in-memory move, `AndroidStoragePort.renameNoReplace`'s `Files.move`/`Os`-backed primitive) is a plain rename that silently replaces an empty destination once the pre-check is gone. Revert the mutation immediately after confirming both variants are RED — this is one temporary production edit run through both suite variants, not a standing mutation-testing framework. If no device/emulator is attached, record the device-side confirmation as pending in the task dogfood note; the JVM-side confirmation is mandatory and CI-covered, and this task's acceptance does not close until the device-side confirmation lands, even if that lands as a documented pending item.
+Expected: both fail with the mutation applied, because each backend's underlying rename (`FakeStorage`'s in-memory move, `AndroidStoragePort.renameNoReplace`'s `android.system.Os.rename`-backed primitive per correction 1) is a plain rename that silently replaces an empty destination once the pre-check is gone. Revert the mutation immediately after confirming both variants are RED — this is one temporary production edit run through both suite variants, not a standing mutation-testing framework. If no device/emulator is attached, record the device-side confirmation as pending in the task dogfood note; the JVM-side confirmation is mandatory and CI-covered, and this task's acceptance does not close until the device-side confirmation lands, even if that lands as a documented pending item.
 
 - [ ] **Step 6: Confirm every brief-listed probe actually exercises the real port, not just the fake**
 
