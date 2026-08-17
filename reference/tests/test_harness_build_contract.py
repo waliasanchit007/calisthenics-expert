@@ -53,6 +53,12 @@ def test_harness_build_contract() -> None:
     assert "jvm {" in shared_build
     assert "jvmTarget = JvmTarget.JVM_17" in shared_build
     assert "jvmToolchain(" in shared_build
+    assert "withHostTestBuilder {}" in shared_build, (
+        "catches removal of the androidHostTest source set from the androidLibrary block"
+    )
+    assert "withDeviceTestBuilder {}" in shared_build, (
+        "catches removal of the androidDeviceTest source set from the androidLibrary block"
+    )
     assert "verify-harness-jvm:" in makefile, "catches removal/renaming of the JVM host-test gate"
     assert ":shared:jvmTest" in makefile, (
         "catches removal of shared JVM tests from the host-test gate"

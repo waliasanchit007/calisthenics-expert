@@ -15,6 +15,8 @@ kotlin {
         compilerOptions {
             jvmTarget = JvmTarget.JVM_17
         }
+        withHostTestBuilder {}.configure {}
+        withDeviceTestBuilder {}.configure {}
     }
     jvm {
         compilerOptions {
@@ -31,6 +33,13 @@ kotlin {
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)
+        }
+        getByName("androidDeviceTest") {
+            dependencies {
+                implementation(libs.kotlin.test)
+                implementation(libs.androidx.test.runner)
+                implementation(libs.androidx.test.core)
+            }
         }
     }
 }
