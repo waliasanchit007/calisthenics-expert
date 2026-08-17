@@ -58,7 +58,10 @@ class AndroidStoragePort(override val roots: StorageRoots) : StoragePort {
         if (file == StorageFile.FRAMES) {
             frameChannels.remove(attempt.path)?.close()
         }
-        FileChannel.open(pathFor(attempt, file), StandardOpenOption.WRITE).use { it.force(true) }
+        // A zero-frame session never calls appendLine, so frames.ndjson may not exist yet; CREATE
+        // is a no-op when the file is already present from an earlier write.
+        FileChannel.open(pathFor(attempt, file), StandardOpenOption.WRITE, StandardOpenOption.CREATE)
+            .use { it.force(true) }
     }
 
     override fun reconcile(attempt: StagingAttempt): StreamReconciliation {
@@ -91,7 +94,7 @@ class AndroidStoragePort(override val roots: StorageRoots) : StoragePort {
     override fun destinationExists(destinationPath: String): Boolean = Files.exists(Paths.get(destinationPath))
 
     override fun renameNoReplace(attempt: StagingAttempt, destinationPath: String) {
-        Files.move(Paths.get(attempt.path), Paths.get(destinationPath))
+        Os.rename(attempt.path, destinationPath)
         renamedPaths += attempt.path
     }
 

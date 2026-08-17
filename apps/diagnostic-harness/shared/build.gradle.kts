@@ -35,6 +35,7 @@ kotlin {
             implementation(libs.kotlin.test)
         }
         getByName("androidDeviceTest") {
+            dependsOn(commonTest.get())
             dependencies {
                 implementation(libs.kotlin.test)
                 implementation(libs.androidx.test.runner)
