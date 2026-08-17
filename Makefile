@@ -6,7 +6,7 @@ done; printf '%s' python3)
 VENV_PYTHON := .venv/bin/python
 CLI := $(VENV_PYTHON) -m observation_contracts
 
-.PHONY: bootstrap verify verify-harness-jvm verify-harness-ios verify-harness-foundation verify-kotlin-export verify-harness-android-export-parity
+.PHONY: bootstrap verify verify-harness-jvm verify-harness-ios verify-harness-foundation verify-kotlin-export verify-harness-android-export-parity verify-harness-s25-process-kill
 
 bootstrap:
 	@command -v "$(PYTHON)" >/dev/null 2>&1 || { echo "error: Python interpreter '$(PYTHON)' was not found" >&2; exit 1; }
@@ -40,6 +40,45 @@ verify-harness-android-export-parity:
 		exit 1; \
 	fi; \
 	cd apps/diagnostic-harness && ./gradlew --no-daemon :shared:generateSyntheticExport :androidApp:connectedDebugAndroidTest
+
+# Device-gated per design spec §9.2: requires exactly one authorized physical Samsung Galaxy S25
+# Ultra target, never a generic emulator, and never mutates the pending/recorded ledger itself —
+# the ledger is only ever updated by a human copying sanitized on-device evidence (task brief
+# Step 5). Two separate `am instrument` invocations, not `connected...AndroidTest --tests`, which
+# this project has already proven unreliable for selecting a single method.
+verify-harness-s25-process-kill:
+	@set -eu; \
+	device_count=$$(adb devices -l | tail -n +2 | grep -c 'device product:' || true); \
+	if [ "$$device_count" -ne 1 ]; then \
+		echo "error: verify-harness-s25-process-kill requires exactly one authorized attached device, found $$device_count" >&2; \
+		exit 1; \
+	fi; \
+	serial=$$(adb devices -l | tail -n +2 | grep 'device product:' | awk '{print $$1}'); \
+	case "$$serial" in \
+		emulator-*) \
+			echo "error: attached target '$$serial' is an emulator; only a physical Samsung Galaxy S25 Ultra is an authorized target for this probe" >&2; \
+			exit 1; \
+			;; \
+	esac; \
+	manufacturer=$$(adb -s "$$serial" shell getprop ro.product.manufacturer | tr -d '\r'); \
+	manufacturer_lower=$$(printf '%s' "$$manufacturer" | tr '[:upper:]' '[:lower:]'); \
+	marketing_name=$$(adb -s "$$serial" shell getprop ro.config.marketing_name | tr -d '\r'); \
+	if [ "$$manufacturer_lower" != "samsung" ]; then \
+		echo "error: attached target '$$serial' has manufacturer '$$manufacturer', not the authorized Samsung Galaxy S25 Ultra" >&2; \
+		exit 1; \
+	fi; \
+	case "$$marketing_name" in \
+		*"S25 Ultra"*) : ;; \
+		*) \
+			echo "error: attached target '$$serial' marketing name '$$marketing_name' does not match the authorized Samsung Galaxy S25 Ultra" >&2; \
+			exit 1; \
+			;; \
+	esac; \
+	cd apps/diagnostic-harness && ./gradlew --no-daemon :androidApp:assembleDebug :androidApp:assembleDebugAndroidTest; \
+	adb -s "$$serial" install -r androidApp/build/outputs/apk/debug/androidApp-debug.apk; \
+	adb -s "$$serial" install -r androidApp/build/outputs/apk/androidTest/debug/androidApp-debug-androidTest.apk; \
+	adb -s "$$serial" shell am instrument -w -e class com.calisthenics.diagnostic.export.ProcessKillDuringExportTest#killDuringCommit com.calisthenics.diagnostic.android.test/androidx.test.runner.AndroidJUnitRunner || true; \
+	adb -s "$$serial" shell am instrument -w -e class com.calisthenics.diagnostic.export.ProcessKillDuringExportTest#verifyNoPartialEntryAndResidueClassification com.calisthenics.diagnostic.android.test/androidx.test.runner.AndroidJUnitRunner
 
 verify-kotlin-export:
 	@set -eu; \
