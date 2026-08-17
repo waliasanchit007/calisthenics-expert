@@ -75,6 +75,27 @@ def test_harness_build_contract() -> None:
     )
 
 
+def test_kotlin_export_contract_is_wired_to_python_authority() -> None:
+    generator = (
+        HARNESS
+        / "shared/src/jvmTest/kotlin/com/calisthenics/diagnostic/contract/GenerateSyntheticExport.kt"
+    )
+    synthetic_test = (
+        HARNESS
+        / "shared/src/commonTest/kotlin/com/calisthenics/diagnostic/contract/SyntheticExportTest.kt"
+    )
+    shared_build = (HARNESS / "shared/build.gradle.kts").read_text()
+    makefile = (ROOT / "Makefile").read_text()
+
+    assert generator.is_file()
+    assert synthetic_test.is_file()
+    assert "generateSyntheticExport" in shared_build
+    assert "GenerateSyntheticExportKt" in shared_build
+    assert "verify-kotlin-export:" in makefile
+    assert "build/conformance" in makefile
+    assert "validate-session" in makefile
+
+
 def test_android_shell_has_exported_launcher_activity() -> None:
     manifest = (HARNESS / "androidApp/src/main/AndroidManifest.xml").read_text()
 

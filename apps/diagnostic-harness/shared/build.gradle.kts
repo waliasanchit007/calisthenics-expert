@@ -33,3 +33,12 @@ kotlin {
         }
     }
 }
+
+val jvmTestCompilation = kotlin.jvm().compilations.getByName("test")
+
+tasks.register<JavaExec>("generateSyntheticExport") {
+    dependsOn("jvmTestClasses")
+    classpath(jvmTestCompilation.runtimeDependencyFiles, jvmTestCompilation.output.allOutputs)
+    mainClass.set("com.calisthenics.diagnostic.contract.GenerateSyntheticExportKt")
+    args(layout.buildDirectory.dir("conformance/synthetic-session").get().asFile.absolutePath)
+}
