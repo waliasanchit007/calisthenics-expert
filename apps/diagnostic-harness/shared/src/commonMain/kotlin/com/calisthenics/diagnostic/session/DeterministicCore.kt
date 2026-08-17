@@ -48,12 +48,7 @@ class DeterministicCore(
             inference = inference,
             deadlineScheduler = scheduler,
             drainTimeoutNs = 1_000_000L,
-            finalizer = SessionFinalizer { snapshot ->
-                // SessionRunner keeps its internal timeout source explicit as "session". The
-                // released contract's failure-source vocabulary calls that producer-side class
-                // "harness", so normalize only at the contract-writing boundary.
-                SessionExporter(storage, manifestTemplate).finalize(snapshot.toContractSnapshot())
-            },
+            finalizer = SessionExporter(storage, manifestTemplate),
             dispatcher = dispatcher,
         )
 
@@ -86,15 +81,6 @@ class DeterministicCore(
             snapshot = runner.snapshot(),
         )
     }
-
-    private fun SealedSessionSnapshot.toContractSnapshot(): SealedSessionSnapshot = SealedSessionSnapshot(
-        counts = counts,
-        records = records,
-        failures = failures.map { failure ->
-            if (failure.failureSource == "session") failure.copy(failureSource = "harness") else failure
-        },
-        terminalMap = terminalMap,
-    )
 
     private class ScriptedInferencePort : InferencePort {
         private val callbacks = linkedMapOf<Long, (InferenceResult) -> Unit>()

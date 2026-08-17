@@ -126,6 +126,7 @@ class SessionLedgerTest {
 
         val snapshot = ledger.snapshot()
         assertEquals(1, snapshot.counts.inferenceFailures)
+        assertEquals("harness", snapshot.failures.single().failureSource)
         assertEquals("session_teardown_timeout", snapshot.failures.single().classification)
         assertFailsWith<IllegalStateException> {
             ledger.accept(SessionEvent.FrameReceived(1, 500_000_100, TEST_WIDTH, TEST_HEIGHT))

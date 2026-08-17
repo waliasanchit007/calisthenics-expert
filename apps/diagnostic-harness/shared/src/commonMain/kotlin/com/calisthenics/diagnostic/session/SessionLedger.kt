@@ -153,7 +153,7 @@ class SessionLedger(
             failSubmission(
                 SessionEvent.InferenceFailed(
                     submissionIndex = submissionIndex,
-                    failureSource = "session",
+                    failureSource = "harness",
                     classification = "session_teardown_timeout",
                 ),
             )

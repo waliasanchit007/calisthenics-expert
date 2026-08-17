@@ -116,6 +116,9 @@ class SessionRunner(
         inferenceStartNs: Long,
         input: ByteArray,
     ): Long? = admit(RunnerEvent.Submit(frameIndex, captureTimestampNs, inferenceStartNs, input.copyOf())) {
+        require(inferenceStartNs >= captureTimestampNs) {
+            "inference must start at or after capture"
+        }
         if (lifecycle != SessionLifecycle.RUNNING) {
             ledger.accept(SessionEvent.FrameReceived(frameIndex, captureTimestampNs, imageWidth(), imageHeight()))
             ledger.accept(SessionEvent.FrameSkipped(SkipReason.SESSION_STOPPING))
@@ -179,7 +182,7 @@ class SessionRunner(
         inference.cancel(submissionIndex)
         classifyFailure(
             submissionIndex,
-            InferenceResult.Failure("session", "cancelled"),
+            InferenceResult.Failure("harness", "session_teardown_timeout"),
         )
     }.let { }
 
@@ -212,7 +215,7 @@ class SessionRunner(
         }
         try {
             handler()
-        } catch (error: IllegalStateException) {
+        } catch (error: Throwable) {
             failSession()
             throw error
         }
@@ -265,7 +268,7 @@ class SessionRunner(
         pendingSubmissionIndices.toList().forEach { submissionIndex ->
             classifyFailure(
                 submissionIndex,
-                InferenceResult.Failure("session", "session_teardown_timeout"),
+                InferenceResult.Failure("harness", "session_teardown_timeout"),
             )
         }
         sealIfQuiescent()

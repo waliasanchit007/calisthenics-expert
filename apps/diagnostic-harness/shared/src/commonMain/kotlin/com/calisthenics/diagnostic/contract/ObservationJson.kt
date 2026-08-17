@@ -610,6 +610,29 @@ private fun validateManifest(value: SessionManifest) {
     value.counts.framesSkippedBeforeInferenceByReason.values.forEach {
         require(it >= 0) { "skip counts must be non-negative" }
     }
+    require(value.counts.cameraFramesReceived ==
+        value.counts.inferenceFramesSubmitted + value.counts.framesSkippedBeforeInference
+    ) { "camera_frames_received must equal submitted plus skipped" }
+    require(value.counts.inferenceFramesSubmitted ==
+        value.counts.inferenceRecordsEmitted + value.counts.inferenceFailures
+    ) { "inference_frames_submitted must equal emitted plus failures" }
+    require(value.counts.poseDetectedRecords <= value.counts.inferenceRecordsEmitted) {
+        "pose_detected_records must not exceed emitted records"
+    }
+    require(value.counts.framesSkippedBeforeInferenceByReason.values.sum() == value.counts.framesSkippedBeforeInference) {
+        "skip-reason counts must sum to skipped frames"
+    }
+    require(value.machineInferenceFailures.size.toLong() == value.counts.inferenceFailures) {
+        "machine inference failure list must equal inference_failures"
+    }
+    value.machineInferenceFailures.forEach { failure ->
+        require(failure.failureSource in setOf("harness", "backend")) {
+            "failure_source is not recognized"
+        }
+        require(failure.classification in setOf("backend_call_failed", "session_teardown_timeout")) {
+            "failure classification is not recognized"
+        }
+    }
 }
 
 private fun Counts.allCounts() = listOf(

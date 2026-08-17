@@ -81,8 +81,8 @@ class DeterministicCoreTest {
         assertEquals(listOf(false, true), sealed.records.map { it.posePresent })
         assertEquals(1L, sealed.records.last().framesSkippedSinceLastEmittedRecord)
         assertEquals(listOf("backend_call_failed", "session_teardown_timeout"), sealed.failures.map { it.classification })
-        assertEquals(listOf("backend", "session"), sealed.failures.map { it.failureSource })
-        assertEquals(listOf("backend", "harness"), first.finalization.sealedSnapshot.failures.map { it.failureSource })
+        assertEquals(listOf("backend", "harness"), sealed.failures.map { it.failureSource })
+        assertEquals(sealed, first.finalization.sealedSnapshot)
         assertEquals(1, firstStorage.committedDirectories.size)
         assertTrue(firstStorage.scanCommittedRoot().isEmpty())
     }

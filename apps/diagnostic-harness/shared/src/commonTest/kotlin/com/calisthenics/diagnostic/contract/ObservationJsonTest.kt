@@ -169,6 +169,35 @@ class ObservationJsonTest {
     }
 
     @Test
+    fun manifestRejectsFailureOutsideReleasedVocabulary() {
+        val invalidSource = manifestWithFailure(failureSource = "session", classification = "session_teardown_timeout")
+        val invalidClassification = manifestWithFailure(failureSource = "harness", classification = "cancelled")
+
+        assertFailsWith<IllegalArgumentException> { encodeManifest(invalidSource) }
+        assertFailsWith<IllegalArgumentException> { encodeManifest(invalidClassification) }
+    }
+
+    @Test
+    fun manifestRejectsBrokenReleasedCountIdentities() {
+        val base = sampleManifest()
+        val invalidCounts = listOf(
+            base.counts.copy(cameraFramesReceived = 2),
+            base.counts.copy(inferenceFramesSubmitted = 2),
+            base.counts.copy(poseDetectedRecords = 2),
+            base.counts.copy(framesSkippedBeforeInferenceByReason = mapOf("backpressure" to 1)),
+        )
+
+        invalidCounts.forEach { counts ->
+            assertFailsWith<IllegalArgumentException> {
+                encodeManifest(base.copy(counts = counts))
+            }
+        }
+        assertFailsWith<IllegalArgumentException> {
+            encodeManifest(manifestWithFailureListSizeMismatch())
+        }
+    }
+
+    @Test
     fun uuidShaAndSemanticVersionWrappersValidateTheirReleasedShapes() {
         assertEquals("3f1c2a90-7b45-4c8e-9d21-6a0e5b4c3d27", Uuid("3f1c2a90-7b45-4c8e-9d21-6a0e5b4c3d27").value)
         assertEquals("0".repeat(64), Sha256("0".repeat(64)).value)
@@ -269,6 +298,20 @@ class ObservationJsonTest {
         captureQualityObserved = CaptureQualityObserved(true, true, true, "indoor_bright", false, ""),
         studyContext = mapOf("environment" to JsonPrimitive("indoor"), "angle_deg_nominal" to JsonPrimitive(45)),
     )
+
+    private fun manifestWithFailure(failureSource: String, classification: String): SessionManifest =
+        sampleManifest().copy(
+            counts = Counts(2, 2, 1, 1, 0, mapOf("cadence_selection" to 0, "backpressure" to 0), 0, 1),
+            machineInferenceFailures = listOf(
+                MachineInferenceFailure(0, 133_000_000, failureSource, classification, null, null),
+            ),
+        )
+
+    private fun manifestWithFailureListSizeMismatch(): SessionManifest =
+        sampleManifest().copy(
+            counts = sampleManifest().counts.copy(inferenceFailures = 1),
+            machineInferenceFailures = emptyList(),
+        )
 
     private fun sampleFrame(
         posePresent: Boolean = true,

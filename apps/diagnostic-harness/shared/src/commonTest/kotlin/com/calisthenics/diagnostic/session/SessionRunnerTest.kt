@@ -68,6 +68,23 @@ class SessionRunnerTest {
     }
 
     @Test
+    fun deadlineExpiryEmitsReleasedHarnessTimeoutVocabulary() {
+        val scheduler = VirtualDeadlineScheduler()
+        val inference = RecordingInferencePort()
+        val runner = runner(scheduler, inference, RecordingFinalizer())
+        val submission = runner.submit(0, 100, 110, byteArrayOf(1))!!
+
+        runner.stop(nowNs = 200)
+        scheduler.advanceTo(1_200)
+
+        val failure = runner.snapshot().sealedSnapshot!!.failures.single()
+        assertEquals(submission, failure.submissionIndex)
+        assertEquals("harness", failure.failureSource)
+        assertEquals("session_teardown_timeout", failure.classification)
+        assertEquals(TerminalState.TIMED_OUT, runner.snapshot().sealedSnapshot!!.terminalMap[submission])
+    }
+
+    @Test
     fun terminalClassificationIsSingleAssignmentAndReassignmentFailsSession() {
         val scheduler = VirtualDeadlineScheduler()
         val inference = RecordingInferencePort()
@@ -160,8 +177,9 @@ class SessionRunnerTest {
         runner.cancel(submission)
         assertEquals(1, inference.cancelled)
         runner.stop(nowNs = 200)
-        assertEquals(TerminalState.FAILED, runner.snapshot().sealedSnapshot!!.terminalMap[submission])
-        assertEquals("cancelled", runner.snapshot().sealedSnapshot!!.failures.single().classification)
+        assertEquals("harness", runner.snapshot().sealedSnapshot!!.failures.single().failureSource)
+        assertEquals("session_teardown_timeout", runner.snapshot().sealedSnapshot!!.failures.single().classification)
+        assertEquals(TerminalState.TIMED_OUT, runner.snapshot().sealedSnapshot!!.terminalMap[submission])
 
         val stoppingRunner = runner(VirtualDeadlineScheduler(), RecordingInferencePort(), RecordingFinalizer())
         val pending = stoppingRunner.submit(0, 100, 110, byteArrayOf(1))!!
@@ -172,6 +190,31 @@ class SessionRunnerTest {
         assertEquals(1, stoppingRunner.snapshot().counts.framesSkippedBeforeInference)
         stoppingRunner.postDeadline()
         assertEquals(TerminalState.TIMED_OUT, stoppingRunner.snapshot().sealedSnapshot!!.terminalMap[pending])
+    }
+
+    @Test
+    fun rejectedSubmissionFailsClosedBeforeLedgerMutationAndNeverFinalizes() {
+        val scheduler = VirtualDeadlineScheduler()
+        val inference = RecordingInferencePort()
+        val finalizer = RecordingFinalizer()
+        val runner = runner(scheduler, inference, finalizer)
+
+        assertFailsWith<IllegalArgumentException> {
+            runner.submit(frameIndex = 0, captureTimestampNs = 100, inferenceStartNs = 99, input = byteArrayOf(1))
+        }
+
+        val snapshot = runner.snapshot()
+        assertEquals(SessionLifecycle.FAILED, snapshot.lifecycle)
+        assertEquals(0, snapshot.counts.cameraFramesReceived)
+        assertEquals(0, snapshot.counts.inferenceFramesSubmitted)
+        assertEquals(0, snapshot.counts.framesSkippedBeforeInference)
+        assertTrue(snapshot.records.isEmpty())
+        assertTrue(snapshot.failures.isEmpty())
+        assertEquals(0, inference.submissions)
+
+        runner.stop(nowNs = 200)
+        assertFailsWith<IllegalStateException> { runner.finalize() }
+        assertEquals(0, finalizer.invocations)
     }
 
     private fun runner(
@@ -217,6 +260,8 @@ class SessionRunnerTest {
 
     private class RecordingInferencePort : InferencePort {
         private val callbacks = linkedMapOf<Long, (InferenceResult) -> Unit>()
+        var submissions = 0
+            private set
         var cancelled = 0
             private set
 
@@ -226,6 +271,7 @@ class SessionRunnerTest {
             backendTimestampMs: Long,
             callback: (InferenceResult) -> Unit,
         ) {
+            submissions++
             callbacks[submissionIndex] = callback
         }
 
