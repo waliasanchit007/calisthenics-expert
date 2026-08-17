@@ -233,6 +233,28 @@ def test_s25_process_kill_target_requires_fresh_run_correlated_evidence() -> Non
     )
 
 
+def test_s25_process_kill_target_accepts_zero_status_with_process_crashed_signal() -> None:
+    makefile = (ROOT / "Makefile").read_text()
+    kill_target = makefile.split("verify-harness-s25-process-kill:", 1)[1].split(
+        "\nverify-kotlin-export:", 1
+    )[0]
+
+    assert "first_exit_code" in kill_target, (
+        "catches the process-kill gate losing the captured first invocation status needed for "
+        "diagnostics"
+    )
+    assert 'first_exit_code" -eq 0' not in kill_target, (
+        "catches the process-kill gate reinstating a fatal non-zero-status requirement on the "
+        "first invocation; AOSP's am instrument can report the instrumented process's death "
+        "through the watcher while the command itself exits 0, so gating on a non-zero shell "
+        "status can reject genuine expected-kill evidence"
+    )
+    assert 'first_output" | grep -q "Process crashed"' in kill_target, (
+        "catches the process-kill gate losing the exact 'Process crashed' signal match, which "
+        "must remain the load-bearing evidence of a genuine kill regardless of shell status"
+    )
+
+
 def test_ios_host_embeds_shared_compose_controller() -> None:
     app = (HARNESS / "iosApp/iosApp/iOSApp.swift").read_text()
     project = (HARNESS / "iosApp/iosApp.xcodeproj/project.pbxproj").read_text()

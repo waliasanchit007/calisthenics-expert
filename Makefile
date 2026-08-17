@@ -50,11 +50,13 @@ verify-harness-android-export-parity:
 # Evidence freshness and run-correlation: after installing both APKs and before the first
 # invocation, `pm clear` wipes only the diagnostic app's own private data (never the androidTest
 # package) and must report "Success", so a residue left by an earlier run can never be mistaken
-# for this run's evidence. The first invocation's exact output/status is captured (no `|| true`);
-# it must be non-zero AND its output must contain "Process crashed" — proof the instrumentation
-# process actually died mid-commit, not merely that the command failed for some unrelated reason —
-# or the target fails before the second, verifying invocation ever runs. The second invocation's
-# non-zero result remains fatal, as before.
+# for this run's evidence. The first invocation's exact output and shell status are captured (no
+# `|| true`) and the status is printed for diagnostics only: AOSP's `am instrument` can report the
+# instrumented process's death through the watcher while the command itself still exits 0, so a
+# non-zero shell status is not required. The load-bearing evidence is the output containing
+# "Process crashed" — proof the instrumentation process actually died mid-commit, not merely that
+# the command failed for some unrelated reason — or the target fails before the second, verifying
+# invocation ever runs. The second invocation's non-zero result remains fatal, as before.
 verify-harness-s25-process-kill:
 	@set -eu; \
 	device_count=$$(adb devices -l | tail -n +2 | grep -c 'device product:' || true); \
@@ -96,10 +98,7 @@ verify-harness-s25-process-kill:
 	first_exit_code=$$?; \
 	set -e; \
 	printf '%s\n' "$$first_output"; \
-	if [ "$$first_exit_code" -eq 0 ]; then \
-		echo "error: killDuringCommit exited successfully (status 0); the self-kill invocation must abort mid-run to be genuine process-kill evidence" >&2; \
-		exit 1; \
-	fi; \
+	printf 'killDuringCommit exit status: %s\n' "$$first_exit_code"; \
 	if ! printf '%s' "$$first_output" | grep -q "Process crashed"; then \
 		echo "error: killDuringCommit output does not identify an instrumentation process crash (\"Process crashed\"); refusing to trust unrelated or stale evidence" >&2; \
 		exit 1; \
