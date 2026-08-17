@@ -23,6 +23,9 @@ def test_harness_build_contract() -> None:
     versions = tomllib.loads((HARNESS / "gradle" / "libs.versions.toml").read_text())["versions"]
     settings = (HARNESS / "settings.gradle.kts").read_text()
     compose_build = (HARNESS / "composeApp" / "build.gradle.kts").read_text()
+    shared_build = (HARNESS / "shared" / "build.gradle.kts").read_text()
+    makefile = (ROOT / "Makefile").read_text()
+    workflow = (ROOT / ".github" / "workflows" / "verify.yml").read_text()
     all_gradle_text = "\n".join(
         path.read_text()
         for path in HARNESS.rglob("*")
@@ -45,6 +48,14 @@ def test_harness_build_contract() -> None:
     assert marker.is_file()
     assert "public object FrameworkCompileMarker" in marker.read_text()
     assert "latest" not in all_gradle_text.lower()
+    assert "jvm {" in shared_build
+    assert "jvmTarget = JvmTarget.JVM_17" in shared_build
+    assert "verify-harness-jvm:" in makefile
+    assert ":shared:jvmTest" in makefile
+    assert "verify-harness-ios:" in makefile
+    assert "actions/setup-java@v5" in workflow
+    assert 'java-version: "21"' in workflow
+    assert "make verify-harness-jvm" in workflow
 
 
 def test_android_shell_has_exported_launcher_activity() -> None:
