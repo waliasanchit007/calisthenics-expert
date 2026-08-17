@@ -7,6 +7,7 @@ plugins {
 }
 
 kotlin {
+    jvmToolchain(libs.versions.jdk.get().toInt())
     androidLibrary {
         namespace = "com.calisthenics.diagnostic.shared"
         compileSdk = libs.versions.android.compileSdk.get().toInt()
@@ -14,6 +15,8 @@ kotlin {
         compilerOptions {
             jvmTarget = JvmTarget.JVM_17
         }
+        withHostTestBuilder {}.configure {}
+        withDeviceTestBuilder {}.configure {}
     }
     jvm {
         compilerOptions {
@@ -30,6 +33,14 @@ kotlin {
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)
+        }
+        getByName("androidDeviceTest") {
+            dependsOn(commonTest.get())
+            dependencies {
+                implementation(libs.kotlin.test)
+                implementation(libs.androidx.test.runner)
+                implementation(libs.androidx.test.core)
+            }
         }
     }
 }

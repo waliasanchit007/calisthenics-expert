@@ -16,6 +16,7 @@ EXPECTED_VERSIONS = {
     "coroutines": "1.11.0",
     "serialization": "1.10.0",
     "kotlin-test": "2.4.10",
+    "jdk": "21",
 }
 
 
@@ -51,6 +52,13 @@ def test_harness_build_contract() -> None:
     assert "latest" not in all_gradle_text.lower()
     assert "jvm {" in shared_build
     assert "jvmTarget = JvmTarget.JVM_17" in shared_build
+    assert "jvmToolchain(" in shared_build
+    assert "withHostTestBuilder {}" in shared_build, (
+        "catches removal of the androidHostTest source set from the androidLibrary block"
+    )
+    assert "withDeviceTestBuilder {}" in shared_build, (
+        "catches removal of the androidDeviceTest source set from the androidLibrary block"
+    )
     assert "verify-harness-jvm:" in makefile, "catches removal/renaming of the JVM host-test gate"
     assert ":shared:jvmTest" in makefile, (
         "catches removal of shared JVM tests from the host-test gate"
@@ -130,6 +138,121 @@ def test_android_probe_has_executable_instrumentation_wiring() -> None:
     assert "CameraCapabilityProbe.RESULT_FILE" in probe_test
     assert "ProbeResult(" not in probe_test
     assert "BuildConfig.PROBE_GIT_SHA" in probe_test
+
+
+def test_android_storage_probe_has_executable_instrumentation_wiring() -> None:
+    probe_test = (
+        HARNESS
+        / "androidApp/src/androidTest/kotlin/com/calisthenics/diagnostic/probe/StorageCapabilityProbeTest.kt"
+    ).read_text()
+
+    assert (
+        'testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"'
+        in (HARNESS / "androidApp/build.gradle.kts").read_text()
+    )
+    assert (
+        'buildConfigField("String", "PROBE_GIT_SHA"'
+        in (HARNESS / "androidApp/build.gradle.kts").read_text()
+    )
+    assert "StorageCapabilityProbe(" in probe_test
+    assert ".runAndPersist()" in probe_test
+    assert "cacheDir" in probe_test
+    assert "StorageCapabilityProbe.RESULT_FILE" in probe_test
+    assert "StorageProbeResult(" not in probe_test
+    assert "BuildConfig.PROBE_GIT_SHA" in probe_test
+
+
+def test_android_export_parity_target_is_class_isolated() -> None:
+    makefile = (ROOT / "Makefile").read_text()
+    parity_test = (
+        HARNESS
+        / "androidApp/src/androidTest/kotlin/com/calisthenics/diagnostic/composition/InstallableCompositionExportParityTest.kt"
+    )
+    process_kill_test = (
+        HARNESS
+        / "androidApp/src/androidTest/kotlin/com/calisthenics/diagnostic/export/ProcessKillDuringExportTest.kt"
+    )
+    parity_target = makefile.split("verify-harness-android-export-parity:", 1)[1].split(
+        "\nverify-harness-s25-process-kill:", 1
+    )[0]
+
+    assert parity_test.is_file()
+    assert process_kill_test.is_file()
+    assert "com.calisthenics.diagnostic.composition.InstallableCompositionExportParityTest" in (
+        parity_target
+    )
+    assert (
+        "-Pandroid.testInstrumentationRunnerArguments.class="
+        "com.calisthenics.diagnostic.composition.InstallableCompositionExportParityTest"
+        in parity_target
+    ), "catches the parity gate reverting to running the whole connected suite"
+    assert "com.calisthenics.diagnostic.export.ProcessKillDuringExportTest" not in parity_target, (
+        "catches the parity gate regaining a dependency on the destructive S25 process-kill class"
+    )
+    assert ":shared:generateSyntheticExport" in parity_target, (
+        "catches the parity gate losing the JVM fixture it diffs against"
+    )
+    assert "device_count" in parity_target, "catches the parity gate losing the one-device gate"
+    assert "connectedDebugAndroidTest" in parity_target, (
+        "catches the parity gate no longer building/installing/running via the connected task"
+    )
+
+
+def test_s25_process_kill_target_requires_fresh_run_correlated_evidence() -> None:
+    makefile = (ROOT / "Makefile").read_text()
+    kill_target = makefile.split("verify-harness-s25-process-kill:", 1)[1].split(
+        "\nverify-kotlin-export:", 1
+    )[0]
+
+    assert "pm clear com.calisthenics.diagnostic.android" in kill_target, (
+        "catches the process-kill gate losing the pre-invocation private-data clear that keeps "
+        "residue from a stale run out of fresh evidence"
+    )
+    assert "Success" in kill_target, (
+        "catches the process-kill gate no longer requiring pm clear to report Success"
+    )
+    kill_invocation_line = next(
+        line
+        for line in kill_target.splitlines()
+        if "killDuringCommit" in line and "am instrument" in line
+    )
+    assert "|| true" not in kill_invocation_line, (
+        "catches the process-kill gate silently swallowing the first invocation's failure again"
+    )
+    assert "Process crashed" in kill_target, (
+        "catches the process-kill gate no longer requiring the first invocation's output to "
+        "identify an instrumentation process crash before verification is trusted"
+    )
+    assert "killDuringCommit" in kill_target
+    assert kill_target.count("verifyNoPartialEntryAndResidueClassification") == 1, (
+        "catches the second invocation moving earlier than the checked first invocation, or "
+        "being duplicated"
+    )
+    assert "docs/evidence/device-probes/s25-ultra-process-kill-ledger.json" not in kill_target, (
+        "catches the process-kill gate mutating the pending evidence ledger itself"
+    )
+
+
+def test_s25_process_kill_target_accepts_zero_status_with_process_crashed_signal() -> None:
+    makefile = (ROOT / "Makefile").read_text()
+    kill_target = makefile.split("verify-harness-s25-process-kill:", 1)[1].split(
+        "\nverify-kotlin-export:", 1
+    )[0]
+
+    assert "first_exit_code" in kill_target, (
+        "catches the process-kill gate losing the captured first invocation status needed for "
+        "diagnostics"
+    )
+    assert 'first_exit_code" -eq 0' not in kill_target, (
+        "catches the process-kill gate reinstating a fatal non-zero-status requirement on the "
+        "first invocation; AOSP's am instrument can report the instrumented process's death "
+        "through the watcher while the command itself exits 0, so gating on a non-zero shell "
+        "status can reject genuine expected-kill evidence"
+    )
+    assert 'first_output" | grep -q "Process crashed"' in kill_target, (
+        "catches the process-kill gate losing the exact 'Process crashed' signal match, which "
+        "must remain the load-bearing evidence of a genuine kill regardless of shell status"
+    )
 
 
 def test_ios_host_embeds_shared_compose_controller() -> None:
