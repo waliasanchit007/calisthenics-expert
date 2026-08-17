@@ -1,0 +1,14 @@
+[
+  {"name":"zero","input":0.0,"expected":"0"},
+  {"name":"negative-zero","input":-0.0,"expected":"0"},
+  {"name":"one","input":1.0,"expected":"1"},
+  {"name":"fraction","input":1.5,"expected":"1.5"},
+  {"name":"lower-exponent-bound","input":0.000001,"expected":"0.000001"},
+  {"name":"scientific-small","input":1e-7,"expected":"1e-7"},
+  {"name":"scientific-large","input":1e21,"expected":"1e+21"},
+  {"name":"large-fixed","input":100000000000000000000.0,"expected":"100000000000000000000"},
+  {"name":"round-trip","input":1.2345678901234567,"expected":"1.2345678901234567"},
+  {"name":"ecmascript-rounding","input":333333333.33333329,"expected":"333333333.3333333"},
+  {"name":"shortest-representation","input":1.0000000000000001,"expected":"1"},
+  {"name":"very-small","input":1e-27,"expected":"1e-27"}
+]

@@ -6,7 +6,7 @@ done; printf '%s' python3)
 VENV_PYTHON := .venv/bin/python
 CLI := $(VENV_PYTHON) -m observation_contracts
 
-.PHONY: bootstrap verify verify-harness-jvm verify-harness-ios verify-harness-foundation
+.PHONY: bootstrap verify verify-harness-jvm verify-harness-ios verify-harness-foundation verify-kotlin-export
 
 bootstrap:
 	@command -v "$(PYTHON)" >/dev/null 2>&1 || { echo "error: Python interpreter '$(PYTHON)' was not found" >&2; exit 1; }
@@ -31,6 +31,22 @@ verify-harness-ios:
 
 verify-harness-foundation:
 	$(MAKE) verify-harness-jvm verify-harness-ios
+
+verify-kotlin-export:
+	@set -eu; \
+	cd apps/diagnostic-harness; \
+	./gradlew --no-daemon :shared:jvmTest :shared:generateSyntheticExport; \
+	first_manifest_hash=$$(shasum -a 256 shared/build/conformance/synthetic-session/manifest.json | awk '{print $$1}'); \
+	first_frames_hash=$$(shasum -a 256 shared/build/conformance/synthetic-session/frames.ndjson | awk '{print $$1}'); \
+	./gradlew --no-daemon :shared:generateSyntheticExport; \
+	second_manifest_hash=$$(shasum -a 256 shared/build/conformance/synthetic-session/manifest.json | awk '{print $$1}'); \
+	second_frames_hash=$$(shasum -a 256 shared/build/conformance/synthetic-session/frames.ndjson | awk '{print $$1}'); \
+	test "$$first_manifest_hash" = "$$second_manifest_hash"; \
+	test "$$first_frames_hash" = "$$second_frames_hash"; \
+	printf 'manifest sha256: %s\n' "$$second_manifest_hash"; \
+	printf 'frames sha256: %s\n' "$$second_frames_hash"; \
+	cd ../..; \
+	$(CLI) validate-session apps/diagnostic-harness/shared/build/conformance/synthetic-session/manifest.json apps/diagnostic-harness/shared/build/conformance/synthetic-session/frames.ndjson
 
 verify:
 	$(VENV_PYTHON) -m ruff format --check reference
