@@ -16,6 +16,7 @@ import com.calisthenics.diagnostic.capability.CapabilityState
 import com.calisthenics.diagnostic.capability.HarnessMode
 import com.calisthenics.diagnostic.composition.HarnessComposition
 import com.calisthenics.diagnostic.probe.StorageCapabilityProbe
+import com.calisthenics.diagnostic.probe.StorageProbeOutcome
 import com.calisthenics.diagnostic.ui.HarnessApp
 import com.calisthenics.diagnostic.ui.HarnessUiState
 import com.calisthenics.diagnostic.ui.selectMode
@@ -39,13 +40,16 @@ class MainActivity : ComponentActivity() {
             val coroutineScope = rememberCoroutineScope()
 
             LaunchedEffect(Unit) {
-                val probeResult = withContext(Dispatchers.IO) {
+                val probeOutcome = withContext(Dispatchers.IO) {
                     StorageCapabilityProbe(applicationContext, BuildConfig.PROBE_GIT_SHA).run()
                 }
-                val durabilityState = if (probeResult.isDurabilityAdmissible()) {
-                    CapabilityState.Available
-                } else {
-                    CapabilityState.Unavailable("storage_capability_probe_failed")
+                val durabilityState = when (probeOutcome) {
+                    is StorageProbeOutcome.Completed -> if (probeOutcome.result.isDurabilityAdmissible()) {
+                        CapabilityState.Available
+                    } else {
+                        CapabilityState.Unavailable("storage_capability_probe_failed")
+                    }
+                    is StorageProbeOutcome.Unavailable -> CapabilityState.Unavailable(probeOutcome.reason)
                 }
                 state = state.copy(
                     capabilities = state.capabilities.map { capability ->

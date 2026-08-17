@@ -15,6 +15,19 @@ import java.nio.file.Files
 import java.nio.file.Paths
 import java.util.UUID
 
+/** Outcome of running [StorageCapabilityProbe.run]. */
+sealed interface StorageProbeOutcome {
+    data class Completed(val result: StorageProbeResult) : StorageProbeOutcome
+
+    /**
+     * Root resolution itself was [StorageRootsResult.Unavailable]. The probe fails closed here:
+     * it never falls back to an unprotected [Context.filesDir] read, and no primitive is
+     * exercised against an alternate root, because that would validate a path the production
+     * composition path can never actually use.
+     */
+    data class Unavailable(val reason: String) : StorageProbeOutcome
+}
+
 /**
  * Non-participant evidence that the storage primitives [AndroidStoragePort] relies on actually
  * work on this device's filesystem. Runs against its own scratch subtree under [Context.filesDir]
@@ -29,10 +42,10 @@ class StorageCapabilityProbe(
         require(SHA_PATTERN.matches(probeGitSha)) { "probeGitSha must be a 40-hex commit SHA" }
     }
 
-    fun run(): StorageProbeResult {
+    fun run(): StorageProbeOutcome {
         val filesDir = when (val rootsResult = AndroidStorageRoots.from(context)) {
             is StorageRootsResult.Ready -> rootsResult.roots.filesDir
-            is StorageRootsResult.Unavailable -> context.filesDir.absolutePath
+            is StorageRootsResult.Unavailable -> return StorageProbeOutcome.Unavailable(rootsResult.reason)
         }
         val runId = UUID.randomUUID().toString()
         val base = "$filesDir/diagnostic-harness-storage-probe/$runId"
@@ -73,21 +86,25 @@ class StorageCapabilityProbe(
             false
         }
 
-        return StorageProbeResult(
-            deviceModel = Build.MODEL,
-            osBuild = Build.DISPLAY,
-            filesystemType = filesystemType(filesDir),
-            probeGitSha = probeGitSha,
-            appendFlushFsyncSupported = appendFlushFsyncSupported,
-            directoryFsyncSupported = directoryFsyncSupported,
-            renameWithinFilesdirSupported = renameWithinFilesdirSupported,
-            renameOntoPopulatedDestinationRejected = renameOntoPopulatedDestinationRejected,
-            renameOntoEmptyDestinationRefusedByPrecheck = renameOntoEmptyDestinationRefusedByPrecheck,
+        return StorageProbeOutcome.Completed(
+            StorageProbeResult(
+                deviceModel = Build.MODEL,
+                osBuild = Build.DISPLAY,
+                filesystemType = filesystemType(filesDir),
+                probeGitSha = probeGitSha,
+                appendFlushFsyncSupported = appendFlushFsyncSupported,
+                directoryFsyncSupported = directoryFsyncSupported,
+                renameWithinFilesdirSupported = renameWithinFilesdirSupported,
+                renameOntoPopulatedDestinationRejected = renameOntoPopulatedDestinationRejected,
+                renameOntoEmptyDestinationRefusedByPrecheck = renameOntoEmptyDestinationRefusedByPrecheck,
+            ),
         )
     }
 
-    fun runAndPersist(): StorageProbeResult {
-        val result = run()
+    /** Persists evidence only for [StorageProbeOutcome.Completed]; an [StorageProbeOutcome.Unavailable] outcome has no result to persist. */
+    fun runAndPersist(): StorageProbeOutcome {
+        val outcome = run()
+        val result = (outcome as? StorageProbeOutcome.Completed)?.result ?: return outcome
         val directory = context.cacheDir
         val staging = File(directory, TEMP_RESULT_FILE)
         val output = File(directory, RESULT_FILE)
@@ -105,7 +122,7 @@ class StorageCapabilityProbe(
             if (renamed) output.delete()
             throw failure
         }
-        return result
+        return outcome
     }
 
     private fun fsyncDirectory(directory: File) {

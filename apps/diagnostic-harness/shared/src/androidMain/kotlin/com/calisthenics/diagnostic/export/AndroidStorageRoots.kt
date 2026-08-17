@@ -3,6 +3,7 @@ package com.calisthenics.diagnostic.export
 import android.content.Context
 import android.system.ErrnoException
 import android.system.Os
+import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Paths
 
@@ -18,13 +19,19 @@ sealed interface StorageRootsResult {
  * [StorageRootsResult.Unavailable] for the two hazards that cannot be trusted by construction
  * alone: direct-boot credential-encrypted storage being unavailable before first unlock, and
  * staging/exports landing on a filesystem mount different from filesDir.
+ *
+ * The entire resolution path — including the initial [Context.filesDir] access itself, which can
+ * throw before first unlock — runs inside the protected region below. Only the expected
+ * Android/filesystem/setup exception families are converted to a sanitized, typed reason; no raw
+ * path or exception detail is exposed, and no fatal JVM error ([Error] and its subtypes) is ever
+ * caught here.
  */
 object AndroidStorageRoots {
     private const val BASE_DIRECTORY_NAME = "diagnostic-harness"
 
     fun from(context: Context): StorageRootsResult {
-        val filesDir = context.filesDir.absolutePath
         return try {
+            val filesDir = context.filesDir.absolutePath
             val filesDirStat = Os.stat(filesDir)
             val base = "$filesDir/$BASE_DIRECTORY_NAME"
             val stagingRoot = "$base/staging"
@@ -40,6 +47,14 @@ object AndroidStorageRoots {
             }
         } catch (error: ErrnoException) {
             StorageRootsResult.Unavailable("direct_boot_credential_encrypted_storage_unavailable")
+        } catch (error: IOException) {
+            StorageRootsResult.Unavailable("storage_root_resolution_failed")
+        } catch (error: IllegalStateException) {
+            StorageRootsResult.Unavailable("storage_root_resolution_failed")
+        } catch (error: IllegalArgumentException) {
+            StorageRootsResult.Unavailable("storage_root_resolution_failed")
+        } catch (error: SecurityException) {
+            StorageRootsResult.Unavailable("storage_root_resolution_failed")
         }
     }
 

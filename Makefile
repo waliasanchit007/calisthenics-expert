@@ -46,6 +46,15 @@ verify-harness-android-export-parity:
 # the ledger is only ever updated by a human copying sanitized on-device evidence (task brief
 # Step 5). Two separate `am instrument` invocations, not `connected...AndroidTest --tests`, which
 # this project has already proven unreliable for selecting a single method.
+#
+# Evidence freshness and run-correlation: after installing both APKs and before the first
+# invocation, `pm clear` wipes only the diagnostic app's own private data (never the androidTest
+# package) and must report "Success", so a residue left by an earlier run can never be mistaken
+# for this run's evidence. The first invocation's exact output/status is captured (no `|| true`);
+# it must be non-zero AND its output must contain "Process crashed" — proof the instrumentation
+# process actually died mid-commit, not merely that the command failed for some unrelated reason —
+# or the target fails before the second, verifying invocation ever runs. The second invocation's
+# non-zero result remains fatal, as before.
 verify-harness-s25-process-kill:
 	@set -eu; \
 	device_count=$$(adb devices -l | tail -n +2 | grep -c 'device product:' || true); \
@@ -77,7 +86,24 @@ verify-harness-s25-process-kill:
 	cd apps/diagnostic-harness && ./gradlew --no-daemon :androidApp:assembleDebug :androidApp:assembleDebugAndroidTest; \
 	adb -s "$$serial" install -r androidApp/build/outputs/apk/debug/androidApp-debug.apk; \
 	adb -s "$$serial" install -r androidApp/build/outputs/apk/androidTest/debug/androidApp-debug-androidTest.apk; \
-	adb -s "$$serial" shell am instrument -w -e class com.calisthenics.diagnostic.export.ProcessKillDuringExportTest#killDuringCommit com.calisthenics.diagnostic.android.test/androidx.test.runner.AndroidJUnitRunner || true; \
+	clear_output=$$(adb -s "$$serial" shell pm clear com.calisthenics.diagnostic.android | tr -d '\r'); \
+	if [ "$$clear_output" != "Success" ]; then \
+		echo "error: 'pm clear com.calisthenics.diagnostic.android' did not report Success (got: $$clear_output); refusing to run against possibly stale app data" >&2; \
+		exit 1; \
+	fi; \
+	set +e; \
+	first_output=$$(adb -s "$$serial" shell am instrument -w -e class com.calisthenics.diagnostic.export.ProcessKillDuringExportTest#killDuringCommit com.calisthenics.diagnostic.android.test/androidx.test.runner.AndroidJUnitRunner 2>&1); \
+	first_exit_code=$$?; \
+	set -e; \
+	printf '%s\n' "$$first_output"; \
+	if [ "$$first_exit_code" -eq 0 ]; then \
+		echo "error: killDuringCommit exited successfully (status 0); the self-kill invocation must abort mid-run to be genuine process-kill evidence" >&2; \
+		exit 1; \
+	fi; \
+	if ! printf '%s' "$$first_output" | grep -q "Process crashed"; then \
+		echo "error: killDuringCommit output does not identify an instrumentation process crash (\"Process crashed\"); refusing to trust unrelated or stale evidence" >&2; \
+		exit 1; \
+	fi; \
 	adb -s "$$serial" shell am instrument -w -e class com.calisthenics.diagnostic.export.ProcessKillDuringExportTest#verifyNoPartialEntryAndResidueClassification com.calisthenics.diagnostic.android.test/androidx.test.runner.AndroidJUnitRunner
 
 verify-kotlin-export:

@@ -15,10 +15,12 @@ import kotlinx.serialization.json.putJsonObject
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
 import java.nio.charset.StandardCharsets
+import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
 import java.nio.file.StandardOpenOption
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Real Android primitives for the twelve-method [StoragePort] contract. Every method is a
@@ -26,15 +28,33 @@ import java.nio.file.StandardOpenOption
  * second [StoragePort] method to do their job — that ordering stays in `SessionExporter`.
  */
 class AndroidStoragePort(override val roots: StorageRoots) : StoragePort {
-    private var nonce = 0
+    private val nonce = AtomicInteger(0)
     private val frameChannels = mutableMapOf<String, FileChannel>()
     private val renamedPaths = mutableSetOf<String>()
 
+    /**
+     * A fresh port instance starts its [nonce] counter back at zero, so the counter alone cannot
+     * guarantee a path a prior instance (or a crashed prior instance's residue) has not already
+     * claimed — across a process/port restart, `Files.createDirectories` would otherwise reopen
+     * that old residue silently. Uniqueness is therefore enforced by exclusive single-directory
+     * creation: each candidate nonce is claimed with `Files.createDirectory`, retrying past
+     * `FileAlreadyExistsException` until an unclaimed path is found. `AtomicInteger.incrementAndGet`
+     * keeps concurrent attempts within one instance collision-free.
+     */
     override fun createStagingAttempt(sessionId: Uuid): StagingAttempt {
-        nonce += 1
-        val path = "${roots.stagingRoot}/${sessionId.value}.$nonce.staging"
-        Files.createDirectories(Paths.get(path))
-        return AndroidStagingAttempt(path)
+        Files.createDirectories(Paths.get(roots.stagingRoot))
+        while (true) {
+            val candidateNonce = nonce.incrementAndGet()
+            val path = "${roots.stagingRoot}/${sessionId.value}.$candidateNonce.staging"
+            try {
+                Files.createDirectory(Paths.get(path))
+                return AndroidStagingAttempt(path)
+            } catch (_: FileAlreadyExistsException) {
+                // Another instance (this one's own concurrent caller, a still-live sibling
+                // instance, or a prior crashed instance's residue) already claimed this nonce;
+                // try the next one rather than silently reopening it.
+            }
+        }
     }
 
     override fun appendLine(attempt: StagingAttempt, line: String) {

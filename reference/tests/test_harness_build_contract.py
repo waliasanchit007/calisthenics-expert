@@ -198,6 +198,41 @@ def test_android_export_parity_target_is_class_isolated() -> None:
     )
 
 
+def test_s25_process_kill_target_requires_fresh_run_correlated_evidence() -> None:
+    makefile = (ROOT / "Makefile").read_text()
+    kill_target = makefile.split("verify-harness-s25-process-kill:", 1)[1].split(
+        "\nverify-kotlin-export:", 1
+    )[0]
+
+    assert "pm clear com.calisthenics.diagnostic.android" in kill_target, (
+        "catches the process-kill gate losing the pre-invocation private-data clear that keeps "
+        "residue from a stale run out of fresh evidence"
+    )
+    assert "Success" in kill_target, (
+        "catches the process-kill gate no longer requiring pm clear to report Success"
+    )
+    kill_invocation_line = next(
+        line
+        for line in kill_target.splitlines()
+        if "killDuringCommit" in line and "am instrument" in line
+    )
+    assert "|| true" not in kill_invocation_line, (
+        "catches the process-kill gate silently swallowing the first invocation's failure again"
+    )
+    assert "Process crashed" in kill_target, (
+        "catches the process-kill gate no longer requiring the first invocation's output to "
+        "identify an instrumentation process crash before verification is trusted"
+    )
+    assert "killDuringCommit" in kill_target
+    assert kill_target.count("verifyNoPartialEntryAndResidueClassification") == 1, (
+        "catches the second invocation moving earlier than the checked first invocation, or "
+        "being duplicated"
+    )
+    assert "docs/evidence/device-probes/s25-ultra-process-kill-ledger.json" not in kill_target, (
+        "catches the process-kill gate mutating the pending evidence ledger itself"
+    )
+
+
 def test_ios_host_embeds_shared_compose_controller() -> None:
     app = (HARNESS / "iosApp/iosApp/iOSApp.swift").read_text()
     project = (HARNESS / "iosApp/iosApp.xcodeproj/project.pbxproj").read_text()

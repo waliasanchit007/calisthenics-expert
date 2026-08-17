@@ -36,6 +36,15 @@ import kotlin.test.assertTrue
  * only — never same-mount identity, which is Android-specific evidence proved solely by the
  * concrete `AndroidStoragePortConformanceTest` via `AndroidStorageRoots.from`/`st_dev` (design
  * spec §6.1 point 4). No probe here is skipped or platform-conditional.
+ *
+ * Fault-injection coverage of the nine fault-injectable primitives is split across two probes:
+ * [everyOrdinalFaultPreventsValidPublishExceptReportsUncertainDurabilityAfterRename] sweeps every
+ * ordinal of a *successful*-path export, which exercises eight of the nine — `writeAbortMarker` is
+ * never called on a successful path, so it cannot appear in that sweep. The ninth,
+ * [writeAbortMarkerFailureAfterCommitPrimitiveFailureClassifiesCrashResidue], is a dedicated
+ * abort-path probe that forces a commit primitive to fail (driving `SessionExporter` into its
+ * abandon path) and then forces the resulting `writeAbortMarker` call to fail too. Together the two
+ * probes cover all nine fault-injectable operation types; neither alone does.
  */
 abstract class StoragePortConformanceSuite {
     abstract fun harness(): StoragePortTestHarness
@@ -159,6 +168,34 @@ abstract class StoragePortConformanceSuite {
         assertTrue(markers.all { it.reason.contains("pseudonym=$PSEUDONYM") })
         assertTrue(markers.all { !it.reason.contains("secret-path") })
         assertTrue(residues.map { it.path }.toSet().size == 2, "attempts must be unique")
+    }
+
+    @Test
+    fun writeAbortMarkerFailureAfterCommitPrimitiveFailureClassifiesCrashResidue() {
+        val probeDelegate = harness().freshPort()
+        val probePort = FaultInjectingStoragePort(probeDelegate, failOnOrdinal = 1)
+        export(probePort, snapshot(listOf(frame(posePresent = true))))
+        val markerOrdinal = probePort.operations.indexOf("writeAbortMarker") + 1
+        assertTrue(
+            markerOrdinal > 0,
+            "writeAbortMarker was not observed after the commit primitive failure at ordinal 1",
+        )
+
+        val delegate = harness().freshPort()
+        val port = FaultInjectingStoragePort(delegate, failOnOrdinals = setOf(1, markerOrdinal))
+        val result = export(port, snapshot(listOf(frame(posePresent = true))))
+
+        assertIs<FinalizationResult.Failed>(result)
+        assertTrue(
+            port.operations.contains("writeAbortMarker"),
+            "the writeAbortMarker call must be observed/faulted, not skipped",
+        )
+        val residues = delegate.scanStagingResidues()
+        assertEquals(1, residues.size)
+        assertIs<StagingResidue.CrashResidue>(
+            residues.single(),
+            "a faulted writeAbortMarker call must leave no marker, classifying as CrashResidue",
+        )
     }
 
     @Test

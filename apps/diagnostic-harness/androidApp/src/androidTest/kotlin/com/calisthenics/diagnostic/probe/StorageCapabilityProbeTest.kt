@@ -7,6 +7,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import org.junit.Test
 
@@ -17,7 +18,7 @@ class StorageCapabilityProbeTest {
         val targetContext = instrumentation.targetContext
         val worker = Executors.newSingleThreadExecutor()
         try {
-            val result = worker.submit<StorageProbeResult> {
+            val outcome = worker.submit<StorageProbeOutcome> {
                 check(Thread.currentThread() !== LooperHolder.mainThread) {
                     "probe must run off the Android main thread"
                 }
@@ -26,6 +27,7 @@ class StorageCapabilityProbeTest {
                     probeGitSha = BuildConfig.PROBE_GIT_SHA,
                 ).runAndPersist()
             }.get(15, TimeUnit.SECONDS)
+            val result = assertIs<StorageProbeOutcome.Completed>(outcome).result
 
             val evidence = File(targetContext.cacheDir, StorageCapabilityProbe.RESULT_FILE)
             assertTrue(evidence.isFile)
