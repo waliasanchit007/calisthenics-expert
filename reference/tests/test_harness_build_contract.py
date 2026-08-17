@@ -86,14 +86,19 @@ def test_kotlin_export_contract_is_wired_to_python_authority() -> None:
     )
     shared_build = (HARNESS / "shared/build.gradle.kts").read_text()
     makefile = (ROOT / "Makefile").read_text()
+    workflow = (ROOT / ".github" / "workflows" / "verify.yml").read_text()
 
     assert generator.is_file()
     assert synthetic_test.is_file()
     assert "generateSyntheticExport" in shared_build
     assert "GenerateSyntheticExportKt" in shared_build
+    assert "DeterministicCore" in generator.read_text()
     assert "verify-kotlin-export:" in makefile
+    assert ":shared:jvmTest" in makefile
     assert "build/conformance" in makefile
+    assert "shasum -a 256" in makefile
     assert "validate-session" in makefile
+    assert "make verify-kotlin-export" in workflow
 
 
 def test_android_shell_has_exported_launcher_activity() -> None:

@@ -35,7 +35,7 @@ verify-harness-foundation:
 verify-kotlin-export:
 	@set -eu; \
 	cd apps/diagnostic-harness; \
-	./gradlew --no-daemon :shared:generateSyntheticExport; \
+	./gradlew --no-daemon :shared:jvmTest :shared:generateSyntheticExport; \
 	first_manifest_hash=$$(shasum -a 256 shared/build/conformance/synthetic-session/manifest.json | awk '{print $$1}'); \
 	first_frames_hash=$$(shasum -a 256 shared/build/conformance/synthetic-session/frames.ndjson | awk '{print $$1}'); \
 	./gradlew --no-daemon :shared:generateSyntheticExport; \

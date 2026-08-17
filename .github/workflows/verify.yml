@@ -24,3 +24,4 @@ jobs:
       - run: make bootstrap
       - run: make verify
       - run: make verify-harness-jvm
+      - run: make verify-kotlin-export
