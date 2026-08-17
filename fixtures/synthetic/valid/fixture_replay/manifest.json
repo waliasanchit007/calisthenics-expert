@@ -72,9 +72,9 @@
     }
   ],
   "counts": {
-    "camera_frames_received": 2,
-    "inference_frames_submitted": 2,
-    "inference_records_emitted": 2,
+    "camera_frames_received": 3,
+    "inference_frames_submitted": 3,
+    "inference_records_emitted": 3,
     "pose_detected_records": 1,
     "frames_skipped_before_inference": 0,
     "frames_skipped_before_inference_by_reason": {

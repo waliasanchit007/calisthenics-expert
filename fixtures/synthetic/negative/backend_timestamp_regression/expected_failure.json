@@ -1,0 +1,7 @@
+{
+  "tooling_schema_version": "1.0.0",
+  "command": "validate-session",
+  "expected_error_code": "FRAME.BACKEND_TIMESTAMP_ORDER",
+  "artifact_path": "fixtures/synthetic/negative/backend_timestamp_regression/frames.ndjson",
+  "description": "synthetic regressive backend timestamp across a missing value"
+}

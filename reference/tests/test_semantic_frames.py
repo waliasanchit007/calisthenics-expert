@@ -300,6 +300,56 @@ def test_accepts_zero_duration_inference() -> None:
     assert validate_frame_stream(minimal_manifest(), [frame], "m.json", "f.ndjson") == []
 
 
+def test_accepts_backend_timestamp_prev_plus_one_for_same_millisecond_frames() -> None:
+    """Catches a mutation that requires backend timestamps to equal capture-time floors."""
+    frames = [
+        minimal_pose_frame(index=0, capture_ns=100_000_000),
+        minimal_pose_frame(index=1, capture_ns=100_000_500),
+    ]
+    frames[0]["backend_timestamp_ms"] = 100
+    frames[1]["backend_timestamp_ms"] = 101
+
+    assert validate_frame_stream(minimal_manifest(), frames, "m.json", "f.ndjson") == []
+
+
+def test_accepts_backend_timestamps_with_mixed_presence() -> None:
+    """Catches mutations that require all records to carry the optional field."""
+    frames = [
+        minimal_pose_frame(index=0, capture_ns=100_000_000),
+        minimal_pose_frame(index=1, capture_ns=100_000_500),
+        minimal_pose_frame(index=2, capture_ns=100_001_000),
+    ]
+    frames[0]["backend_timestamp_ms"] = 100
+    frames[2]["backend_timestamp_ms"] = 101
+
+    assert validate_frame_stream(minimal_manifest(), frames, "m.json", "f.ndjson") == []
+
+
+def test_rejects_backend_timestamp_below_its_capture_time_floor() -> None:
+    """Catches a mutation that omits the per-record capture-time lower bound."""
+    frame = minimal_pose_frame(capture_ns=1_234_567_890)
+    frame["backend_timestamp_ms"] = 1_233
+
+    assert codes(validate_frame_stream(minimal_manifest(), [frame], "m.json", "f.ndjson")) == [
+        "FRAME.BACKEND_TIMESTAMP_ORDER"
+    ]
+
+
+def test_rejects_regressive_backend_timestamp_across_missing_record() -> None:
+    """Catches a mutation that compares only adjacent records instead of present values."""
+    frames = [
+        minimal_pose_frame(index=0, capture_ns=100_000_000),
+        minimal_pose_frame(index=1, capture_ns=100_000_500),
+        minimal_pose_frame(index=2, capture_ns=100_001_000),
+    ]
+    frames[0]["backend_timestamp_ms"] = 100
+    frames[2]["backend_timestamp_ms"] = 100
+
+    assert codes(validate_frame_stream(minimal_manifest(), frames, "m.json", "f.ndjson")) == [
+        "FRAME.BACKEND_TIMESTAMP_ORDER"
+    ]
+
+
 # --- landmark shape -------------------------------------------------------------------
 
 

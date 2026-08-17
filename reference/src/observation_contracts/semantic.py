@@ -87,11 +87,23 @@ def validate_frame_stream(
     )
 
     previous: Mapping[str, Any] | None = None
+    previous_backend_timestamp_ms: int | None = None
     for position, frame in enumerate(frames):
         issues.extend(_constancy_issues(frame, position, rules))
-        issues.extend(_sequence_issues(frame, previous, position, rules))
+        issues.extend(
+            _sequence_issues(
+                frame,
+                previous,
+                previous_backend_timestamp_ms,
+                position,
+                rules,
+            )
+        )
         issues.extend(_landmark_issues(frame, position, rules))
         previous = frame
+        backend_timestamp_ms = _integer(frame, "backend_timestamp_ms")
+        if backend_timestamp_ms is not None:
+            previous_backend_timestamp_ms = backend_timestamp_ms
     return issues
 
 
@@ -694,6 +706,7 @@ def _constancy_issues(
 def _sequence_issues(
     frame: Mapping[str, Any],
     previous: Mapping[str, Any] | None,
+    previous_backend_timestamp_ms: int | None,
     position: int,
     rules: _StreamRules,
 ) -> list[ValidationIssue]:
@@ -757,6 +770,37 @@ def _sequence_issues(
                 actual=end,
             )
         )
+
+    backend_timestamp_ms = _integer(frame, "backend_timestamp_ms")
+    if backend_timestamp_ms is not None:
+        if (
+            previous_backend_timestamp_ms is not None
+            and backend_timestamp_ms <= previous_backend_timestamp_ms
+        ):
+            issues.append(
+                _issue(
+                    "FRAME.BACKEND_TIMESTAMP_ORDER",
+                    rules,
+                    position,
+                    f"backend_timestamp_ms {backend_timestamp_ms} does not exceed the previous "
+                    f"present value {previous_backend_timestamp_ms}",
+                    pointer="/backend_timestamp_ms",
+                    actual=backend_timestamp_ms,
+                )
+            )
+        if capture is not None and backend_timestamp_ms < capture // 1_000_000:
+            issues.append(
+                _issue(
+                    "FRAME.BACKEND_TIMESTAMP_ORDER",
+                    rules,
+                    position,
+                    f"backend_timestamp_ms {backend_timestamp_ms} precedes the capture-time "
+                    f"floor {capture // 1_000_000}",
+                    pointer="/backend_timestamp_ms",
+                    expected=f">= {capture // 1_000_000}",
+                    actual=backend_timestamp_ms,
+                )
+            )
     return issues
 
 
