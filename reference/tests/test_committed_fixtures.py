@@ -35,6 +35,7 @@ def test_every_negative_fixture_fails_with_declared_code() -> None:
     cases = discover_negative_fixtures(repository_root())
 
     assert {case.name for case in cases} == {
+        "backend_timestamp_regression",
         "timestamp_regression",
         "session_switch",
         "landmark_count",
@@ -143,6 +144,11 @@ def test_committed_fixture_replay_group_is_fully_valid() -> None:
         "backend_timestamp_ms" not in frame or frame["backend_timestamp_ms"] >= 0
         for frame in frames
     )
+    assert [frame["backend_timestamp_ms"] for frame in frames] == [100, 133, 134]
+    assert (
+        frames[1]["capture_timestamp_ns"] // 1_000_000
+        == frames[2]["capture_timestamp_ns"] // 1_000_000
+    )
     assert fixture_metadata["synthetic"] is True
     assert issues == []
 
@@ -155,7 +161,7 @@ def test_committed_fixture_replay_sequence_matches_raw_stream_and_accounting() -
 
     fixture_frames = fixture_metadata["frames"]
     assert frame_issues == []
-    assert len(fixture_frames) == len(frames) == 2
+    assert len(fixture_frames) == len(frames) == 3
     assert [descriptor["frame_index"] for descriptor in fixture_frames] == [
         frame["frame_index"] for frame in frames
     ]

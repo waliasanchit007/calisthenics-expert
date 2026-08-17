@@ -165,6 +165,17 @@ The timestamp is:
 max(floor(capture_timestamp_ns / 1_000_000), previous_backend_timestamp_ms + 1)
 ```
 
+Validator semantics are intentionally weaker than this producer construction formula. For
+emitted records, `backend_timestamp_ms` is optional: missing values are skipped, and carried
+values are compared with the previous carried value across any intervening missing records.
+Every carried value must be strictly greater than that previous carried value and must be at
+least `floor(capture_timestamp_ns / 1_000_000)` for its own record. Mixed presence is accepted;
+the validator does not require all-or-none presence, exact equality to the capture-time floor
+or previous value plus one, or first-value equality to the capture-time floor. A failed
+submission may consume an unrecorded backend timestamp. Harness-side replay or producer
+conformance checks may enforce all-or-none presence separately, but that is not a validator
+rule.
+
 ### Release gate
 
 The release follows the existing checklist: regression first, schema and validator updates, a positive replay fixture, declared-negative session-kind/media fixture, error-code registry update, changelog, independent non-implementing review, clean `make verify`, clean-clone verification, and an immutable Git tag. Kotlin models target 1.1.0 only after the release is complete.

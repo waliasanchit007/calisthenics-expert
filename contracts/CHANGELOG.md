@@ -22,6 +22,13 @@ released schemas remain under their immutable v1 filenames.
 - `RawPoseFrame v1.1.0` adds optional non-negative integer
   `backend_timestamp_ms`, the monotonic millisecond timestamp passed to the
   pose backend after quantization.
+- The validator requires carried `backend_timestamp_ms` values on emitted
+  records to be strictly increasing in stream order, comparing present values
+  across missing records, and requires each carried value to be at least
+  `floor(capture_timestamp_ns / 1_000_000)` for its own record. Mixed presence
+  is accepted; the validator does not enforce all-or-none presence or the
+  producer's exact `max(floor(capture_timestamp_ns / 1_000_000), previous + 1)`
+  construction formula. Both violations use `FRAME.BACKEND_TIMESTAMP_ORDER`.
 - `SessionManifest v1.1.0` adds session-kind-dependent semantics for the
   existing `media_references.role=conformance_fixture` value. A
   `fixture_replay` session must contain exactly one `conformance_fixture` and
@@ -35,6 +42,9 @@ released schemas remain under their immutable v1 filenames.
   session-kind/media-role combination. It is distinct from
   `SESSION.COUNT_MISMATCH` and is exercised by the declared-negative
   `replay_media_role` fixture.
+- The validator error-code registry is version `1.1.0` and adds
+  `FRAME.BACKEND_TIMESTAMP_ORDER` immediately after
+  `FRAME.INFERENCE_TIME_ORDER`.
 - In the older live-study behavior, the missing or invalid static-reference
   media-role condition was reported as `SESSION.COUNT_MISMATCH`; 1.1.0
   replaces that media-role use with `SESSION.MEDIA_ROLE`. The legacy code
@@ -45,16 +55,23 @@ released schemas remain under their immutable v1 filenames.
   `SESSION.COUNT_MISMATCH` as the count-accounting code elsewhere. See the
   [deprecation policy](schema-release-process.md#deprecation) and
   [migration policy](schema-release-process.md#migration).
-- The reference validator package remains version `0.1.0` for this release.
+- The reference validator package remains version `0.1.0`; repository evidence
+  does not require a package bump for this release.
 
 ### Fixtures and provenance
 
 - The positive synthetic replay fixture is
   [`fixtures/synthetic/valid/fixture_replay`](../fixtures/synthetic/valid/fixture_replay/).
+  It contains a same-millisecond collision pair whose backend values are
+  `133` and `134`, demonstrating the accepted `previous + 1` direction.
 - The declared-negative synthetic replay fixture is
   [`fixtures/synthetic/negative/replay_media_role`](../fixtures/synthetic/negative/replay_media_role/)
   and must produce only `SESSION.MEDIA_ROLE` through `validate-session`.
-- The existing synthetic session, four earlier declared-negative cases, and
+- The declared-negative backend timestamp fixture is
+  [`fixtures/synthetic/negative/backend_timestamp_regression`](../fixtures/synthetic/negative/backend_timestamp_regression/)
+  and must produce only `FRAME.BACKEND_TIMESTAMP_ORDER` through
+  `validate-session`.
+- The existing synthetic session, the earlier declared-negative cases, and
   preprocessing vector remain part of the release inventory. No real
   participant data, video, audio, identifiers, or downloaded media is added.
 
