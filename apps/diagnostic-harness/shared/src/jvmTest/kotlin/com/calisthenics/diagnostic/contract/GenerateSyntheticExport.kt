@@ -1,5 +1,6 @@
 package com.calisthenics.diagnostic.contract
 
+import com.calisthenics.diagnostic.conformance.SyntheticFixture
 import com.calisthenics.diagnostic.export.AbortMarker
 import com.calisthenics.diagnostic.export.ExportRootCorruption
 import com.calisthenics.diagnostic.export.StagingAttempt
@@ -19,7 +20,7 @@ import java.nio.file.StandardOpenOption
 import java.nio.channels.FileChannel
 import java.util.Comparator
 
-private const val SESSION_ID = "5f6a7b8c-9d0e-4f1a-8b2c-3d4e5f6a7b8c"
+private val SESSION_ID = SyntheticFixture.sessionId.value
 
 fun main(args: Array<String>) {
     require(args.size == 1) { "expected exactly one output directory below shared/build/conformance" }
@@ -45,17 +46,12 @@ fun main(args: Array<String>) {
             imageWidth = 256,
             imageHeight = 256,
         ),
-        manifestTemplate = syntheticManifest(),
+        manifestTemplate = SyntheticFixture.manifestTemplate(),
         storage = storage,
     ).run(
-        sourceRgb24 = byteArrayOf(
-            0, 10, 20,
-            30, 40, 50,
-            60, 70, 80,
-            90, 100, 110,
-        ),
-        sourceWidth = 2,
-        sourceHeight = 2,
+        sourceRgb24 = SyntheticFixture.sourceRgb24,
+        sourceWidth = SyntheticFixture.sourceWidth,
+        sourceHeight = SyntheticFixture.sourceHeight,
     )
     require(result.finalization is FinalizationResult.Published) { "deterministic core did not publish" }
     require(storage.scanCommittedRoot().isEmpty()) { "deterministic core produced committed-root corruption" }
@@ -73,40 +69,6 @@ fun main(args: Array<String>) {
     println("generated ${output.resolve("manifest.json")}")
     println("generated ${output.resolve("frames.ndjson")}")
 }
-
-private fun syntheticManifest() = SessionManifest(
-    schemaVersion = SemanticVersion("1.1.0"),
-    sessionId = Uuid(SESSION_ID),
-    sessionKind = "fixture_replay",
-    participantPseudonymId = "synthetic-kotlin-export-01",
-    captureProtocolVersion = SemanticVersion("1.0.0"),
-    harnessGitSha = "0".repeat(39) + "6",
-    device = Device("android", "synthetic-os-1", "synthetic-kotlin-device", null, false),
-    posePipeline = PosePipeline(
-        "synthetic_pose_backend",
-        "1.1.0",
-        "synthetic_pose_model",
-        Sha256("0".repeat(63) + "7"),
-        "cpu",
-        "video",
-        1,
-        0.5,
-        0.5,
-        0.5,
-        "mediapipe_pose_33_v1",
-    ),
-    camera = Camera("fixture", 2, 2, 0, false, 30.0, "rgb24", "sRGB", "full", null, "synthetic_fixture_monotonic_ns", "ordered_no_drop"),
-    modelInput = ModelInput(256, 256, SemanticVersion("1.0.0"), SemanticVersion("1.0.0")),
-    inferenceDrainTimeoutMs = 1,
-    cadence = Cadence(30.0, listOf(CadenceSample(100_000_000, 30.0)), null),
-    clock = Clock("synthetic_fixture_monotonic_ns", 100_000_000, "2026-08-17T00:00:00Z", "2026-08-17T00:00:01Z"),
-    availableObservations = AvailableObservations(true, true),
-    mediaReferences = listOf(MediaReference("conformance_fixture", "synthetic://kotlin-export", Sha256("0".repeat(63) + "8"), null, null)),
-    counts = Counts(0, 0, 0, 0, 0, emptyMap(), 0, 0),
-    machineInferenceFailures = emptyList(),
-    captureQualityObserved = CaptureQualityObserved(true, true, true, "synthetic_uniform", false, "synthetic export; no participant capture"),
-    studyContext = mapOf("environment" to kotlinx.serialization.json.JsonPrimitive("synthetic"), "angle_deg_nominal" to kotlinx.serialization.json.JsonPrimitive(0)),
-)
 
 private class FileStorage(
     buildOutput: Path,

@@ -6,7 +6,7 @@ done; printf '%s' python3)
 VENV_PYTHON := .venv/bin/python
 CLI := $(VENV_PYTHON) -m observation_contracts
 
-.PHONY: bootstrap verify verify-harness-jvm verify-harness-ios verify-harness-foundation verify-kotlin-export
+.PHONY: bootstrap verify verify-harness-jvm verify-harness-ios verify-harness-foundation verify-kotlin-export verify-harness-android-export-parity
 
 bootstrap:
 	@command -v "$(PYTHON)" >/dev/null 2>&1 || { echo "error: Python interpreter '$(PYTHON)' was not found" >&2; exit 1; }
@@ -31,6 +31,15 @@ verify-harness-ios:
 
 verify-harness-foundation:
 	$(MAKE) verify-harness-jvm verify-harness-ios
+
+verify-harness-android-export-parity:
+	@set -eu; \
+	device_count=$$(adb devices -l | tail -n +2 | grep -c 'device product:' || true); \
+	if [ "$$device_count" -ne 1 ]; then \
+		echo "error: verify-harness-android-export-parity requires exactly one authorized attached device, found $$device_count" >&2; \
+		exit 1; \
+	fi; \
+	cd apps/diagnostic-harness && ./gradlew --no-daemon :shared:generateSyntheticExport :androidApp:connectedDebugAndroidTest
 
 verify-kotlin-export:
 	@set -eu; \
