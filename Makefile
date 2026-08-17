@@ -39,7 +39,7 @@ verify-harness-android-export-parity:
 		echo "error: verify-harness-android-export-parity requires exactly one authorized attached device, found $$device_count" >&2; \
 		exit 1; \
 	fi; \
-	cd apps/diagnostic-harness && ./gradlew --no-daemon :shared:generateSyntheticExport :androidApp:connectedDebugAndroidTest
+	cd apps/diagnostic-harness && ./gradlew --no-daemon :shared:generateSyntheticExport :androidApp:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.calisthenics.diagnostic.composition.InstallableCompositionExportParityTest
 
 # Device-gated per design spec §9.2: requires exactly one authorized physical Samsung Galaxy S25
 # Ultra target, never a generic emulator, and never mutates the pending/recorded ledger itself —

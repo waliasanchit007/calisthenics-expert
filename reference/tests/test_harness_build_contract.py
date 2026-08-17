@@ -162,6 +162,42 @@ def test_android_storage_probe_has_executable_instrumentation_wiring() -> None:
     assert "BuildConfig.PROBE_GIT_SHA" in probe_test
 
 
+def test_android_export_parity_target_is_class_isolated() -> None:
+    makefile = (ROOT / "Makefile").read_text()
+    parity_test = (
+        HARNESS
+        / "androidApp/src/androidTest/kotlin/com/calisthenics/diagnostic/composition/InstallableCompositionExportParityTest.kt"
+    )
+    process_kill_test = (
+        HARNESS
+        / "androidApp/src/androidTest/kotlin/com/calisthenics/diagnostic/export/ProcessKillDuringExportTest.kt"
+    )
+    parity_target = makefile.split("verify-harness-android-export-parity:", 1)[1].split(
+        "\nverify-harness-s25-process-kill:", 1
+    )[0]
+
+    assert parity_test.is_file()
+    assert process_kill_test.is_file()
+    assert "com.calisthenics.diagnostic.composition.InstallableCompositionExportParityTest" in (
+        parity_target
+    )
+    assert (
+        "-Pandroid.testInstrumentationRunnerArguments.class="
+        "com.calisthenics.diagnostic.composition.InstallableCompositionExportParityTest"
+        in parity_target
+    ), "catches the parity gate reverting to running the whole connected suite"
+    assert "com.calisthenics.diagnostic.export.ProcessKillDuringExportTest" not in parity_target, (
+        "catches the parity gate regaining a dependency on the destructive S25 process-kill class"
+    )
+    assert ":shared:generateSyntheticExport" in parity_target, (
+        "catches the parity gate losing the JVM fixture it diffs against"
+    )
+    assert "device_count" in parity_target, "catches the parity gate losing the one-device gate"
+    assert "connectedDebugAndroidTest" in parity_target, (
+        "catches the parity gate no longer building/installing/running via the connected task"
+    )
+
+
 def test_ios_host_embeds_shared_compose_controller() -> None:
     app = (HARNESS / "iosApp/iosApp/iOSApp.swift").read_text()
     project = (HARNESS / "iosApp/iosApp.xcodeproj/project.pbxproj").read_text()
