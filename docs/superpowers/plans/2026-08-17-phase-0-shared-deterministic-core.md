@@ -207,7 +207,7 @@ Task 3 is parallel-eligible with Tasks 1–2 because it has a disjoint write sco
 - Produces packed RGB24 bytes and deterministic scale/pad geometry matching ADR-0002 byte for byte.
 
 - [ ] Add RED vector tests for byte length, SHA-256, dimensions, pad fill, scale geometry, invalid dimensions, and input-length mismatch.
-- [ ] Implement integer-safe nearest-neighbor/scale-pad behavior exactly as the Python reference specifies; no bitmap, Android, or native platform types may enter common code.
+- [ ] Implement exact-fraction bilinear scale/pad behavior exactly as the Python reference specifies; no bitmap, Android, or native platform types may enter common code.
 - [ ] Verify every committed vector and a table of edge dimensions on JVM plus iOS compilation.
 - [ ] Commit `feat: implement canonical RGB24 preprocessing`.
 
