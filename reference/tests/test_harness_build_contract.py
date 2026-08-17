@@ -16,6 +16,7 @@ EXPECTED_VERSIONS = {
     "coroutines": "1.11.0",
     "serialization": "1.10.0",
     "kotlin-test": "2.4.10",
+    "jdk": "21",
 }
 
 
@@ -51,6 +52,7 @@ def test_harness_build_contract() -> None:
     assert "latest" not in all_gradle_text.lower()
     assert "jvm {" in shared_build
     assert "jvmTarget = JvmTarget.JVM_17" in shared_build
+    assert "jvmToolchain(" in shared_build
     assert "verify-harness-jvm:" in makefile, "catches removal/renaming of the JVM host-test gate"
     assert ":shared:jvmTest" in makefile, (
         "catches removal of shared JVM tests from the host-test gate"

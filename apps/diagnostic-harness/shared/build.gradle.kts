@@ -7,6 +7,7 @@ plugins {
 }
 
 kotlin {
+    jvmToolchain(libs.versions.jdk.get().toInt())
     androidLibrary {
         namespace = "com.calisthenics.diagnostic.shared"
         compileSdk = libs.versions.android.compileSdk.get().toInt()
