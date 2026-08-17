@@ -26,6 +26,7 @@ def test_harness_build_contract() -> None:
     shared_build = (HARNESS / "shared" / "build.gradle.kts").read_text()
     makefile = (ROOT / "Makefile").read_text()
     workflow = (ROOT / ".github" / "workflows" / "verify.yml").read_text()
+    adr = (ROOT / "docs" / "adr" / "ADR-0004-kmp-android-first-diagnostic-harness.md").read_text()
     all_gradle_text = "\n".join(
         path.read_text()
         for path in HARNESS.rglob("*")
@@ -50,12 +51,28 @@ def test_harness_build_contract() -> None:
     assert "latest" not in all_gradle_text.lower()
     assert "jvm {" in shared_build
     assert "jvmTarget = JvmTarget.JVM_17" in shared_build
-    assert "verify-harness-jvm:" in makefile
-    assert ":shared:jvmTest" in makefile
-    assert "verify-harness-ios:" in makefile
+    assert "verify-harness-jvm:" in makefile, "catches removal/renaming of the JVM host-test gate"
+    assert ":shared:jvmTest" in makefile, (
+        "catches removal of shared JVM tests from the host-test gate"
+    )
+    assert "verify-harness-ios:" in makefile, (
+        "catches removal/renaming of the iOS compile/link gate"
+    )
+    assert "verify-harness-foundation:" in makefile, (
+        "catches removal/renaming of the aggregate compatibility target"
+    )
+    assert "$(MAKE) verify-harness-jvm verify-harness-ios" in makefile, (
+        "catches aggregate-target invocation drift that could omit a platform gate"
+    )
     assert "actions/setup-java@v5" in workflow
     assert 'java-version: "21"' in workflow
     assert "make verify-harness-jvm" in workflow
+    assert "jobs:\n  verify:" in workflow, (
+        "catches protected-check job ID drift that would strand branch protection"
+    )
+    assert "not a delivery platform" in adr, (
+        "catches ADR drift that could misclassify the JVM test host"
+    )
 
 
 def test_android_shell_has_exported_launcher_activity() -> None:

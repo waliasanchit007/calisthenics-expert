@@ -19,7 +19,7 @@ The first functional device is a Samsung Galaxy S25 Ultra running Android 16. Th
 - Deliver a functional Android application first.
 - Create `iosArm64` and `iosSimulatorArm64` targets and a minimal Xcode host now, but expose unavailable adapters and disable session start until a later milestone implements iOS capture/inference/storage.
 - Use separate KMP `shared` and `composeApp` libraries plus `androidApp` and `iosApp` platform shells. AGP 9 makes the separate Android application module mandatory.
-- Add a JVM target to `shared` as a Linux-compatible test host with JVM bytecode target 17. This target exists only to run shared tests in CI; it is not a desktop product or delivery target.
+- Add a JVM target to `shared` as a Linux-compatible test host with JVM bytecode target 17. This target exists only to run shared tests in CI; it is not a delivery platform or desktop product.
 - Release the additive observation-contract fields needed by a truthful harness before Kotlin producers depend on them.
 
 This ADR supersedes the no-KMP repository layout and two-functional-native-harness sequencing in `docs/phase-0-plan.md`. It does not supersede that plan's observation boundary, comparability controls, study design, or prohibition on premature interpretation.

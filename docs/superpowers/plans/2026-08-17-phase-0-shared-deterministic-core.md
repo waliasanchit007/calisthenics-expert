@@ -21,14 +21,15 @@
 - No partially written or validator-invalid session may appear under the valid exports root.
 - No MediaPipe dependency, CameraX live path, replay adapter, product UI, functional iOS adapter, participant data, or physical-device evidence belongs in this slice.
 - Each task is regression-first. Record the failing command and reason before production changes.
-- Routine acceptance is deterministic tests, static checks, and diff/scope inspection. No routine independent model review is created. Sol pre-challenges are reserved for Task 5 (drain/fence) and Task 6 (persistence ordering); one bounded full-range review occurs only at the completed slice boundary.
+- Routine acceptance is deterministic tests, static checks, and diff/scope inspection. No routine independent model review is created. The adopted Task 5/6 decision record is settled: Sol is consulted only when an implementer proposes a deviation from it. One bounded full-range review occurs only at the completed slice boundary.
 
 ## Delivery and Review Protocol
 
-- Implement tasks in order. Only disjoint test-fixture preparation may run in parallel.
+- Tasks 1, 2, and 3 are parallel-eligible because their write scopes are disjoint. Tasks 4–7 remain sequential and consume the preceding contracts and evidence.
 - Task 0 is implemented and reviewed through the real manual orchestration v2 Slice 2 path: activate generation, bind role, dispatch, acknowledge, start, implement/commit/push, submit, drain outbox, reviewer fetch/review, review submit, drain outbox.
 - A **recovery cycle** is any manual intervention outside the documented happy path above: reaching into database state, manually repairing a stuck outbox row, re-activating a stale generation, or making any manual database edit. Re-running a documented step with corrected inputs is not a recovery cycle. Abort Task 0 dogfood after more than one recovery cycle and preserve exact database state, command, output, branch, HEAD, and next safe action; complete Task 0 outside Buzz so Calisthenics is never stranded behind the dogfood.
 - The first-dogfood ledger records `claude-work` when Claude is consulted. Account identity is not added to the orchestration schema in this plan. If `claude-work` is actually exhausted and `claude-personal` is used, record that switch and its quota evidence in the ignored ledger.
+- Each run-ledger routing record includes provider, model, account identity, tokens in, tokens out, and wall-clock duration in milliseconds; unavailable token telemetry is recorded explicitly rather than inferred.
 - No provider account or credential identity may be encoded in `agent_id`, branch names, or filesystem paths.
 - Tasks 1–7 start only after Task 0 is merged and protected CI proves the JVM test host on Ubuntu.
 
@@ -193,6 +194,8 @@ Open a ready PR, wait for the required `verify` check to be green, squash-merge,
 
 ### Task 3: Implement exact canonical RGB24 scale/pad
 
+Task 3 is parallel-eligible with Tasks 1–2 because it has a disjoint write scope. Tasks 4–7 are sequential.
+
 **Files:**
 - Create: `apps/diagnostic-harness/shared/src/commonMain/kotlin/com/calisthenics/diagnostic/preprocessing/Rgb24.kt`
 - Create: `apps/diagnostic-harness/shared/src/commonMain/kotlin/com/calisthenics/diagnostic/preprocessing/ScalePad.kt`
@@ -239,7 +242,7 @@ Open a ready PR, wait for the required `verify` check to be green, squash-merge,
 
 ### Task 5: Add drain fencing and exactly-once terminal classification
 
-**Pre-implementation gate:** One Sol design challenge is required for the drain/fence transition table and late-callback semantics. Resolve the design before implementation; do not create a routine post-code review.
+**Pre-implementation gate:** The drain/fence design is settled by the adopted Slice-3 decision record. Do not re-derive it with a cold Sol challenge. Request a scoped Sol challenge only if the implementer proposes deviating from one of the numbered acceptance criteria below.
 
 **Files:**
 - Create: `apps/diagnostic-harness/shared/src/commonMain/kotlin/com/calisthenics/diagnostic/session/SessionRunner.kt`
@@ -251,7 +254,37 @@ Open a ready PR, wait for the required `verify` check to be green, squash-merge,
 - `InferencePort` receives submission index, canonical input, and backend timestamp and returns success/failure asynchronously.
 - Stop closes admission, awaits in-flight calls, installs one timeout fence at the deadline, and waits for writer/event-queue quiescence before producing a final snapshot.
 
-- [ ] Add RED deterministic virtual-time tests for callbacks before/at/after deadline, simultaneous failure/timeout races, repeated stop, callback duplication, cancellation, zero in-flight calls, and skipped frames during stopping.
+**Settled acceptance criteria (decision-record commitments):**
+
+1. Fence state is monotonic: `Running -> Draining(deadline) -> Sealed -> Assembling -> Published | Failed`; every transition runs on the single dispatcher, the only fence check is at event admission before handler dispatch, post-Sealed events are dropped with a non-contract diagnostic count, and deadline expiry is a posted event.
+2. Terminal states are single-assignment; reassignment throws and fails the session.
+3. Counters increment at ACCEPT time. Before publish, close and fsync NDJSON, re-read the staged stream, and require line count to equal sealed `inference_records_emitted` and pose-present count to equal sealed `pose_detected_records`; any mismatch or earlier write/flush/fsync failure fails the session without publish.
+4. Finalization returns the sealed counters and terminal map as an immutable sealed snapshot API.
+5. The commit unit is the session directory, using per-attempt `<session_id>.<nonce>.staging` under the same `filesDir` mount as the exports root, with the fixed sequence: fsync stream, reconcile, write+fsync manifest, fsync staging directory, publish, fsync exports root.
+6. The storage port exposes `appendLine`, `flush`, `fsyncFile`, `fsyncDirectory`, and logical `renameNoReplace`; the platform implementation performs check-then-rename, documents the residual race, and relies on single-process dispatcher confinement within the threat model.
+7. An empty exports-root directory is corruption evidence. The protocol never creates one there, the pre-check must surface it, and the scanner reports every directory without `manifest.json` rather than skipping it.
+8. A second finalize joins the first result; publish executes only inside the single `Assembling -> Published` transition.
+9. Every finalize attempt gets unique staging; any failure fsyncs an abort marker and permanently abandons that directory, which is never re-entered.
+10. Deliberate abort writes an fsynced abort marker containing a sanitized reason and sealed counters; marker absence classifies crash residue.
+11. Staging and exports root are both below `Context.filesDir`; external storage is never used.
+
+**Mandatory RED/GREEN probes:**
+
+1. Monotonic fence transitions, the admission-only fence check, post-Sealed diagnostic drops, and posted drain-deadline expiry.
+2. Single-assignment terminal map; attempted reassignment throws and fails the session.
+3. ACCEPT-time counters plus staged-stream line-count and pose-present reconciliation, with mutations of each sealed counter making the probe RED.
+4. Immutable finalization result carrying the sealed counters and terminal map.
+5. Fixed commit order and ordinal fault injection at every operation/boundary across `appendLine`, `flush`, `fsyncFile`, `fsyncDirectory`, and logical `renameNoReplace`.
+6. Exports-root corruption scanning reports an empty directory or any directory missing `manifest.json`.
+7. A second finalize joins the first result and publish executes only once.
+8. Destination collision: a pre-existing non-empty target produces `Failed` and remains untouched; a pre-existing empty target is refused by the existence pre-check; deleting that pre-check makes the empty-target test RED.
+9. Unique staging per attempt and permanent abandonment after any failure.
+10. Deliberate abort writes an fsynced sanitized marker with sealed counters, while marker absence identifies crash residue.
+11. Staging and exports remain under `Context.filesDir`, and a valid zero-frame session publishes.
+
+Every probe is required evidence; a skipped probe is not acceptance.
+
+- [ ] Add RED deterministic virtual-time tests for the eleven mandatory probes above, including callbacks before/at/after deadline, simultaneous failure/timeout races, repeated stop, callback duplication, cancellation, zero in-flight calls, skipped frames during stopping, and the required storage mutations.
 - [ ] Prove one terminal classification per submitted index and no counter/record/failure mutation after the fence.
 - [ ] Use injected dispatcher/clock and structured concurrency; no sleeps or wall-clock tests.
 - [ ] Commit `feat: fence session drain deterministically`.
@@ -260,7 +293,7 @@ Open a ready PR, wait for the required `verify` check to be green, squash-merge,
 
 ### Task 6: Implement crash-safe export ordering with fault injection
 
-**Pre-implementation gate:** One Sol design challenge is required for persistence order, same-filesystem rename assumptions, and residue policy. Resolve the design before implementation.
+**Pre-implementation gate:** Persistence order, same-filesystem assumptions, and residue policy are settled by the adopted Slice-3 decision record. Do not re-derive them with a cold Sol challenge. Request a scoped Sol challenge only if the implementer proposes deviating from the self-contained acceptance criteria below.
 
 **Files:**
 - Create: `apps/diagnostic-harness/shared/src/commonMain/kotlin/com/calisthenics/diagnostic/export/StoragePort.kt`
@@ -269,10 +302,40 @@ Open a ready PR, wait for the required `verify` check to be green, squash-merge,
 - Create: `apps/diagnostic-harness/shared/src/commonTest/kotlin/com/calisthenics/diagnostic/export/SessionExporterTest.kt`
 
 **Interfaces:**
-- `StoragePort` exposes explicit staging creation, append/write, file sync, directory sync, validation handoff, same-filesystem atomic rename, committed-root scan, and residue reporting.
-- `SessionExporter` executes one fixed order: finish frame appends; fsync NDJSON; write manifest; fsync manifest; fsync staging directory; validate staged session; atomic rename into valid root; fsync destination parent.
+- `StoragePort` exposes the five explicit primitives `appendLine`, `flush`, `fsyncFile`, `fsyncDirectory`, and logical `renameNoReplace`, plus staging creation, validation handoff, committed-root scan, and residue reporting.
+- `SessionExporter` executes one fixed order: finish frame appends; fsync NDJSON; reconcile; write manifest; fsync manifest; fsync staging directory; check the destination, then plain rename within the same filesystem into the valid root; fsync destination parent. The logical `renameNoReplace` operation is check-then-plain-rename with a documented residual race, not an atomic no-replace primitive.
 
-- [ ] Add RED ordinal fault-injection tests at every operation and between adjacent operations.
+**Settled acceptance criteria (decision-record commitments):**
+
+1. Fence state is monotonic and dispatcher-confined; admission performs the only fence check, post-Sealed events are dropped diagnostically, and deadline expiry is a posted event.
+2. Terminal states are single-assignment; reassignment throws and fails the session.
+3. Counters increment at ACCEPT time; post-close/fsync reconciliation requires NDJSON line count and pose-present count to equal the sealed counters, with any mismatch or earlier write/flush/fsync failure causing `Failed` and no publish.
+4. Finalization returns an immutable sealed snapshot containing sealed counters and the terminal map.
+5. The commit unit is the session directory, with unique `<session_id>.<nonce>.staging` under the same `filesDir` mount and the fixed fsync/reconcile/manifest/staging-dir/publish/exports-root order.
+6. The port exposes `appendLine`, `flush`, `fsyncFile`, `fsyncDirectory`, and logical `renameNoReplace`; it checks the destination and then performs plain rename, documenting the residual race.
+7. An empty exports-root directory is corruption evidence, and the scanner reports every directory lacking `manifest.json`.
+8. Second finalize joins the first result; publish occurs only in the single `Assembling -> Published` transition.
+9. Each attempt has unique staging; failures fsync an abort marker and permanently abandon the directory.
+10. Deliberate abort fsyncs a sanitized abort marker containing the sealed counters.
+11. Staging and exports are both under `Context.filesDir`; external storage is forbidden.
+
+**Mandatory RED/GREEN probes:**
+
+1. Monotonic fence transitions, the admission-only fence check, post-Sealed diagnostic drops, and posted drain-deadline expiry.
+2. Single-assignment terminal map; attempted reassignment throws and fails the session.
+3. ACCEPT-time counters plus staged-stream line-count and pose-present reconciliation, with mutations of each sealed counter making the probe RED.
+4. Immutable finalization result carrying the sealed counters and terminal map.
+5. Fixed commit order and ordinal fault injection at every operation/boundary across `appendLine`, `flush`, `fsyncFile`, `fsyncDirectory`, and logical `renameNoReplace`.
+6. Exports-root corruption scanning reports an empty directory or any directory missing `manifest.json`.
+7. A second finalize joins the first result and publish executes only once.
+8. Destination collision: a pre-existing non-empty target produces `Failed` and remains untouched; a pre-existing empty target is refused by the existence pre-check; deleting that pre-check makes the empty-target test RED.
+9. Unique staging per attempt and permanent abandonment after any failure.
+10. Deliberate abort writes an fsynced sanitized marker with sealed counters, while marker absence identifies crash residue.
+11. Staging and exports remain under `Context.filesDir`, and a valid zero-frame session publishes.
+
+Every probe is required evidence; a skipped probe is not acceptance.
+
+- [ ] Add RED ordinal fault-injection tests for the eleven mandatory probes and at every operation/boundary in the fixed commit sequence.
 - [ ] Assert no failure before rename creates a valid export; rename success followed by parent-fsync failure reports uncertain durability without silently deleting the committed entry; stale staging is identifiable but never auto-published or silently removed.
 - [ ] Assert validation failure cannot rename and error detail contains no frame bytes, landmarks, identifiers beyond pseudonym, or filesystem secrets.
 - [ ] Commit `feat: publish sessions with crash-safe ordering`.
@@ -306,7 +369,7 @@ make verify-kotlin-export
 git diff --check
 ```
 
-- [ ] Request one bounded full-range review over Tasks 1–7. Only Critical/Important findings block; allow one scoped fix/re-review. Record Minor debt.
+- [ ] Request one bounded full-range review over Tasks 1–7 from a provider that did not implement in this slice. If both providers implemented, assign Claude Opus with an instance that performed no implementation in the slice. Only Critical/Important findings block; allow one scoped fix/re-review. Record Minor debt.
 - [ ] Open the slice PR, wait for protected CI, squash-merge, verify one parent, fast-forward `main`, and rerun the full deterministic gate.
 - [ ] Commit subject before PR: `feat: complete shared deterministic observation core`.
 

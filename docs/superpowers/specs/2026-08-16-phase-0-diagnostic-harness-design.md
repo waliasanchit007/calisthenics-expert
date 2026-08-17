@@ -111,7 +111,9 @@ pending -> failed
 pending -> timed_out
 ```
 
-A terminal state cannot transition again. At drain timeout, `SessionRunner` installs a fence and classifies every unresolved submission as `timed_out`. A callback arriving after that fence is discarded as a non-event: it cannot change a counter, append NDJSON, or rewrite a failure. Manifest assembly starts only after the writer and event queue are quiescent.
+A terminal state cannot transition again. At drain timeout, `SessionRunner` installs a fence and classifies every unresolved submission as `timed_out`. A callback arriving after that fence is discarded as a non-event: it cannot change a counter, append NDJSON, or rewrite a failure. Manifest assembly starts only after the writer and event queue are quiescent. Fence state is monotonic: `Running -> Draining(deadline) -> Sealed -> Assembling -> Published | Failed`; all transitions occur on the single dispatcher, the only fence check is at event admission before dispatch to a handler, post-Sealed events are dropped with a non-contract diagnostic count, and deadline expiry is itself a posted event.
+
+Terminal states are single-assignment. Reassignment throws and fails the session. Counters increment at ACCEPT time, and finalization performs a pre-publish self-check after NDJSON close and fsync: it re-reads the staged stream and requires line count to equal sealed `inference_records_emitted` and pose-present count to equal sealed `pose_detected_records`. Any mismatch, or any earlier write/flush/fsync failure, produces `Failed` and no publish. The finalization result is an immutable sealed snapshot containing sealed counters and the terminal map.
 
 These rules preserve the released identities:
 
@@ -204,9 +206,9 @@ Live admission requires `REALTIME` timestamps and known colour metadata. If the 
 
 - Output is YUV_420_888; CameraX RGBA conversion is forbidden because it does not expose the required conversion provenance.
 - Backpressure is `STRATEGY_KEEP_ONLY_LATEST`.
-- `camera_frames_received` counts buffers delivered to the analyzer callback.
+- `camera_frames_received` counts buffers delivered to the analyzer callback whose callback events are admitted before the fence; callbacks arriving after the fence are dropped and do not increment the counter. This fence-relative definition prevents post-Sealed delivery from changing the sealed snapshot.
 - CameraX may replace a buffer before analyzer delivery. That upstream loss is not observable and is never invented as a skip reason. The gap between requested and delivered callback cadence is reported explicitly as upstream/unclassified cadence loss.
-- Within the observable boundary, every delivered callback is exactly one of submitted or skipped for `cadence_selection`, `backpressure`, or `session_stopping`.
+- Within the observable boundary, every admitted delivered callback is exactly one of submitted or skipped for `cadence_selection`, `backpressure`, `preprocessing_failed`, or `session_stopping`.
 - The analyzer copies all required planes and metadata into owned immutable bytes, then closes `ImageProxy` immediately. It never waits for pose inference.
 
 Using `STRATEGY_BLOCK_PRODUCER` would move delay into the camera pipeline without making sensor-side frame production observable, so it is rejected for this milestone.
@@ -227,6 +229,7 @@ Using `STRATEGY_BLOCK_PRODUCER` would move delay into the camera pipeline withou
 - MediaPipe's internal detector resize and tracker-derived ROI are backend behaviour, not harness-controlled canonical preprocessing. Pin and record model SHA, Tasks Vision version, delegate, running mode, and all task options.
 - No external ROI is supplied in this milestone.
 - A backend error becomes `backend_call_failed`. Missing completion at the drain deadline becomes `session_teardown_timeout`; the harness does not fabricate a backend error.
+- `inference_frames_submitted` increments only after preprocessing succeeds and immediately before the inference call is dispatched. A frame whose preprocessing fails is not a submission and is attributed to the `preprocessing_failed` skip reason.
 
 ## 9. Preprocessing
 
@@ -243,18 +246,59 @@ No crop, detector ROI, smoothing, coordinate clipping, landmark imputation, or c
 
 ## 10. Export and crash consistency
 
-All session construction occurs in app-private staging outside the directory scanned as valid exports.
+All session construction occurs in app-private staging outside the directory scanned as valid exports. The layout is `Context.filesDir/diagnostic-harness/staging/<session_id>.<nonce>.staging/` for attempts and `Context.filesDir/diagnostic-harness/exports/<session_id>/` for committed sessions. A committed session directory contains `manifest.json` and `frames.ndjson`; the exports-root scanner reports any directory lacking `manifest.json` as corruption and never skips it silently. An empty directory in the exports root is therefore corruption evidence: the protocol never creates one there, and cleanup cannot turn it into a valid session.
 
 Commit sequence:
 
 1. close and flush the NDJSON writer;
 2. fsync NDJSON;
-3. write and fsync the manifest;
-4. fsync the staging directory;
-5. atomically rename within the same filesystem into the exports root;
-6. fsync the destination parent directory.
+3. reconcile the staged stream against the sealed counters;
+4. write and fsync the manifest;
+5. fsync the staging directory;
+6. check that the destination does not exist, then rename within the same filesystem into the exports root;
+7. fsync the exports root.
 
-Android directory sync uses `android.system.Os.open(path, O_RDONLY, 0)` and `Os.fsync`; file commit uses a same-filesystem atomic move/rename. These primitives live behind the storage port. A capability probe verifies them on the target filesystem.
+Android directory sync uses `android.system.Os.open(path, O_RDONLY, 0)` and `Os.fsync`. The storage port exposes exactly these primitives: `appendLine`, `flush`, `fsyncFile`, `fsyncDirectory`, and logical `renameNoReplace`. `renameNoReplace` is implemented honestly as check-then-rename; POSIX rename replaces an empty destination directory and only fails for a populated one, so the residual race is documented and accepted because publish is single-process and dispatcher-confined. A capability probe verifies the primitives on the target filesystem. The five primitives' API shape exists so probes 5 and 8 are writable without moving the invariant into `androidMain`.
+
+The commit unit is the session directory. The fixed sequence is fsync stream, reconcile, write and fsync manifest, fsync staging directory, publish, then fsync the exports root. Each finalize attempt uses a unique staging directory. Any failure fsyncs an abort marker and permanently abandons that directory; it is never re-entered. A deliberate abort writes an fsynced abort marker containing a sanitized reason and sealed counters, so crash residue is classifiable by marker absence. A second finalize joins the first result; publish occurs only inside the single `Assembling -> Published` transition. Staging and exports remain below `Context.filesDir`, never external storage.
+
+Zero-frame sessions are valid diagnostic sessions: if admission, sealing, stream reconciliation, manifest validation, and the commit sequence all succeed with zero records, the session publishes with zero-frame counters. A zero-frame session is not silently treated as missing or failed input.
+
+Probe 8 covers both destination cases: a pre-existing non-empty target causes rename to fail with the target untouched; a pre-existing empty target is refused by the existence pre-check, because bare rename would silently clobber it. A mutation deleting that pre-check must make the empty-target test RED. The scanner must report the resulting empty directory as corruption.
+
+### Numbered Slice-3 decisions
+
+These decisions are normative for the shared deterministic core and its diagnostic probes:
+
+1. Fence is a monotonic state transition (`Running -> Draining(deadline) -> Sealed -> Assembling -> Published | Failed`), all transitions occur on the single dispatcher, the only fence check is at event admission before handler dispatch, post-Sealed events are dropped with a non-contract diagnostic count, and drain-deadline expiry is a posted event.
+2. Terminal states are single-assignment. Reassignment throws and fails the session.
+3. Counters increment at ACCEPT time. Finalization performs a pre-publish self-check after NDJSON close and fsync, requiring line count to equal sealed `inference_records_emitted` and pose-present count to equal sealed `pose_detected_records`; any mismatch or earlier write/flush/fsync failure means `Failed` with no publish.
+4. The sealed snapshot is an API: finalization returns sealed counters and the terminal map.
+5. The commit unit is the session directory. Per-attempt staging is `<session_id>.<nonce>.staging` under the same `filesDir` mount as the exports root, and the sequence is fsync stream, reconcile, write+fsync manifest, fsync staging directory, publish, fsync exports root.
+6. The storage port exposes `appendLine`, `flush`, `fsyncFile`, `fsyncDirectory`, and logical `renameNoReplace`. `renameNoReplace` is implemented as check-then-rename; the residual race is documented and accepted because publish is single-process and dispatcher-confined.
+7. An empty directory in the exports root is corruption evidence. The protocol never mkdirs there, rename creates the entry, cleanup cannot delete it, and the scanner reports a directory lacking `manifest.json` rather than skipping it.
+8. Second finalize is a join, not a rerun. Publish executes only inside the single `Assembling -> Published` transition.
+9. Staging is unique per attempt. Any failure permanently abandons that directory after an fsynced abort marker; a staging directory is never re-entered.
+10. Deliberate abort writes an fsynced abort marker with a sanitized reason and sealed counters, so crash residue is classifiable by marker absence.
+11. Staging and exports root are both under `Context.filesDir`; external storage is never used.
+
+### Mandatory Slice-3 RED/GREEN probes
+
+The decisions above and the probes below have separate numbering. Every probe is mandatory evidence:
+
+1. Monotonic fence transitions, the admission-only fence check, post-Sealed diagnostic drops, and posted drain-deadline expiry.
+2. Single-assignment terminal map; attempted reassignment throws and fails the session.
+3. ACCEPT-time counters plus staged-stream line-count and pose-present reconciliation, with mutations of each sealed counter making the probe RED.
+4. Immutable finalization result carrying the sealed counters and terminal map.
+5. Fixed commit order and ordinal fault injection at every operation/boundary across `appendLine`, `flush`, `fsyncFile`, `fsyncDirectory`, and logical `renameNoReplace`.
+6. Exports-root corruption scanning reports an empty directory or any directory missing `manifest.json`.
+7. A second finalize joins the first result and publish executes only once.
+8. Destination collision: a pre-existing non-empty target produces `Failed` and remains untouched; a pre-existing empty target is refused by the existence pre-check; deleting that pre-check makes the empty-target test RED.
+9. Unique staging per attempt and permanent abandonment after any failure.
+10. Deliberate abort writes an fsynced sanitized marker with sealed counters, while marker absence identifies crash residue.
+11. Staging and exports remain under `Context.filesDir`, and a valid zero-frame session publishes.
+
+The five primitives' API shape exists so probes 5 and 8 are writable. The sealed-snapshot API exists so probe 4 is writable. The single-assignment terminal map exists so probe 2 is writable. This boundary is required because a coarse port makes probes 1, 2, and 7 unwritable and pushes the invariant into `androidMain`, which ADR-0004 exists to prevent.
 
 A crash before rename can leave staging residue but cannot create a partially valid export. A startup cleanup operation may identify stale staging entries, but cannot publish or silently delete them. The valid-export reader only scans the committed exports root.
 
