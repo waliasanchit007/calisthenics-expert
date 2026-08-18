@@ -180,3 +180,86 @@ def test_every_committed_fixture_metadata_declares_synthetic_provenance() -> Non
 
     assert metadata_paths
     assert all(_json(path)["synthetic"] is True for path in metadata_paths)
+
+
+def _committed_fixture_metadata_dirs() -> list[Path]:
+    """Every committed positive fixture directory that declares fixture metadata.
+
+    Enumerating rather than naming fixtures is deliberate. The per-fixture tests above cover
+    `session` and `fixture_replay` by name, so a newly added fixture was previously verified by
+    nothing and `make verify` stayed green while its declared hashes went unchecked.
+    """
+    valid_root = repository_root() / "fixtures/synthetic/valid"
+    return sorted(path.parent for path in valid_root.glob("*/fixture_metadata.json"))
+
+
+def test_every_committed_fixture_directory_is_enumerated() -> None:
+    discovered = {path.name for path in _committed_fixture_metadata_dirs()}
+    assert "session" in discovered
+    assert "fixture_replay" in discovered
+    assert "fixture_detection" in discovered
+
+
+def test_every_committed_fixture_metadata_is_schema_valid_and_hash_exact() -> None:
+    directories = _committed_fixture_metadata_dirs()
+    assert directories, "no committed fixture metadata was discovered"
+
+    for directory in directories:
+        metadata_path = directory / "fixture_metadata.json"
+        metadata = _json(metadata_path)
+
+        issues = validate_document(metadata, "fixture_metadata", str(metadata_path))
+        issues.extend(verify_fixture(metadata_path))
+        assert issues == [], f"{directory.name}: {[issue.code for issue in issues]}"
+
+        declared = metadata["frames"]
+        assert declared, f"{directory.name}: fixture declares no frames"
+        for frame in declared:
+            plane = directory / frame["path"]
+            assert plane.is_file(), f"{directory.name}: missing declared plane {frame['path']}"
+            assert sha256_file(plane) == frame["sha256"], (
+                f"{directory.name}: {frame['path']} sha256 does not match the declared value"
+            )
+            assert plane.stat().st_size == frame["byte_length"], (
+                f"{directory.name}: {frame['path']} byte_length does not match the declared value"
+            )
+
+
+def test_no_undeclared_plane_sits_inside_a_committed_fixture() -> None:
+    """A plane is declared either by fixture metadata frames or by a manifest media reference.
+
+    The session fixture declares `media/static_reference.rgb24` through its manifest rather than
+    through fixture metadata, so both declaration sources count.
+    """
+    for directory in _committed_fixture_metadata_dirs():
+        metadata = _json(directory / "fixture_metadata.json")
+        declared = {frame["path"] for frame in metadata["frames"]}
+        manifest_path = directory / "manifest.json"
+        if manifest_path.is_file():
+            manifest = _json(manifest_path)
+            declared.update(
+                reference["path_ref"] for reference in manifest.get("media_references", [])
+            )
+        on_disk = {
+            str(path.relative_to(directory))
+            for path in directory.rglob("*.rgb24")
+            if path.is_file()
+        }
+        assert on_disk <= declared, (
+            f"{directory.name}: undeclared planes present: {sorted(on_disk - declared)}"
+        )
+
+
+def test_detection_fixture_records_its_admission_evidence() -> None:
+    """Checks 5 and 6 may only treat the detection fixture as exercising the pose detector once a
+    run against the pinned model records that it actually fires."""
+    metadata = _json(
+        repository_root() / "fixtures/synthetic/valid/fixture_detection/fixture_metadata.json"
+    )
+    evidence = metadata["detection_evidence"]
+    assert evidence["status"] in {"pending", "confirmed"}
+    if evidence["status"] == "pending":
+        assert evidence["admissible_for_topology_checks"] is False
+        assert evidence["missing_precondition"]
+    assert "not a photograph" in metadata["figure_provenance"]
+    assert metadata["generator"] == "tools/generate_detection_fixture.py"

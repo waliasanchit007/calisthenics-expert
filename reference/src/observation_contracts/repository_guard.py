@@ -38,6 +38,10 @@ _MEDIA_SUFFIXES = {
     ".webm",
 }
 _PRIVATE_KEY_SUFFIXES = {".der", ".key", ".pem", ".p12", ".pfx"}
+# Model binaries are fetched into an ignored cache and pinned by SHA-256 in a tracked provenance
+# manifest, per design section 13. `.gitignore` alone is advisory: it is scoped to one directory
+# and `git add -f` bypasses it entirely. The guard fails closed wherever the blob is placed.
+_MODEL_BINARY_SUFFIXES = {".onnx", ".task", ".tflite"}
 _DOCUMENT_SUFFIXES = {".adoc", ".md", ".rst", ".txt"}
 _POSE_SUFFIXES = {".csv", ".json", ".jsonl", ".ndjson", ".tsv"}
 _KNOWN_SECRET_NAMES = {
@@ -266,7 +270,10 @@ def _staged_symlink_escapes(root: Path, relative_path: str, source: _RepositoryC
 
 
 def _has_prohibited_suffix(relative_path: str) -> bool:
-    return Path(relative_path).suffix.lower() in _MEDIA_SUFFIXES | _PRIVATE_KEY_SUFFIXES
+    return (
+        Path(relative_path).suffix.lower()
+        in _MEDIA_SUFFIXES | _PRIVATE_KEY_SUFFIXES | _MODEL_BINARY_SUFFIXES
+    )
 
 
 def _has_prohibited_filename(relative_path: str) -> bool:

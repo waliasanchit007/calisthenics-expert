@@ -1,0 +1,20 @@
+{
+  "asset_name": "pose_landmarker_full.task",
+  "sha256": "5134a3aad27a58b93da0088d431f366da362b44e3ccfbe3462b3827a839011b1",
+  "byte_count": 9398198,
+  "source_url": "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task",
+  "model_family": "pose_landmarker",
+  "model_variant": "full",
+  "quantization": "float16",
+  "upstream_revision": "1",
+  "tasks_vision_version": "1.0.0",
+  "running_mode": "VIDEO",
+  "delegate": "CPU",
+  "task_options": {
+    "num_poses": 1,
+    "min_pose_detection_confidence": 0.5,
+    "min_pose_presence_confidence": 0.5,
+    "min_tracking_confidence": 0.5,
+    "output_segmentation_masks": false
+  }
+}

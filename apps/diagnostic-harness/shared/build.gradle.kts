@@ -34,6 +34,9 @@ kotlin {
         commonTest.dependencies {
             implementation(libs.kotlin.test)
         }
+        androidMain.dependencies {
+            implementation(libs.mediapipe.tasks.vision)
+        }
         getByName("androidDeviceTest") {
             dependsOn(commonTest.get())
             dependencies {

@@ -510,3 +510,45 @@ def test_staged_mode_ignores_unstaged_untracked_files(tmp_path: Path) -> None:
     _write(root, "not-staged.mp4", b"synthetic video")
 
     assert guard_repository(root, mode="staged") == []
+
+
+def test_rejects_a_tracked_model_binary_anywhere_in_the_tree(tmp_path: Path) -> None:
+    """`.gitignore` is advisory: it is directory-scoped, and `git add -f` bypasses it entirely.
+
+    A model binary is fetched into an ignored cache and pinned by SHA-256 in a tracked provenance
+    manifest, per design section 13, so a tracked blob is a defect wherever it is placed.
+    """
+    for suffix in (".task", ".tflite", ".onnx"):
+        parent = tmp_path / ("repo" + suffix.replace(".", "_"))
+        parent.mkdir()
+        root = _repository(parent)
+        _write(root, f"model-assets/pose_landmarker_full{suffix}", b"\x00" * 2048)
+        _stage(root)
+
+        codes = _codes(root, mode="staged")
+
+        assert (
+            f"model-assets/pose_landmarker_full{suffix}",
+            "REPOSITORY.PROHIBITED_PATH",
+        ) in codes, f"{suffix} was not rejected: {codes}"
+
+
+def test_admits_the_tracked_model_provenance_manifest(tmp_path: Path) -> None:
+    """The provenance manifest is the tracked artefact and must remain admissible.
+
+    It is deliberately not named after the pose model it pins: a `pose_*.json` outside synthetic
+    fixtures trips the raw-pose-dump rule, which is that rule working correctly.
+    """
+    root = _repository(tmp_path)
+    _write(
+        root,
+        "model-assets/model_provenance.json",
+        '{"asset_name": "pose_landmarker_full.task"}\n',
+    )
+    _stage(root)
+
+    prohibited = [
+        entry for entry in _codes(root, mode="staged") if entry[1] == "REPOSITORY.PROHIBITED_PATH"
+    ]
+
+    assert prohibited == []

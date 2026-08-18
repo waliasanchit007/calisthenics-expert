@@ -186,7 +186,15 @@ Generated Kotlin observation artifacts stay in untracked build output and are va
 
 Replay is implemented and accepted before live capture. It consumes a synthetic RGB24 fixture through the released decoded-frame and scale/pad contracts and invokes MediaPipe in VIDEO mode synchronously.
 
-Fixture timestamps are rebased onto the session monotonic clock. The pacer waits until each rebased capture instant and never drops because processing is late; it may fall behind while preserving the submitted sequence. `inference_start_ns` must be at or after the rebased `capture_timestamp_ns`.
+Replay sessions use a **session-relative monotonic time base with `t0 = 0`**. Every session timestamp is expressed against that base: fixture capture timestamps are rebased so the first frame lands on `0`, and every inference clock reading is recorded as `realNow - realSessionStart`. The manifest declares the base honestly (`t0_monotonic_ns: 0`). Live sessions keep the real device base; this definition is replay-only.
+
+Pinning the base is required, not cosmetic. `FRAME.BACKEND_TIMESTAMP_ORDER` enforces `backend_timestamp_ms >= floor(capture_timestamp_ns / 1_000_000)` per record, while this section requires backend timestamps to be identical across runs. Under an arbitrary session start those two requirements are jointly unsatisfiable, because `floor(capture / 10^6)` moves every run while the backend sequence may not. Pinning `t0` resolves it and makes rebased capture reproducible.
+
+The base must be applied to inference readings as well as capture. Rebasing capture to near-zero while leaving `inference_start_ns` as a device-absolute reading would make `FRAME.INFERENCE_TIME_ORDER` (`inference_start >= capture`) vacuously true for every replay export, converting a real constraint — that the pacer actually waited until the rebased instant — into a check that cannot fail.
+
+The pacer waits until each rebased capture instant and never drops because processing is late; it may fall behind while preserving the submitted sequence. `inference_start_ns` must be at or after the rebased `capture_timestamp_ns`.
+
+A fresh `PoseLandmarker` instance is constructed per run. Without this, tracker state carried across runs is the default behaviour rather than a defect to test for, and cross-run topology comparison is contaminated by construction.
 
 “Deterministic replay” means:
 
@@ -197,7 +205,20 @@ Fixture timestamps are rebased onto the session monotonic clock. The pacer waits
 - output topology and cardinality are compared per frame;
 - exact landmark hashes and numeric deltas are reported as observations, not turned into an invented pass threshold.
 
-Session IDs, wall-clock times, rebased monotonic timestamps, and inference latency differ by construction and are excluded from equality. The initial replay delegate is CPU to minimize undeclared device-specific GPU variation. No cross-platform numeric-equivalence claim is made until a functional iOS backend processes the same input sequence.
+Session IDs, wall-clock times, and inference latency differ by construction and are excluded from equality. Rebased capture timestamps are **not** excluded: under the pinned `t0 = 0` base they are reproducible, and asserting them strengthens the determinism evidence. The initial replay delegate is CPU to minimize undeclared device-specific GPU variation. No cross-platform numeric-equivalence claim is made until a functional iOS backend processes the same input sequence.
+
+### Replay fixture tiers
+
+Replay uses two synthetic fixture tiers. Both are committed with golden SHA-256 values per ADR-0002, so cross-run checks compare against an absolute oracle rather than only against each other.
+
+- **Contract tier** (`fixture_replay`, 5x1 RGB24): exercises the pipeline, pacing, validator, and the same-millisecond `prev + 1` collision case. It is retained, not retired.
+- **Detection tier**: model-input-scale frames that actually fire the pose detector, so output topology and landmark observation are exercised at all. A 5x1 plane yields zero poses on every frame, which would make topology equality trivially true and the five-run device gate evidence about an empty pipeline rather than about MediaPipe.
+
+The detection fixture is a **rendered synthetic figure**, never a photograph of a person; its generator and license are recorded in fixture metadata, and it is committed under the repository guard's declared-fixture rules.
+
+Detection is an **admission criterion recorded as evidence**, not a design guarantee. The fixture is admissible for the topology and landmark-observation checks only when the pinned model, Tasks Vision version, and CPU delegate produce `pose_present = true` on every frame, or on a declared subset, and that outcome is recorded in the fixture metadata. If the render does not fire reliably, the render is iterated; the check is not scoped down.
+
+If topology equality ever fails on the device under the pinned CPU delegate, that failure is a material backend-nondeterminism finding to report, not a flaky test to retry.
 
 The Android device gate is at least five complete runs of the same fixture on the S25 Ultra. Every export must validate. Five runs are evidence collection, not an assertion that five proves statistical stability.
 
