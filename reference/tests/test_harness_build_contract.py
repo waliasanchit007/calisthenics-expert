@@ -28,6 +28,7 @@ def test_harness_build_contract() -> None:
     makefile = (ROOT / "Makefile").read_text()
     workflow = (ROOT / ".github" / "workflows" / "verify.yml").read_text()
     adr = (ROOT / "docs" / "adr" / "ADR-0004-kmp-android-first-diagnostic-harness.md").read_text()
+    android_app_build = (HARNESS / "androidApp" / "build.gradle.kts").read_text()
     all_gradle_text = "\n".join(
         path.read_text()
         for path in HARNESS.rglob("*")
@@ -81,6 +82,44 @@ def test_harness_build_contract() -> None:
     assert "not a delivery platform" in adr, (
         "catches ADR drift that could misclassify the JVM test host"
     )
+    assert (
+        'tasks.matching { it.name == "assembleDebug" || it.name == "assembleRelease" }.configureEach {'
+        in android_app_build
+    ), "catches the model-asset gate losing its wiring into the delivery assemble tasks"
+    assert "dependsOn(verifyModelAsset)" in android_app_build, (
+        "catches default delivery assembly no longer requiring the verified model asset"
+    )
+    assert "skipModelAssetVerification" not in android_app_build, (
+        "catches the model-asset gate regaining a caller-controlled property bypass, which a "
+        "direct delivery invocation could tack onto assembleDebug/assembleRelease to skip "
+        "verification"
+    )
+    assert 'tasks.register("assembleDebugForJvmVerification")' in android_app_build, (
+        "catches the JVM/CI host losing its dedicated non-delivery assembly task"
+    )
+    assert (
+        'dependsOn("packageDebug")'
+        in android_app_build.split('tasks.register("assembleDebugForJvmVerification")', 1)[1]
+    ), (
+        "catches the JVM/CI verification task losing its direct dependency on the real packaging "
+        "task, which is what lets it skip verifyModelAsset without going through assembleDebug"
+    )
+    assert (
+        ":androidApp:assembleDebugForJvmVerification"
+        in makefile.split("verify-harness-jvm:", 1)[1].split("\n\n", 1)[0]
+    ), (
+        "catches the JVM/CI verification target reverting to assembleDebug, which would once "
+        "again require the model asset on a host that is not a delivery platform"
+    )
+    for delivery_target in (
+        "verify-harness-android-export-parity:",
+        "verify-harness-s25-process-kill:",
+    ):
+        delivery_block = makefile.split(delivery_target, 1)[1].split("\nverify-", 1)[0]
+        assert "assembleDebugForJvmVerification" not in delivery_block, (
+            f"catches the non-delivery JVM verification task leaking into the device-delivery "
+            f"target {delivery_target.rstrip(':')}"
+        )
 
 
 def test_kotlin_export_contract_is_wired_to_python_authority() -> None:

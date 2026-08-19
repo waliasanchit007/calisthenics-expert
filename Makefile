@@ -25,7 +25,7 @@ fetch-model-asset:
 	$(VENV_PYTHON) tools/fetch_model_asset.py
 
 verify-harness-jvm:
-	cd apps/diagnostic-harness && ./gradlew --no-daemon :shared:jvmTest :androidApp:assembleDebug
+	cd apps/diagnostic-harness && ./gradlew --no-daemon :shared:jvmTest :androidApp:assembleDebugForJvmVerification
 
 verify-harness-ios:
 	cd apps/diagnostic-harness && ./gradlew --no-daemon :shared:linkDebugTestIosArm64 :shared:iosSimulatorArm64Test :composeApp:linkDebugTestIosArm64 :composeApp:iosSimulatorArm64Test :composeApp:linkDebugFrameworkIosArm64 :composeApp:linkDebugFrameworkIosSimulatorArm64
