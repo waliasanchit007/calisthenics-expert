@@ -51,14 +51,14 @@
 - [x] Fixture verification now **enumerates** `valid/*/fixture_metadata.json` rather than naming directories (10 tests; 3 mutations red)
 - [x] Design spec section 7 amended
 
-### Task 2: Model-asset packaging gate
+### Task 2: Model-asset packaging gate — **DELIVERED**
 
 **Pin — these land in ONE commit.** The skip flag and its negative test must never exist apart, even one commit wide: skip-mode leaking into delivery builds is the "zero production callers" pattern wearing a build flag, green in CI while every device build silently lacks its asset.
 
-- [ ] Default assembly **requires** the asset present and SHA-verified, failing at **build** time, not only at session start
-- [ ] Skip is explicit and scoped to the CI/verify variant; never a fallback
-- [ ] Hermetic negative test: default assembly without the asset fails with the expected error, **no network** — prove the gate rejects, do not prove the happy path downloads
-- [ ] Both pins recorded in the build-contract test beside the aggregate-target and JVM-non-delivery pins
+- [x] Default assembly **requires** the asset present and SHA-verified, failing at **build** time, not only at session start
+- [x] Skip is explicit and scoped to the CI/verify variant; never a fallback
+- [x] Hermetic negative test: default assembly without the asset fails with the expected error, **no network** — prove the gate rejects, do not prove the happy path downloads
+- [x] Both pins recorded in the build-contract test beside the aggregate-target and JVM-non-delivery pins
 
 ### Task 3: MediaPipe VIDEO adapter
 
