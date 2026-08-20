@@ -60,13 +60,13 @@
 - [x] Hermetic negative test: default assembly without the asset fails with the expected error, **no network** — prove the gate rejects, do not prove the happy path downloads
 - [x] Both pins recorded in the build-contract test beside the aggregate-target and JVM-non-delivery pins
 
-### Task 3: MediaPipe VIDEO adapter
+### Task 3: MediaPipe VIDEO adapter — **DELIVERED**
 
-- [ ] `androidMain` `InferencePort` over `PoseLandmarker`, VIDEO running mode, synchronous, CPU delegate
-- [ ] Fresh instance per run; pinned options recorded at the construction site
-- [ ] Runtime checksum verification before a session may start; fails closed on mismatch
-- [ ] Every record asserts `image_width`/`image_height` equal the declared model-input dimensions
-- [ ] Backend resize and tracker-derived ROI are backend behaviour: record pinned options, do not assert on them
+- [x] `androidMain` `InferencePort` over `PoseLandmarker`, VIDEO running mode, synchronous, CPU delegate
+- [x] Fresh instance per run; pinned options recorded at the construction site
+- [x] Runtime checksum verification before a session may start; fails closed on mismatch
+- [x] Every record asserts `image_width`/`image_height` equal the declared model-input dimensions
+- [x] Backend resize and tracker-derived ROI are backend behaviour: record pinned options, do not assert on them
 
 ### Task 4: Check 5 and the detection-firing question
 

@@ -105,6 +105,7 @@ class SessionRunner(
     private var diagnosticDropsAfterSeal = 0L
     private var sealedSnapshot: SealedSessionSnapshot? = null
     private var finalizationResult: FinalizationResult? = null
+    private var inferenceDisposed = false
 
     init {
         require(drainTimeoutNs >= 0) { "drain timeout must be non-negative" }
@@ -205,6 +206,24 @@ class SessionRunner(
     }
 
     fun snapshot(): SessionRunnerSnapshot = dispatcher.dispatch { snapshotInternal() }
+
+    /**
+     * Explicit, idempotent abandonment: forces a session that has not already reached a terminal
+     * state (`PUBLISHED` or `FAILED`) into `FAILED`, via the same [failSession] path an unexpected
+     * internal error already uses. This is for a run the caller is giving up on outside the normal
+     * stop/drain/finalize sequence — e.g. tearing down a run whose owned resources must not be
+     * leaked even though it never reached completion. Disposing the owned inference happens once,
+     * from the single [transitionTo] terminal-transition point shared with [finalize]; see
+     * [disposeInferenceIfOwned]. Safe to call repeatedly, including after the session has already
+     * reached `FAILED` on its own, or after it has already `PUBLISHED` (a no-op in that case: a
+     * successfully published session can never be retroactively failed).
+     */
+    fun abandon(): SessionRunnerSnapshot = dispatcher.dispatch {
+        if (lifecycle != SessionLifecycle.PUBLISHED && lifecycle != SessionLifecycle.FAILED) {
+            failSession()
+        }
+        snapshotInternal()
+    }
 
     private fun <T> admit(event: RunnerEvent, handler: () -> T): T? = dispatcher.dispatch {
         if (lifecycle == SessionLifecycle.SEALED || lifecycle == SessionLifecycle.ASSEMBLING ||
@@ -316,6 +335,22 @@ class SessionRunner(
         check(transitionAllowed(lifecycle, next)) { "invalid lifecycle transition $lifecycle -> $next" }
         lifecycle = next
         transitionHistory += next
+        if (next == SessionLifecycle.PUBLISHED || next == SessionLifecycle.FAILED) {
+            disposeInferenceIfOwned()
+        }
+    }
+
+    /**
+     * The single terminal-transition binding point: successful publication and every path into
+     * `FAILED` (an internal error via [failSession], a finalizer failure, or explicit [abandon])
+     * all pass through [transitionTo], so disposal is guaranteed exactly once regardless of which
+     * terminal path a session actually takes. [inference] is disposed only when it implements
+     * [Disposable] — a plain [InferencePort] implementation is completely unaffected.
+     */
+    private fun disposeInferenceIfOwned() {
+        if (inferenceDisposed) return
+        inferenceDisposed = true
+        (inference as? Disposable)?.dispose()
     }
 
     private fun transitionAllowed(current: SessionLifecycle, next: SessionLifecycle): Boolean = when (current) {

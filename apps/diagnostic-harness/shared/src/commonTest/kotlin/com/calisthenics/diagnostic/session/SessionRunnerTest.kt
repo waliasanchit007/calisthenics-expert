@@ -217,10 +217,122 @@ class SessionRunnerTest {
         assertEquals(0, finalizer.invocations)
     }
 
+    // Review finding (Critical, re-review): the returned run owner's Disposable ownership must be
+    // bound to the existing SessionRunner terminal surface — successful publication and every
+    // FAILED transition dispose the owned inference exactly once — and an explicit idempotent
+    // abandonment path must reach FAILED and dispose it too, without affecting non-Disposable ports.
+    @Test
+    fun successfulPublicationDisposesTheOwnedInferenceExactlyOnce() {
+        val scheduler = VirtualDeadlineScheduler()
+        val inference = DisposableRecordingInferencePort()
+        val runner = runnerWith(scheduler, inference, RecordingFinalizer())
+
+        val submission = runner.submit(0, 100, 110, byteArrayOf(1))!!
+        runner.stop(nowNs = 200)
+        inference.complete(submission, InferenceResult.Success(inferenceEndNs = 210, posePresent = false))
+        assertEquals(SessionLifecycle.SEALED, runner.snapshot().lifecycle)
+        assertEquals(0, inference.disposeCalls, "must not dispose before the session actually publishes")
+
+        val result = runner.finalize()
+
+        assertTrue(result is FinalizationResult.Published)
+        assertEquals(SessionLifecycle.PUBLISHED, runner.snapshot().lifecycle)
+        assertEquals(1, inference.disposeCalls)
+
+        // A repeated finalize() call joins the first result (existing behaviour); disposal must
+        // not fire again either.
+        runner.finalize()
+        assertEquals(1, inference.disposeCalls)
+    }
+
+    @Test
+    fun finalizerFailureDisposesTheOwnedInferenceExactlyOnce() {
+        val scheduler = VirtualDeadlineScheduler()
+        val inference = DisposableRecordingInferencePort()
+        val runner = runnerWith(scheduler, inference, RecordingFinalizer(publish = false))
+
+        runner.stop(nowNs = 200)
+        assertEquals(0, inference.disposeCalls)
+
+        val result = runner.finalize()
+
+        assertTrue(result is FinalizationResult.Failed)
+        assertEquals(SessionLifecycle.FAILED, runner.snapshot().lifecycle)
+        assertEquals(1, inference.disposeCalls)
+    }
+
+    @Test
+    fun abandonReachesFailedAndDisposesTheOwnedInferenceExactlyOnce() {
+        val scheduler = VirtualDeadlineScheduler()
+        val inference = DisposableRecordingInferencePort()
+        val runner = runnerWith(scheduler, inference, RecordingFinalizer())
+        runner.submit(0, 100, 110, byteArrayOf(1))
+
+        val snapshot = runner.abandon()
+
+        assertEquals(SessionLifecycle.FAILED, snapshot.lifecycle)
+        assertEquals(SessionLifecycle.FAILED, runner.snapshot().lifecycle)
+        assertEquals(1, inference.disposeCalls)
+
+        // Idempotent: calling abandon() again must neither throw nor dispose a second time.
+        val second = runner.abandon()
+        assertEquals(SessionLifecycle.FAILED, second.lifecycle)
+        assertEquals(1, inference.disposeCalls)
+    }
+
+    @Test
+    fun abandonAfterSuccessfulPublicationIsANoOp() {
+        val scheduler = VirtualDeadlineScheduler()
+        val inference = DisposableRecordingInferencePort()
+        val runner = runnerWith(scheduler, inference, RecordingFinalizer())
+        runner.stop(nowNs = 200)
+        runner.finalize()
+        assertEquals(SessionLifecycle.PUBLISHED, runner.snapshot().lifecycle)
+        assertEquals(1, inference.disposeCalls)
+
+        val snapshot = runner.abandon()
+
+        assertEquals(
+            SessionLifecycle.PUBLISHED,
+            snapshot.lifecycle,
+            "abandon() must never retroactively fail an already-published session",
+        )
+        assertEquals(1, inference.disposeCalls, "abandon() must never re-dispose an already-terminal session")
+    }
+
+    @Test
+    fun nonDisposableInferencePortsAreUnaffectedThroughSuccessFailureAndAbandonment() {
+        // RecordingInferencePort intentionally does not implement Disposable: the terminal-path
+        // binding must be a no-op for it in every case, preserving pre-existing behaviour exactly.
+        val successRunner = runner(VirtualDeadlineScheduler(), RecordingInferencePort(), RecordingFinalizer())
+        successRunner.stop(nowNs = 200)
+        assertTrue(successRunner.finalize() is FinalizationResult.Published)
+
+        val failRunner = runner(VirtualDeadlineScheduler(), RecordingInferencePort(), RecordingFinalizer(publish = false))
+        failRunner.stop(nowNs = 200)
+        assertTrue(failRunner.finalize() is FinalizationResult.Failed)
+
+        val abandonRunner = runner(VirtualDeadlineScheduler(), RecordingInferencePort(), RecordingFinalizer())
+        assertEquals(SessionLifecycle.FAILED, abandonRunner.abandon().lifecycle)
+    }
+
     private fun runner(
         scheduler: VirtualDeadlineScheduler,
         inference: RecordingInferencePort,
         finalizer: RecordingFinalizer,
+    ) = SessionRunner(
+        configuration = SessionConfiguration(TEST_SESSION_ID, TEST_SCHEMA_VERSION, TEST_WIDTH, TEST_HEIGHT),
+        inference = inference,
+        deadlineScheduler = scheduler,
+        drainTimeoutNs = 1_000,
+        finalizer = finalizer,
+        dispatcher = DirectSessionDispatcher,
+    )
+
+    private fun runnerWith(
+        scheduler: DeadlineScheduler,
+        inference: InferencePort,
+        finalizer: SessionFinalizer,
     ) = SessionRunner(
         configuration = SessionConfiguration(TEST_SESSION_ID, TEST_SCHEMA_VERSION, TEST_WIDTH, TEST_HEIGHT),
         inference = inference,
@@ -277,6 +389,33 @@ class SessionRunnerTest {
 
         override fun cancel(submissionIndex: Long) {
             cancelled++
+        }
+
+        fun complete(submissionIndex: Long, result: InferenceResult) {
+            callbacks.getValue(submissionIndex).invoke(result)
+        }
+    }
+
+    /** An [InferencePort] that also owns a disposable resource, mirroring the shape of the real
+     * `androidMain` MediaPipe adapter (`PoseLandmarkerReplayInferencePort`) without depending on it. */
+    private class DisposableRecordingInferencePort : InferencePort, Disposable {
+        private val callbacks = linkedMapOf<Long, (InferenceResult) -> Unit>()
+        var disposeCalls = 0
+            private set
+
+        override fun submit(
+            submissionIndex: Long,
+            canonicalInput: ByteArray,
+            backendTimestampMs: Long,
+            callback: (InferenceResult) -> Unit,
+        ) {
+            callbacks[submissionIndex] = callback
+        }
+
+        override fun cancel(submissionIndex: Long) = Unit
+
+        override fun dispose() {
+            disposeCalls++
         }
 
         fun complete(submissionIndex: Long, result: InferenceResult) {
