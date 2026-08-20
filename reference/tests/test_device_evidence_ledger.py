@@ -44,4 +44,12 @@ def test_s25_five_run_replay_ledger_reports_pending_or_recorded_status() -> None
         )
         assert recorded["satisfies_s25_device_gate"] is True
         assert recorded["environment"]["device_class"] == "physical_device"
-        assert "S25 Ultra" in recorded["environment"]["marketing_name"]
+        # Same authorization rule as isAuthorizedFiveRunGateTarget and
+        # tools/check_five_run_replay.py: model number is authoritative, because retail S25 Ultra
+        # firmware may report ro.config.marketing_name as empty. Asserting marketing name alone
+        # rejected the genuine device.
+        environment = recorded["environment"]
+        assert environment["manufacturer"].lower() == "samsung"
+        assert environment.get("model", "").upper().startswith("SM-S938") or (
+            "S25 Ultra" in environment.get("marketing_name", "")
+        )
