@@ -1,0 +1,111 @@
+{
+  "artifact_schema_version": "1.0.0",
+  "record_kind": "detection_tier_replay_observation",
+  "sanitized": true,
+  "contains_landmark_coordinates": false,
+  "emitted_by": "com.calisthenics.diagnostic.mediapipe.DetectionTierReplayTopologyTest",
+  "environment": {
+    "device_class": "emulator",
+    "device_identity": "Google/sdk_gphone16k_arm64/emu64a16k/sdk_gphone16k_arm64",
+    "device_fingerprint": "google/sdk_gphone16k_arm64/emu64a16k:17/CP31.260623.009/15923651:user/dev-keys",
+    "api_level": 37,
+    "android_release": "17",
+    "abi": "arm64-v8a"
+  },
+  "provenance": {
+    "model_asset_name": "pose_landmarker_full.task",
+    "model_sha256": "5134a3aad27a58b93da0088d431f366da362b44e3ccfbe3462b3827a839011b1",
+    "tasks_vision_version": "1.0.0",
+    "running_mode": "VIDEO",
+    "delegate": "CPU",
+    "num_poses": 1,
+    "model_input_width": 256,
+    "model_input_height": 256
+  },
+  "fixture": {
+    "fixture_id": "b2c3d4e5-6f70-4a81-9b2c-3d4e5f607182",
+    "frame_width": 256,
+    "frame_height": 256,
+    "frame_count": 6,
+    "frame_indices": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "frame_sha256": [
+      "8c7f44df2e490a1b18dc8d56c1e0475ac6a7c79750b0a5d4a28de8b37b7d14c4",
+      "a60eec677d115d92a98df22469ef209a6f9668b2277b125c1ecc6442dfc3d17a",
+      "8e97408735e5083eecc8496e38a8fd12c4b522397158c145e036eb03338bde00",
+      "d4a5f0cf19f5fd35848cf150bfe08f2d794386a2fdbbad80eb88a87d36a8b21f",
+      "cbdd85322a6efcee1cf577585e2ab2e2d555154546485304e4d31a281dcbff06",
+      "a619365459e4c0cc746cb88b1599f5adfa53fa7039294915c430e20dd68fa4f0"
+    ]
+  },
+  "run": {
+    "runs_per_invocation": 3,
+    "fresh_pose_landmarker_per_run": true,
+    "backend_timestamps_ms": [
+      0,
+      33,
+      34,
+      66,
+      100,
+      133
+    ],
+    "canonical_input_sha256": [
+      "8c7f44df2e490a1b18dc8d56c1e0475ac6a7c79750b0a5d4a28de8b37b7d14c4",
+      "a60eec677d115d92a98df22469ef209a6f9668b2277b125c1ecc6442dfc3d17a",
+      "8e97408735e5083eecc8496e38a8fd12c4b522397158c145e036eb03338bde00",
+      "d4a5f0cf19f5fd35848cf150bfe08f2d794386a2fdbbad80eb88a87d36a8b21f",
+      "cbdd85322a6efcee1cf577585e2ab2e2d555154546485304e4d31a281dcbff06",
+      "a619365459e4c0cc746cb88b1599f5adfa53fa7039294915c430e20dd68fa4f0"
+    ]
+  },
+  "topology": {
+    "pose_present_frames": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "pose_count_per_frame": [
+      1,
+      1,
+      1,
+      1,
+      1,
+      1
+    ],
+    "normalized_landmark_count_per_frame": [
+      33,
+      33,
+      33,
+      33,
+      33,
+      33
+    ],
+    "world_landmark_count_per_frame": [
+      33,
+      33,
+      33,
+      33,
+      33,
+      33
+    ],
+    "presence_pattern_fully_populated": true
+  },
+  "landmark_observation_sha256": [
+    "45cfc47f2ea419f4415330744c47a92c5ca7bd449dceddfc6f17afdddea5b3cb",
+    "9d3ed87703394585531896fe7c9b8a2720a2e11f495592bb5b466dc3d9216f5d",
+    "24bd1f8a94d90fb95213108d2c92c2c2fe7542d14e5123cbf18043a0ee3f3c3c",
+    "d5b9dacb9d5a58ee98b389e4162caf8046cfd68d739bdcfc97dd7cbc23be0893",
+    "77b55b40ca0cdb523c403fc6ea3ceffdf030a8792f5a25a34e74a55f4a9f4659",
+    "28a51ce898b6c3bce6db030573a3cc39c6e08d656b80938ab8e2bf6440fe8c6a"
+  ],
+  "satisfies_s25_device_gate": false
+}

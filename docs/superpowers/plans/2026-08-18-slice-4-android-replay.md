@@ -68,14 +68,17 @@
 - [x] Every record asserts `image_width`/`image_height` equal the declared model-input dimensions
 - [x] Backend resize and tracker-derived ROI are backend behaviour: record pinned options, do not assert on them
 
-### Task 4: Check 5 and the detection-firing question
+### Task 4: Check 5 and the detection-firing question — **DELIVERED**
 
-- [ ] Instrumented run of the detection fixture against the pinned model
-- [ ] Record `device_identity`, `api_level`, and `delegate` alongside `detection_evidence`
-- [ ] On reliable firing, flip `detection_evidence.status` to `confirmed` and `admissible_for_topology_checks` to `true`
-- [ ] Check 5: per-frame pose count, landmark count, presence pattern identical across runs, with its mutation red
-- [ ] **If the detector does not fire reliably, iterate the render** — shading gradients, higher contrast, more anatomically plausible silhouette. Never scope checks 5–6 down. `pending` is an honest state; a vacuous green is not.
-- [ ] Emulator and S25 results are **different observations**. A divergence is a finding to record, not a discrepancy to smooth over.
+- [x] Instrumented run of the detection fixture against the pinned model — real `PoseLandmarker.createFromOptions` and `detectForVideo` on `emulator-5554` (`sdk_gphone16k_arm64`, API 37, arm64-v8a), 3 fresh-instance runs per invocation across 5 separate instrumentation processes; `make verify-harness-detection-replay`
+- [x] Record `device_identity`, `api_level`, and `delegate` alongside `detection_evidence` — recorded in `fixture_detection/fixture_metadata.json`, guarded by two new reference tests
+- [x] On reliable firing, flip `detection_evidence.status` to `confirmed` and `admissible_for_topology_checks` to `true` — fired on 6/6 frames, 1 pose, 33 normalized + 33 world landmarks, presence fully populated, per-frame observation digests byte-identical across all runs and processes
+- [x] Check 5: per-frame pose count, landmark count, presence pattern identical across runs, with its mutation red — `DetectionTopology.kt` in `commonMain` (21 host tests), plus the admission and non-vacuity guards; 4 mutations red
+- [x] **If the detector does not fire reliably, iterate the render** — not required: the committed render fired reliably on first execution. The render is unchanged, so the recorded evidence still applies to exactly these pixels; the generator now invalidates recorded evidence automatically if the render ever changes
+- [x] Emulator and S25 results are **different observations** — the recorded observation is labelled `device_class: emulator` with `satisfies_s25_device_gate: false`, and a reference test refuses any emulator entry that claims otherwise. No physical S25 was attached; nothing here contributes to the five-run gate, which stays Task 5's
+- [x] The device wrapper fails closed on a vacuous run — `make verify-harness-detection-replay` takes its verdict from `tools/check_detection_replay_run.py`, which requires the exact `DetectionTierReplayTopologyTest` suite with all three tests passing and exactly one sanitized `ReplayDetectionEvidence` record. A real `OK (0 tests)` run on the emulator exits 0 from `am instrument` and is rejected
+- [x] The `confirmed` admission is bound, not declared — bound to the pinned model SHA-256, the exact Tasks Vision 1.0.0 pin, the committed fixture's frame digests, and a committed sanitized native-run artifact under `docs/evidence/detection-replay/`, by SHA-256 content binding from `fixture_metadata.json`
+- **Defect found by the instrumented run:** the adapter handed MediaPipe a heap-backed image buffer, so *every* frame failed as `backend_call_failed` ("Cannot get direct access to the input buffer"). No host test could have caught it. Fixed by copying each canonical plane into a fresh direct buffer, with a host regression that reads the buffer back through `ByteBufferExtractor`.
 
 ### Task 5: Replay UI, export, and the five-run device gate
 

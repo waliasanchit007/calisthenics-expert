@@ -305,6 +305,45 @@ def test_s25_process_kill_target_accepts_zero_status_with_process_crashed_signal
     )
 
 
+def test_detection_replay_target_delegates_its_verdict_to_the_run_checker() -> None:
+    """The device wrapper must not decide passage by grepping a generic success line.
+
+    `am instrument` exits 0 even when tests fail, so the output is load-bearing — but a `^OK (`
+    match accepts `OK (0 tests)`, accepts a different suite, and accepts a run that emitted no
+    observation. The verdict belongs to the checker's exit status, which is host-tested in
+    `reference/tests/test_detection_replay_evidence.py`.
+    """
+    makefile = (ROOT / "Makefile").read_text()
+    target = makefile.split("verify-harness-detection-replay:", 1)[1].split(
+        "\nverify-harness-s25-process-kill:", 1
+    )[0]
+
+    assert "am instrument -w -r" in target, (
+        "catches the loss of raw instrumentation results, without which the transcript carries no "
+        "per-test class/name/status blocks and the suite cannot be verified at all"
+    )
+    assert "tools/check_detection_replay_run.py" in target, (
+        "catches the device wrapper losing the run checker that requires the exact suite, all "
+        "three of its tests, and the sanitized evidence record"
+    )
+    assert "grep -q '^OK ('" not in target, (
+        "catches the device wrapper reverting to a generic success-line grep, which accepts "
+        "OK (0 tests) and a run of any other suite"
+    )
+    assert target.lstrip().startswith("@set -eu"), (
+        "catches the device wrapper losing errexit, which would let a failing step be stepped over"
+    )
+    checker_line = next(
+        line for line in target.splitlines() if "check_detection_replay_run.py" in line
+    )
+    assert "||" not in checker_line and "; true" not in checker_line, (
+        f"catches the checker's exit status being swallowed on the way to make: {checker_line!r}"
+    )
+    checker = (ROOT / "tools/check_detection_replay_run.py").read_text()
+    assert "verify_instrumented_run" in checker
+    assert "verify_committed_evidence" in checker
+
+
 def test_ios_host_embeds_shared_compose_controller() -> None:
     app = (HARNESS / "iosApp/iosApp/iOSApp.swift").read_text()
     project = (HARNESS / "iosApp/iosApp.xcodeproj/project.pbxproj").read_text()

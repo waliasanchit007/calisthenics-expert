@@ -40,7 +40,7 @@ private val PROVENANCE = ModelProvenance(
  */
 private class StubDetector : PoseLandmarkerVideoDetector {
     override fun detectForVideo(image: MPImage, backendTimestampMs: Long) =
-        PoseLandmarkerDetection(posePresent = false, normalizedLandmarks = null, worldLandmarks = null)
+        PoseLandmarkerDetection(posePresent = false, poseCount = 0, normalizedLandmarks = null, worldLandmarks = null)
 
     override fun close() = Unit
 }

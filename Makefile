@@ -6,7 +6,7 @@ done; printf '%s' python3)
 VENV_PYTHON := .venv/bin/python
 CLI := $(VENV_PYTHON) -m observation_contracts
 
-.PHONY: bootstrap verify verify-harness-jvm verify-harness-ios verify-harness-foundation verify-kotlin-export verify-harness-android-export-parity verify-harness-s25-process-kill fetch-model-asset
+.PHONY: bootstrap verify verify-harness-jvm verify-harness-ios verify-harness-foundation verify-kotlin-export verify-harness-android-export-parity verify-harness-detection-replay verify-harness-s25-process-kill fetch-model-asset
 
 bootstrap:
 	@command -v "$(PYTHON)" >/dev/null 2>&1 || { echo "error: Python interpreter '$(PYTHON)' was not found" >&2; exit 1; }
@@ -43,6 +43,53 @@ verify-harness-android-export-parity:
 		exit 1; \
 	fi; \
 	cd apps/diagnostic-harness && ./gradlew --no-daemon :shared:generateSyntheticExport :androidApp:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.calisthenics.diagnostic.composition.InstallableCompositionExportParityTest
+
+# Device-gated: the detection-tier instrumented replay run (design spec §7, check 5 and the
+# fixture's admission criterion). This is the only place `PoseLandmarker.createFromOptions` and
+# `detectForVideo` actually execute, so it is the only thing that can show the pinned model fires on
+# the synthetic render and that output topology repeats across runs.
+#
+# An emulator IS an authorized target here, unlike verify-harness-s25-process-kill. That target's
+# refusal of emulators belongs to the five-run S25 gate; this observation answers a different
+# question — whether the render fires the detector at all — and design §7 treats the two as separate
+# observations rather than substitutes. The observed device class, model, and API level are printed
+# precisely so recorded evidence can never be transcribed against the wrong device.
+#
+# `am instrument` reports test failure in its output while still exiting 0, so the transcript is
+# the load-bearing signal — but reading it for an "OK (" line is not a check. `OK (0 tests)` is
+# exactly what a mistyped class name produces, a run of some unrelated suite prints the same line,
+# and neither says anything was observed. The verdict is therefore delegated to
+# tools/check_detection_replay_run.py and taken from its exit status: it requires the exact
+# DetectionTierReplayTopologyTest suite with all three of its tests passing, exactly one sanitized
+# ReplayDetectionEvidence record emitted by that run, and that record bound to the pinned model
+# SHA-256, the pinned Tasks Vision version, and the committed fixture's frame digests. Its
+# regressions are hermetic and host-side, in reference/tests/test_detection_replay_evidence.py.
+#
+# The device-test APK carries the SHA-verified model asset and the committed fixture planes, staged
+# by :shared:stageDeviceTestReplayResources, which fails closed if the asset was never fetched.
+verify-harness-detection-replay:
+	@set -eu; \
+	device_count=$$(adb devices -l | tail -n +2 | grep -c 'device product:' || true); \
+	if [ "$$device_count" -ne 1 ]; then \
+		echo "error: verify-harness-detection-replay requires exactly one authorized attached device, found $$device_count" >&2; \
+		exit 1; \
+	fi; \
+	serial=$$(adb devices -l | tail -n +2 | grep 'device product:' | awk '{print $$1}'); \
+	printf 'detection-tier replay target: serial=%s model=%s api=%s abi=%s\n' \
+		"$$serial" \
+		"$$(adb -s "$$serial" shell getprop ro.product.model | tr -d '\r')" \
+		"$$(adb -s "$$serial" shell getprop ro.build.version.sdk | tr -d '\r')" \
+		"$$(adb -s "$$serial" shell getprop ro.product.cpu.abi | tr -d '\r')"; \
+	case "$$serial" in \
+		emulator-*) echo "note: emulator observation; this does NOT satisfy the five-run S25 Ultra device gate" ;; \
+	esac; \
+	cd apps/diagnostic-harness && ./gradlew --no-daemon :shared:assembleAndroidDeviceTest; \
+	adb -s "$$serial" install -r -t shared/build/outputs/apk/androidTest/shared-androidTest.apk; \
+	transcript=$$(mktemp); \
+	trap 'rm -f "$$transcript"' EXIT INT TERM; \
+	adb -s "$$serial" shell am instrument -w -r -e class com.calisthenics.diagnostic.mediapipe.DetectionTierReplayTopologyTest com.calisthenics.diagnostic.shared.test/androidx.test.runner.AndroidJUnitRunner >"$$transcript" 2>&1; \
+	cat "$$transcript"; \
+	cd ../.. && $(VENV_PYTHON) tools/check_detection_replay_run.py "$$transcript"
 
 # Device-gated per design spec §9.2: requires exactly one authorized physical Samsung Galaxy S25
 # Ultra target, never a generic emulator, and never mutates the pending/recorded ledger itself —

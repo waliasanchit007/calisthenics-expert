@@ -39,8 +39,18 @@ class PoseLandmarkerReplayInferencePort(
                 "dimensions ${modelInputWidth}x$modelInputHeight (expected $expectedLength bytes)"
         }
 
+        // MediaPipe's native bridge cannot address a heap-backed buffer: `detectForVideo` fails
+        // with "Cannot get direct access to the input buffer. It should be created using
+        // allocateDirect", the same constraint `BaseOptions.setModelAssetBuffer` imposes on the
+        // model bytes. The canonical plane is therefore copied into a fresh direct buffer per
+        // submission — fresh, not pooled, so no frame can be handed a buffer another frame still
+        // owns, which is exactly the "buffer reuse" vacuity check 2 exists to catch.
+        val directInput = ByteBuffer.allocateDirect(canonicalInput.size)
+            .put(canonicalInput)
+            .also { it.flip() }
+
         val image: MPImage = ByteBufferImageBuilder(
-            ByteBuffer.wrap(canonicalInput),
+            directInput,
             modelInputWidth,
             modelInputHeight,
             MPImage.IMAGE_FORMAT_RGB,

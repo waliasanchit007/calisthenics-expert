@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from observation_contracts.detection_evidence import verify_committed_evidence
 from observation_contracts.fixture_integrity import (
     discover_negative_fixtures,
     run_declared_validation,
@@ -250,12 +251,16 @@ def test_no_undeclared_plane_sits_inside_a_committed_fixture() -> None:
         )
 
 
+def _detection_fixture_metadata() -> dict[str, Any]:
+    return _json(
+        repository_root() / "fixtures/synthetic/valid/fixture_detection/fixture_metadata.json"
+    )
+
+
 def test_detection_fixture_records_its_admission_evidence() -> None:
     """Checks 5 and 6 may only treat the detection fixture as exercising the pose detector once a
     run against the pinned model records that it actually fires."""
-    metadata = _json(
-        repository_root() / "fixtures/synthetic/valid/fixture_detection/fixture_metadata.json"
-    )
+    metadata = _detection_fixture_metadata()
     evidence = metadata["detection_evidence"]
     assert evidence["status"] in {"pending", "confirmed"}
     if evidence["status"] == "pending":
@@ -263,3 +268,87 @@ def test_detection_fixture_records_its_admission_evidence() -> None:
         assert evidence["missing_precondition"]
     assert "not a photograph" in metadata["figure_provenance"]
     assert metadata["generator"] == "tools/generate_detection_fixture.py"
+
+
+def test_a_confirmed_detection_fixture_carries_the_run_that_confirmed_it() -> None:
+    """`confirmed` is a claim about a real run, so the run has to be recorded.
+
+    Design section 7 admits the fixture only when the pinned model, Tasks Vision version, and CPU
+    delegate produce a pose on every frame. Flipping the status without the observation behind it
+    would make admission a declaration rather than evidence.
+    """
+    metadata = _detection_fixture_metadata()
+    evidence = metadata["detection_evidence"]
+    if evidence["status"] != "confirmed":
+        return
+
+    declared_indexes = [frame["frame_index"] for frame in metadata["frames"]]
+    assert evidence["admissible_for_topology_checks"] is True
+    assert evidence["confirmed_by"]
+    observations = evidence["observations"]
+    assert observations, "a confirmed status needs at least one recorded observation"
+
+    for observation in observations:
+        assert observation["device_class"] in {"emulator", "physical_device"}
+        assert observation["device_identity"]
+        assert observation["device_fingerprint"]
+        assert isinstance(observation["api_level"], int)
+        assert observation["api_level"] >= 1
+        assert observation["delegate"] == "CPU"
+        assert observation["running_mode"] == "VIDEO"
+        assert observation["tasks_vision_version"]
+        assert observation["model_sha256"]
+        assert observation["runs_per_invocation"] >= 2, (
+            "cross-run topology equality needs at least two runs"
+        )
+        assert observation["instrumentation_invocations"] >= 1
+        assert (
+            observation["total_fresh_pose_landmarker_runs"]
+            == observation["runs_per_invocation"] * observation["instrumentation_invocations"]
+        )
+
+        # Detection actually fired, on every declared frame, with a pose behind every flag.
+        assert observation["pose_present_frames"] == declared_indexes
+        assert observation["pose_count_per_frame"] == [1] * len(declared_indexes)
+        assert all(count >= 1 for count in observation["normalized_landmark_count_per_frame"])
+        assert all(count >= 1 for count in observation["world_landmark_count_per_frame"])
+        assert observation["presence_pattern_fully_populated"] is True
+
+        # Not vacuous: a full-cardinality all-zero output, or one frozen result repeated on every
+        # frame, would satisfy every cardinality claim above while observing nothing.
+        digests = observation["landmark_observation_sha256"]
+        assert len(digests) == len(declared_indexes)
+        assert len(set(digests)) == len(digests)
+
+
+def test_emulator_detection_evidence_is_never_recorded_as_the_s25_device_gate() -> None:
+    """The emulator is never an S25 substitute (design section 7 / plan global constraints).
+
+    The two are different observations, so an emulator entry must say so in the artifact rather
+    than relying on a reader to remember which device produced it.
+    """
+    evidence = _detection_fixture_metadata()["detection_evidence"]
+    for observation in evidence.get("observations", []):
+        if observation["device_class"] == "emulator":
+            assert observation["satisfies_s25_device_gate"] is False
+            assert "S25" in observation["note"]
+
+
+def test_a_confirmed_detection_fixture_is_bound_to_the_pinned_inputs_and_its_native_run() -> None:
+    """The `confirmed` status must be bound, not merely well-formed.
+
+    The two guards above check that the recorded observation is internally coherent. They cannot
+    tell whether it describes *this* repository: a confirmed entry survives them with a different
+    model SHA-256, a different Tasks Vision pin, a different render, and no run artifact at all.
+    The binding lives in `observation_contracts.detection_evidence` and is exercised mutation by
+    mutation in `reference/tests/test_detection_replay_evidence.py`; here it runs against the
+    committed state.
+    """
+    verified = verify_committed_evidence(repository_root())
+    evidence = _detection_fixture_metadata()["detection_evidence"]
+    if evidence["status"] != "confirmed":
+        assert verified == []
+        return
+    assert len(verified) == len(evidence["observations"]), (
+        "every confirmed observation must be bound to a committed native-run artifact"
+    )

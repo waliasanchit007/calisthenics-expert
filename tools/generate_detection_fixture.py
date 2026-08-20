@@ -29,6 +29,12 @@ EYE = (32, 30, 30)
 # `prev + 1` collision branch at detection scale, mirroring the contract-tier fixture.
 TIMESTAMPS_NS = [0, 33_333_333, 33_333_500, 66_666_666, 100_000_000, 133_333_333]
 
+PENDING_EVIDENCE: dict[str, object] = {
+    "status": "pending",
+    "missing_precondition": "not yet executed against the pinned model on a device",
+    "admissible_for_topology_checks": False,
+}
+
 
 def _capsule(
     px: float, py: float, ax: float, ay: float, bx: float, by: float, radius: float
@@ -108,6 +114,43 @@ def render(frame_index: int) -> bytes:
     return bytes(pixels)
 
 
+def detection_evidence_for(
+    metadata_path: Path, rendered_frames: list[dict[str, object]]
+) -> dict[str, object]:
+    """Return the `detection_evidence` block this generation should write.
+
+    Detection admission is evidence about a real run against real pixels, and this renderer knows
+    nothing about either — so it must neither invent the evidence nor silently discard it. Recorded
+    evidence is carried forward only while every rendered plane still hashes to the value the
+    recorded run saw. If the render is iterated, the evidence stops applying to it and the block
+    returns to `pending`: a confirmed status attached to pixels no device ever ran is worse than no
+    status at all.
+    """
+    if not metadata_path.is_file():
+        return dict(PENDING_EVIDENCE)
+
+    existing = json.loads(metadata_path.read_text(encoding="utf-8"))
+    recorded = existing.get("detection_evidence")
+    if not isinstance(recorded, dict):
+        return dict(PENDING_EVIDENCE)
+
+    previous = [
+        (frame.get("frame_index"), frame.get("sha256"))
+        for frame in existing.get("frames", [])
+    ]
+    current = [(frame["frame_index"], frame["sha256"]) for frame in rendered_frames]
+    if previous != current:
+        return {
+            "status": "pending",
+            "missing_precondition": (
+                "the render changed since detection evidence was recorded; rerun the instrumented "
+                "detection run against these planes"
+            ),
+            "admissible_for_topology_checks": False,
+        }
+    return recorded
+
+
 def main() -> None:
     root = Path(__file__).resolve().parents[1]
     fixture = root / "fixtures" / "synthetic" / "valid" / "fixture_detection"
@@ -145,11 +188,9 @@ def main() -> None:
         "generator": "tools/generate_detection_fixture.py",
         "generator_license": "same as repository",
         "figure_provenance": "rendered from geometric primitives; not a photograph of a person",
-        "detection_evidence": {
-            "status": "pending",
-            "missing_precondition": "not yet executed against the pinned model on a device",
-            "admissible_for_topology_checks": False,
-        },
+        "detection_evidence": detection_evidence_for(
+            fixture / "fixture_metadata.json", frames
+        ),
         "frames": frames,
     }
     (fixture / "fixture_metadata.json").write_text(
