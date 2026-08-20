@@ -15,7 +15,12 @@ import kotlin.test.assertTrue
  */
 class FiveRunReplayEvidenceTest {
 
-    private fun environment(deviceClass: String = "physical_device", marketingName: String = "Galaxy S25 Ultra") =
+    private fun environment(
+        deviceClass: String = "physical_device",
+        marketingName: String = "Galaxy S25 Ultra",
+        model: String = "SM-S938B",
+        manufacturer: String = "samsung",
+    ) =
         FiveRunReplayEnvironment(
             deviceClass = deviceClass,
             deviceIdentity = "samsung/e3q/e3q/e3q",
@@ -23,7 +28,8 @@ class FiveRunReplayEvidenceTest {
             apiLevel = 36,
             androidRelease = "16",
             abi = "arm64-v8a",
-            manufacturer = "samsung",
+            manufacturer = manufacturer,
+            model = model,
             marketingName = marketingName,
         )
 
@@ -112,7 +118,11 @@ class FiveRunReplayEvidenceTest {
 
     @Test
     fun aPhysicalDeviceThatIsNotAnS25UltraNeverSatisfiesTheGate() {
-        val rendered = renderFiveRunReplayEvidence(evidence(environment = environment(marketingName = "Galaxy A15")))
+        // Both identifiers must say "not an S25 Ultra": authorization accepts either the model
+        // family or the marketing name, so a contradictory environment is not this test's subject.
+        val rendered = renderFiveRunReplayEvidence(
+            evidence(environment = environment(marketingName = "Galaxy A15", model = "SM-A156B")),
+        )
         assertTrue(rendered.contains(""""satisfies_s25_device_gate":false"""))
     }
 
@@ -261,5 +271,56 @@ class FiveRunReplayEvidenceTest {
     @Test
     fun refusesToRenderZeroRuns() {
         assertFailsWith<IllegalArgumentException> { renderFiveRunReplayEvidence(evidence(runs = emptyList())) }
+    }
+
+    @Test
+    fun authorizesTheS25UltraByModelWhenMarketingNameIsAbsent() {
+        // Retail S25 Ultra firmware may report ro.config.marketing_name as empty. A
+        // marketing-name-only rule rejected the very hardware this gate exists to authorize.
+        assertTrue(
+            isAuthorizedFiveRunGateTarget(environment(marketingName = "", model = "SM-S938B")),
+        )
+    }
+
+    @Test
+    fun authorizesEveryS25UltraRegionalModel() {
+        for (model in listOf("SM-S938B", "SM-S938U", "SM-S938N", "SM-S938W", "sm-s938b")) {
+            assertTrue(
+                isAuthorizedFiveRunGateTarget(environment(marketingName = "", model = model)),
+                "expected $model to be authorized",
+            )
+        }
+    }
+
+    @Test
+    fun stillAuthorizesOnMarketingNameWhenTheModelIsUnrecognized() {
+        assertTrue(
+            isAuthorizedFiveRunGateTarget(environment(marketingName = "Galaxy S25 Ultra", model = "")),
+        )
+    }
+
+    @Test
+    fun rejectsAnEmulatorRegardlessOfModelOrMarketingName() {
+        assertFalse(
+            isAuthorizedFiveRunGateTarget(
+                environment(deviceClass = "emulator", marketingName = "Galaxy S25 Ultra", model = "SM-S938B"),
+            ),
+        )
+    }
+
+    @Test
+    fun rejectsAnotherSamsungPhysicalDevice() {
+        assertFalse(
+            isAuthorizedFiveRunGateTarget(environment(marketingName = "", model = "SM-S931B")),
+        )
+    }
+
+    @Test
+    fun rejectsANonSamsungDeviceEvenWhenTheModelPrefixMatches() {
+        assertFalse(
+            isAuthorizedFiveRunGateTarget(
+                environment(marketingName = "", model = "SM-S938B", manufacturer = "notsamsung"),
+            ),
+        )
     }
 }

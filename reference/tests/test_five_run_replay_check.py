@@ -69,12 +69,22 @@ def _run(
 
 
 def _record(
-    *, device_class="physical_device", marketing_name="Galaxy S25 Ultra", runs=None
+    *,
+    device_class="physical_device",
+    marketing_name="Galaxy S25 Ultra",
+    model="SM-S938B",
+    manufacturer="samsung",
+    runs=None,
 ) -> dict:
     return {
         "runs_completed": 5,
         "runs": runs if runs is not None else [_run(i) for i in range(1, 6)],
-        "environment": {"device_class": device_class, "marketing_name": marketing_name},
+        "environment": {
+            "device_class": device_class,
+            "manufacturer": manufacturer,
+            "model": model,
+            "marketing_name": marketing_name,
+        },
     }
 
 
@@ -116,7 +126,7 @@ def test_satisfies_gate_is_false_for_an_emulator() -> None:
 
 
 def test_satisfies_gate_is_false_for_a_non_s25_physical_device() -> None:
-    assert satisfies_gate(_record(marketing_name="Galaxy A15")) is False
+    assert satisfies_gate(_record(marketing_name="Galaxy A15", model="SM-A156B")) is False
 
 
 def test_satisfies_gate_is_false_when_a_run_is_not_published() -> None:
@@ -204,3 +214,41 @@ def test_extract_record_rejects_a_record_whose_runs_carry_no_pose_observation() 
         del run["pose_detected_records"]
     with pytest.raises(FiveRunReplayCheckError):
         extract_record(_transcript(json.dumps(_record(runs=runs))))
+
+
+def test_authorizes_the_s25_ultra_by_model_when_marketing_name_is_absent() -> None:
+    """Retail S25 Ultra firmware may report ro.config.marketing_name as empty.
+
+    A marketing-name-only rule rejected the very hardware this gate exists to authorize.
+    Mirrors isAuthorizedFiveRunGateTarget in FiveRunReplayEvidence.kt.
+    """
+    assert satisfies_gate(_record(marketing_name="", model="SM-S938B")) is True
+
+
+def test_authorizes_every_s25_ultra_regional_model() -> None:
+    for model in ("SM-S938B", "SM-S938U", "SM-S938N", "SM-S938W", "sm-s938b"):
+        assert satisfies_gate(_record(marketing_name="", model=model)) is True, model
+
+
+def test_still_authorizes_on_marketing_name_when_the_model_is_unrecognized() -> None:
+    assert satisfies_gate(_record(marketing_name="Galaxy S25 Ultra", model="")) is True
+
+
+def test_rejects_an_emulator_regardless_of_model_or_marketing_name() -> None:
+    assert (
+        satisfies_gate(
+            _record(device_class="emulator", marketing_name="Galaxy S25 Ultra", model="SM-S938B")
+        )
+        is False
+    )
+
+
+def test_rejects_another_samsung_physical_device() -> None:
+    assert satisfies_gate(_record(marketing_name="", model="SM-S931B")) is False
+
+
+def test_rejects_a_non_samsung_device_even_when_the_model_prefix_matches() -> None:
+    assert (
+        satisfies_gate(_record(marketing_name="", model="SM-S938B", manufacturer="notsamsung"))
+        is False
+    )

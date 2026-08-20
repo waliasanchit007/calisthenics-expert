@@ -31,9 +31,32 @@ import sys
 import tempfile
 from pathlib import Path
 
-_RECORD_PATTERN = re.compile(r"INSTRUMENTATION_STATUS: FiveRunReplayEvidence=(?P<json>\{.*\})")
-_SUITE_MARKER = "class=com.calisthenics.diagnostic.composition.FiveRunReplayDeviceGateTest"
+_RECORD_PATTERN = re.compile(
+    r"INSTRUMENTATION_STATUS: FiveRunReplayEvidence=(?P<json>\{.*\})"
+)
+_SUITE_MARKER = (
+    "class=com.calisthenics.diagnostic.composition.FiveRunReplayDeviceGateTest"
+)
 _S25_MARKER = "S25 Ultra"
+# Model number is the authoritative identifier. Retail S25 Ultra firmware does not necessarily
+# populate ro.config.marketing_name, so a marketing-name-only rule rejects the very hardware this
+# gate exists to authorize. Mirrors isAuthorizedFiveRunGateTarget in FiveRunReplayEvidence.kt.
+_S25_MODEL_PREFIX = "SM-S938"
+_AUTHORIZED_MANUFACTURER = "samsung"
+
+
+def is_authorized_five_run_gate_target(environment: dict) -> bool:
+    """Whether the observing device is the one authorized physical five-run gate target."""
+    if environment["device_class"] != "physical_device":
+        return False
+    if environment.get("manufacturer", "").lower() != _AUTHORIZED_MANUFACTURER:
+        return False
+    model = environment.get("model", "")
+    return model.upper().startswith(
+        _S25_MODEL_PREFIX
+    ) or _S25_MARKER in environment.get("marketing_name", "")
+
+
 _EXPECTED_RUN_COUNT = 5
 _REQUIRED_RUN_FIELDS = (
     "submitted_indices",
@@ -58,7 +81,7 @@ def require_exact_suite(transcript: str) -> None:
         )
     if not re.search(r"^OK \(1 test\)$", transcript, re.MULTILINE):
         raise FiveRunReplayCheckError(
-            "transcript does not report exactly one passing test (\"OK (1 test)\"); "
+            'transcript does not report exactly one passing test ("OK (1 test)"); '
             "a failing or vacuous run is not evidence"
         )
 
@@ -66,11 +89,15 @@ def require_exact_suite(transcript: str) -> None:
 def extract_record(transcript: str) -> dict:
     matches = _RECORD_PATTERN.findall(transcript)
     if len(matches) != 1:
-        raise FiveRunReplayCheckError(f"expected exactly one FiveRunReplayEvidence record, found {len(matches)}")
+        raise FiveRunReplayCheckError(
+            f"expected exactly one FiveRunReplayEvidence record, found {len(matches)}"
+        )
     record = json.loads(matches[0])
     runs = record.get("runs")
     if not isinstance(runs, list) or len(runs) != _EXPECTED_RUN_COUNT:
-        raise FiveRunReplayCheckError(f"expected exactly {_EXPECTED_RUN_COUNT} runs, found {runs!r}")
+        raise FiveRunReplayCheckError(
+            f"expected exactly {_EXPECTED_RUN_COUNT} runs, found {runs!r}"
+        )
     for run in runs:
         missing = [field for field in _REQUIRED_RUN_FIELDS if field not in run]
         if missing:
@@ -81,9 +108,20 @@ def extract_record(transcript: str) -> dict:
     return record
 
 
-def _pull(serial: str, package: str, export_path: str, filename: str, destination: Path) -> None:
+def _pull(
+    serial: str, package: str, export_path: str, filename: str, destination: Path
+) -> None:
     result = subprocess.run(
-        ["adb", "-s", serial, "shell", "run-as", package, "cat", f"{export_path}/{filename}"],
+        [
+            "adb",
+            "-s",
+            serial,
+            "shell",
+            "run-as",
+            package,
+            "cat",
+            f"{export_path}/{filename}",
+        ],
         capture_output=True,
         check=False,
     )
@@ -94,7 +132,9 @@ def _pull(serial: str, package: str, export_path: str, filename: str, destinatio
     destination.write_bytes(result.stdout)
 
 
-def _validate_one_run(serial: str, package: str, session_id: str, exports_root: str) -> None:
+def _validate_one_run(
+    serial: str, package: str, session_id: str, exports_root: str
+) -> None:
     export_path = f"{exports_root}/{session_id}"
     with tempfile.TemporaryDirectory() as tmp:
         manifest_path = Path(tmp) / "manifest.json"
@@ -103,7 +143,14 @@ def _validate_one_run(serial: str, package: str, session_id: str, exports_root: 
         _pull(serial, package, export_path, "frames.ndjson", frames_path)
 
         validation = subprocess.run(
-            [sys.executable, "-m", "observation_contracts", "validate-session", str(manifest_path), str(frames_path)],
+            [
+                sys.executable,
+                "-m",
+                "observation_contracts",
+                "validate-session",
+                str(manifest_path),
+                str(frames_path),
+            ],
             capture_output=True,
             check=False,
         )
@@ -127,7 +174,9 @@ def detection_is_non_vacuous(run: dict) -> bool:
     world = run.get("world_landmark_count_per_frame")
     detected = run.get("pose_detected_records")
     submitted = run.get("submitted_indices")
-    if not all(isinstance(value, list) for value in (present, normalized, world, submitted)):
+    if not all(
+        isinstance(value, list) for value in (present, normalized, world, submitted)
+    ):
         return False
     if isinstance(detected, bool) or not isinstance(detected, int):
         return False
@@ -161,8 +210,10 @@ def satisfies_gate(record: dict) -> bool:
         for run in runs
     )
     all_detected = all(detection_is_non_vacuous(run) for run in runs)
-    all_published_and_validated = all(run["published"] and run["validated_by_reference_cli"] for run in runs)
-    is_authorized_s25 = environment["device_class"] == "physical_device" and _S25_MARKER in environment["marketing_name"]
+    all_published_and_validated = all(
+        run["published"] and run["validated_by_reference_cli"] for run in runs
+    )
+    is_authorized_s25 = is_authorized_five_run_gate_target(environment)
     return (
         record["runs_completed"] == _EXPECTED_RUN_COUNT
         and all_consistent
@@ -174,24 +225,38 @@ def satisfies_gate(record: dict) -> bool:
 
 def main(argv: list[str]) -> int:
     if len(argv) != 4:
-        print(f"usage: {Path(argv[0]).name} <serial> <package> <transcript-file>", file=sys.stderr)
+        print(
+            f"usage: {Path(argv[0]).name} <serial> <package> <transcript-file>",
+            file=sys.stderr,
+        )
         return 2
 
     serial, package, transcript_arg = argv[1], argv[2], argv[3]
-    transcript = sys.stdin.read() if transcript_arg == "-" else Path(transcript_arg).read_text(encoding="utf-8")
+    transcript = (
+        sys.stdin.read()
+        if transcript_arg == "-"
+        else Path(transcript_arg).read_text(encoding="utf-8")
+    )
 
     try:
         require_exact_suite(transcript)
         record = extract_record(transcript)
 
+        # Constructed here rather than echoed back from the device. `adb shell` joins its
+        # arguments into one remote command string, so `sh -c "echo X"` arrives as
+        # `sh -c echo X`: the script becomes `echo` and X becomes `$0`, printing an empty
+        # line and failing this resolution on every physical device. The path is a constant,
+        # so there is nothing to ask the device for.
+        exports_root = f"/data/user/0/{package}/files/diagnostic-harness/exports"
         result = subprocess.run(
-            ["adb", "-s", serial, "shell", "run-as", package, "sh", "-c", "echo -n /data/user/0/$0/files/diagnostic-harness/exports", package],
+            ["adb", "-s", serial, "shell", "run-as", package, "ls", exports_root],
             capture_output=True,
             check=False,
         )
-        exports_root = result.stdout.decode().strip()
-        if result.returncode != 0 or not exports_root:
-            raise FiveRunReplayCheckError("failed to resolve the on-device exports root via run-as")
+        if result.returncode != 0 or not result.stdout.decode().strip():
+            raise FiveRunReplayCheckError(
+                f"failed to list the on-device exports root via run-as: {exports_root}"
+            )
 
         for run in record["runs"]:
             _validate_one_run(serial, package, run["session_id"], exports_root)
@@ -202,11 +267,15 @@ def main(argv: list[str]) -> int:
         print(f"error: {error}", file=sys.stderr)
         return 1
 
-    print("five-run replay verified: all five exports validated by the Python reference CLI")
-    print(f"  satisfies_s25_device_gate={str(record['satisfies_s25_device_gate']).lower()}")
+    print(
+        "five-run replay verified: all five exports validated by the Python reference CLI"
+    )
+    print(
+        f"  satisfies_s25_device_gate={str(record['satisfies_s25_device_gate']).lower()}"
+    )
     print(
         "human step required: copy the record below into docs/evidence/replay-five-run/, "
-        "then set the ledger's status to \"recorded\" pointing at it"
+        'then set the ledger\'s status to "recorded" pointing at it'
     )
     print(json.dumps(record, sort_keys=True))
     return 0

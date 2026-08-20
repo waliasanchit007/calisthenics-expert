@@ -58,7 +58,7 @@ verify-harness-foundation:
 
 verify-harness-android-export-parity:
 	@set -eu; \
-	device_count=$$(adb devices -l | tail -n +2 | grep -c 'device product:' || true); \
+	device_count=$$(adb devices -l | tail -n +2 | awk '$$2=="device"' | wc -l | tr -d ' '); \
 	if [ "$$device_count" -ne 1 ]; then \
 		echo "error: verify-harness-android-export-parity requires exactly one authorized attached device, found $$device_count" >&2; \
 		exit 1; \
@@ -90,12 +90,12 @@ verify-harness-android-export-parity:
 # by :shared:stageDeviceTestReplayResources, which fails closed if the asset was never fetched.
 verify-harness-detection-replay:
 	@set -eu; \
-	device_count=$$(adb devices -l | tail -n +2 | grep -c 'device product:' || true); \
+	device_count=$$(adb devices -l | tail -n +2 | awk '$$2=="device"' | wc -l | tr -d ' '); \
 	if [ "$$device_count" -ne 1 ]; then \
 		echo "error: verify-harness-detection-replay requires exactly one authorized attached device, found $$device_count" >&2; \
 		exit 1; \
 	fi; \
-	serial=$$(adb devices -l | tail -n +2 | grep 'device product:' | awk '{print $$1}'); \
+	serial=$$(adb devices -l | tail -n +2 | awk '$$2=="device" {print $$1}'); \
 	printf 'detection-tier replay target: serial=%s model=%s api=%s abi=%s\n' \
 		"$$serial" \
 		"$$(adb -s "$$serial" shell getprop ro.product.model | tr -d '\r')" \
@@ -120,12 +120,12 @@ verify-harness-detection-replay:
 # `adb shell run-as` (a debug build) and validates it on the host.
 verify-harness-replay-export:
 	@set -eu; \
-	device_count=$$(adb devices -l | tail -n +2 | grep -c 'device product:' || true); \
+	device_count=$$(adb devices -l | tail -n +2 | awk '$$2=="device"' | wc -l | tr -d ' '); \
 	if [ "$$device_count" -ne 1 ]; then \
 		echo "error: verify-harness-replay-export requires exactly one authorized attached device, found $$device_count" >&2; \
 		exit 1; \
 	fi; \
-	serial=$$(adb devices -l | tail -n +2 | grep 'device product:' | awk '{print $$1}'); \
+	serial=$$(adb devices -l | tail -n +2 | awk '$$2=="device" {print $$1}'); \
 	cd apps/diagnostic-harness && ./gradlew --no-daemon :androidApp:assembleDebug :androidApp:assembleDebugAndroidTest; \
 	adb -s "$$serial" install -r androidApp/build/outputs/apk/debug/androidApp-debug.apk; \
 	adb -s "$$serial" install -r androidApp/build/outputs/apk/androidTest/debug/androidApp-debug-androidTest.apk; \
@@ -144,12 +144,12 @@ verify-harness-replay-export:
 # same fixture are evidence collection, not proof of stability: see FiveRunReplayDeviceGateTest.
 verify-harness-s25-five-run-replay:
 	@set -eu; \
-	device_count=$$(adb devices -l | tail -n +2 | grep -c 'device product:' || true); \
+	device_count=$$(adb devices -l | tail -n +2 | awk '$$2=="device"' | wc -l | tr -d ' '); \
 	if [ "$$device_count" -ne 1 ]; then \
 		echo "error: verify-harness-s25-five-run-replay requires exactly one authorized attached device, found $$device_count" >&2; \
 		exit 1; \
 	fi; \
-	serial=$$(adb devices -l | tail -n +2 | grep 'device product:' | awk '{print $$1}'); \
+	serial=$$(adb devices -l | tail -n +2 | awk '$$2=="device" {print $$1}'); \
 	case "$$serial" in \
 		emulator-*) \
 			echo "error: attached target '$$serial' is an emulator; only a physical Samsung Galaxy S25 Ultra is an authorized target for this gate" >&2; \
@@ -159,17 +159,19 @@ verify-harness-s25-five-run-replay:
 	manufacturer=$$(adb -s "$$serial" shell getprop ro.product.manufacturer | tr -d '\r'); \
 	manufacturer_lower=$$(printf '%s' "$$manufacturer" | tr '[:upper:]' '[:lower:]'); \
 	marketing_name=$$(adb -s "$$serial" shell getprop ro.config.marketing_name | tr -d '\r'); \
+	model=$$(adb -s "$$serial" shell getprop ro.product.model | tr -d '\r'); \
+	model_upper=$$(printf '%s' "$$model" | tr '[:lower:]' '[:upper:]'); \
 	if [ "$$manufacturer_lower" != "samsung" ]; then \
 		echo "error: attached target '$$serial' has manufacturer '$$manufacturer', not the authorized Samsung Galaxy S25 Ultra" >&2; \
 		exit 1; \
 	fi; \
-	case "$$marketing_name" in \
-		*"S25 Ultra"*) : ;; \
-		*) \
-			echo "error: attached target '$$serial' marketing name '$$marketing_name' does not match the authorized Samsung Galaxy S25 Ultra" >&2; \
-			exit 1; \
-			;; \
-	esac; \
+	authorized=0; \
+	case "$$model_upper" in SM-S938*) authorized=1 ;; esac; \
+	case "$$marketing_name" in *"S25 Ultra"*) authorized=1 ;; esac; \
+	if [ "$$authorized" -ne 1 ]; then \
+		echo "error: attached target '$$serial' model '$$model' marketing name '$$marketing_name' does not match the authorized Samsung Galaxy S25 Ultra" >&2; \
+		exit 1; \
+	fi; \
 	cd apps/diagnostic-harness && ./gradlew --no-daemon :androidApp:assembleDebug :androidApp:assembleDebugAndroidTest; \
 	adb -s "$$serial" install -r androidApp/build/outputs/apk/debug/androidApp-debug.apk; \
 	adb -s "$$serial" install -r androidApp/build/outputs/apk/androidTest/debug/androidApp-debug-androidTest.apk; \
@@ -198,12 +200,12 @@ verify-harness-s25-five-run-replay:
 # invocation ever runs. The second invocation's non-zero result remains fatal, as before.
 verify-harness-s25-process-kill:
 	@set -eu; \
-	device_count=$$(adb devices -l | tail -n +2 | grep -c 'device product:' || true); \
+	device_count=$$(adb devices -l | tail -n +2 | awk '$$2=="device"' | wc -l | tr -d ' '); \
 	if [ "$$device_count" -ne 1 ]; then \
 		echo "error: verify-harness-s25-process-kill requires exactly one authorized attached device, found $$device_count" >&2; \
 		exit 1; \
 	fi; \
-	serial=$$(adb devices -l | tail -n +2 | grep 'device product:' | awk '{print $$1}'); \
+	serial=$$(adb devices -l | tail -n +2 | awk '$$2=="device" {print $$1}'); \
 	case "$$serial" in \
 		emulator-*) \
 			echo "error: attached target '$$serial' is an emulator; only a physical Samsung Galaxy S25 Ultra is an authorized target for this probe" >&2; \
@@ -213,17 +215,19 @@ verify-harness-s25-process-kill:
 	manufacturer=$$(adb -s "$$serial" shell getprop ro.product.manufacturer | tr -d '\r'); \
 	manufacturer_lower=$$(printf '%s' "$$manufacturer" | tr '[:upper:]' '[:lower:]'); \
 	marketing_name=$$(adb -s "$$serial" shell getprop ro.config.marketing_name | tr -d '\r'); \
+	model=$$(adb -s "$$serial" shell getprop ro.product.model | tr -d '\r'); \
+	model_upper=$$(printf '%s' "$$model" | tr '[:lower:]' '[:upper:]'); \
 	if [ "$$manufacturer_lower" != "samsung" ]; then \
 		echo "error: attached target '$$serial' has manufacturer '$$manufacturer', not the authorized Samsung Galaxy S25 Ultra" >&2; \
 		exit 1; \
 	fi; \
-	case "$$marketing_name" in \
-		*"S25 Ultra"*) : ;; \
-		*) \
-			echo "error: attached target '$$serial' marketing name '$$marketing_name' does not match the authorized Samsung Galaxy S25 Ultra" >&2; \
-			exit 1; \
-			;; \
-	esac; \
+	authorized=0; \
+	case "$$model_upper" in SM-S938*) authorized=1 ;; esac; \
+	case "$$marketing_name" in *"S25 Ultra"*) authorized=1 ;; esac; \
+	if [ "$$authorized" -ne 1 ]; then \
+		echo "error: attached target '$$serial' model '$$model' marketing name '$$marketing_name' does not match the authorized Samsung Galaxy S25 Ultra" >&2; \
+		exit 1; \
+	fi; \
 	cd apps/diagnostic-harness && ./gradlew --no-daemon :androidApp:assembleDebug :androidApp:assembleDebugAndroidTest; \
 	adb -s "$$serial" install -r androidApp/build/outputs/apk/debug/androidApp-debug.apk; \
 	adb -s "$$serial" install -r androidApp/build/outputs/apk/androidTest/debug/androidApp-debug-androidTest.apk; \

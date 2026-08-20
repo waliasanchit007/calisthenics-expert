@@ -140,6 +140,7 @@ class FiveRunReplayDeviceGateTest {
                     androidRelease = Build.VERSION.RELEASE,
                     abi = Build.SUPPORTED_ABIS.joinToString(","),
                     manufacturer = Build.MANUFACTURER,
+                    model = Build.MODEL,
                     marketingName = marketingName(context),
                 ),
                 provenance = FiveRunReplayProvenanceBinding(
