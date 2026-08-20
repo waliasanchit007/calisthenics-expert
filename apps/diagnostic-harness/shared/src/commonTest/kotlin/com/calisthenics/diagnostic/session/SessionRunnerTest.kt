@@ -5,6 +5,7 @@ import com.calisthenics.diagnostic.contract.Uuid
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -314,6 +315,110 @@ class SessionRunnerTest {
 
         val abandonRunner = runner(VirtualDeadlineScheduler(), RecordingInferencePort(), RecordingFinalizer())
         assertEquals(SessionLifecycle.FAILED, abandonRunner.abandon().lifecycle)
+    }
+
+    @Test
+    fun abandonmentDuringAnActiveRunMakesTheFollowingStopAndFinalizeATypedCancellation() {
+        // The teardown race, in the exact order the replay composition performs it: a run is
+        // in flight, the owner abandons it, and the composition's own completion path then calls
+        // stop() and finalize(). That sequence used to throw IllegalStateException("session must be
+        // sealed before finalization") straight out of the run.
+        val scheduler = VirtualDeadlineScheduler()
+        val inference = DisposableRecordingInferencePort()
+        val finalizer = RecordingFinalizer()
+        val runner = SessionRunner(
+            configuration = SessionConfiguration(TEST_SESSION_ID, TEST_SCHEMA_VERSION, TEST_WIDTH, TEST_HEIGHT),
+            inference = inference,
+            deadlineScheduler = scheduler,
+            drainTimeoutNs = 1_000,
+            finalizer = finalizer,
+            dispatcher = DirectSessionDispatcher,
+        )
+
+        val submission = runner.submit(frameIndex = 0, captureTimestampNs = 100, inferenceStartNs = 110, input = byteArrayOf(1))!!
+        inference.complete(submission, InferenceResult.Success(inferenceEndNs = 120, posePresent = true))
+
+        runner.abandon()
+        assertEquals(SessionLifecycle.FAILED, runner.snapshot().lifecycle)
+
+        // Neither call may throw, and the outcome must say what happened rather than looking like
+        // a completed run.
+        runner.stop(nowNs = 200)
+        val result = runner.finalize()
+
+        val cancelled = assertIs<FinalizationResult.Cancelled>(result)
+        assertEquals(SessionRunner.ABANDONED_BEFORE_FINALIZATION, cancelled.reason)
+        assertEquals(0, finalizer.invocations, "an abandoned session must never be published")
+        assertEquals(SessionLifecycle.FAILED, runner.snapshot().lifecycle)
+        assertEquals(1, inference.disposeCalls, "the owned backend is still disposed exactly once")
+    }
+
+    @Test
+    fun finalizingAnAbandonedSessionIsIdempotentAndStillNeverPublishes() {
+        val finalizer = RecordingFinalizer()
+        val runner = runner(VirtualDeadlineScheduler(), RecordingInferencePort(), finalizer)
+        runner.abandon()
+
+        val first = runner.finalize()
+        val second = runner.finalize()
+
+        assertIs<FinalizationResult.Cancelled>(first)
+        assertSame(first, second, "a second finalize must return the same recorded outcome")
+        assertEquals(0, finalizer.invocations)
+        assertEquals(
+            listOf(SessionLifecycle.RUNNING, SessionLifecycle.FAILED),
+            runner.snapshot().transitionHistory,
+            "cancellation must not invent an ASSEMBLING transition it never made",
+        )
+    }
+
+    @Test
+    fun aRealFinalizationFailureIsStillReportedAsAFailureNotACancellation() {
+        // Only the abandonment path maps to cancellation. A session that genuinely reached the
+        // finalizer and failed there must keep reporting itself as failed, or an export defect
+        // would be indistinguishable from a torn-down run.
+        val runner = runner(VirtualDeadlineScheduler(), RecordingInferencePort(), RecordingFinalizer(publish = false))
+        runner.stop(nowNs = 200)
+
+        val result = runner.finalize()
+
+        assertIs<FinalizationResult.Failed>(result)
+        assertEquals("injected", result.failureCode)
+    }
+
+    @Test
+    fun abandoningAfterAFinalizationFailureDoesNotRelabelItAsCancelled() {
+        val runner = runner(VirtualDeadlineScheduler(), RecordingInferencePort(), RecordingFinalizer(publish = false))
+        runner.stop(nowNs = 200)
+        assertIs<FinalizationResult.Failed>(runner.finalize())
+
+        runner.abandon()
+
+        assertIs<FinalizationResult.Failed>(runner.finalize())
+    }
+
+    @Test
+    fun aSessionFailedByAnInternalErrorIsNeverReportedAsACancellation() {
+        // "Only the teardown race maps to cancellation." A session driven into FAILED by a genuine
+        // internal defect was not abandoned by anyone, so finalize() must still fail loudly rather
+        // than quietly reporting the defect as an intentional cancellation.
+        val runner = runner(VirtualDeadlineScheduler(), RecordingInferencePort(), RecordingFinalizer())
+
+        assertFailsWith<IllegalStateException> { runner.cancel(submissionIndex = 99) }
+        assertEquals(SessionLifecycle.FAILED, runner.snapshot().lifecycle)
+
+        assertFailsWith<IllegalStateException> { runner.finalize() }
+    }
+
+    @Test
+    fun finalizingANonSealedSessionThatWasNeverAbandonedStillFailsLoudly() {
+        // The check this fix narrows must still fire everywhere else: finalizing a running session
+        // is a caller defect, not a cancellation.
+        val inference = RecordingInferencePort()
+        val runner = runner(VirtualDeadlineScheduler(), inference, RecordingFinalizer())
+        runner.submit(frameIndex = 0, captureTimestampNs = 100, inferenceStartNs = 110, input = byteArrayOf(1))
+
+        assertFailsWith<IllegalStateException> { runner.finalize() }
     }
 
     private fun runner(

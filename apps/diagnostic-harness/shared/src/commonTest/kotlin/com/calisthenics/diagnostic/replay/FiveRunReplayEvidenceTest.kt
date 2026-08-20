@@ -45,13 +45,39 @@ class FiveRunReplayEvidenceTest {
         frameSha256 = listOf("f0", "f1"),
     )
 
-    private fun run(index: Int, published: Boolean = true, validated: Boolean = true) = FiveRunReplayRunRecord(
+    /** Two frames, a pose detected on both, 33 landmarks behind each: what a real run looks like. */
+    private fun detected() = FiveRunReplayPoseObservation(
+        posePresentPerFrame = listOf(true, true),
+        normalizedLandmarkCountPerFrame = listOf(33, 33),
+        worldLandmarkCountPerFrame = listOf(33, 33),
+        poseDetectedRecords = 2L,
+    )
+
+    /**
+     * The same two frames through a pipeline that detected nothing. Every input-side field — frame
+     * indices, backend timestamps, canonical input digests — is byte-identical to [detected], which
+     * is exactly why the gate cannot be left to those fields alone.
+     */
+    private fun undetected() = FiveRunReplayPoseObservation(
+        posePresentPerFrame = listOf(false, false),
+        normalizedLandmarkCountPerFrame = listOf(0, 0),
+        worldLandmarkCountPerFrame = listOf(0, 0),
+        poseDetectedRecords = 0L,
+    )
+
+    private fun run(
+        index: Int,
+        published: Boolean = true,
+        validated: Boolean = true,
+        pose: FiveRunReplayPoseObservation = detected(),
+    ) = FiveRunReplayRunRecord(
         runIndex = index,
         sessionId = "5f6a7b8c-9d0e-4f1a-8b2c-3d4e5f6a7b8${index}",
         published = published,
         submittedIndices = listOf(0L, 1L),
         backendTimestampsMs = listOf(0L, 33L),
         canonicalInputSha256 = listOf("c0", "c1"),
+        pose = pose,
         manifestSha256 = "m$index",
         framesSha256 = "n$index",
         validatedByReferenceCli = validated,
@@ -135,6 +161,91 @@ class FiveRunReplayEvidenceTest {
         runs[1] = runs[1].copy(canonicalInputSha256 = listOf("c0", "different"))
         val rendered = renderFiveRunReplayEvidence(evidence(runs = runs))
         assertTrue(rendered.contains(""""satisfies_s25_device_gate":false"""))
+    }
+
+    @Test
+    fun fiveIdenticalRunsThatDetectedNoPoseNeverSatisfyTheGate() {
+        // The finding: an empty pose pipeline reproduces every input-side determinism property
+        // perfectly, so without a detection conjunct the gate certifies five runs of nothing.
+        val rendered = renderFiveRunReplayEvidence(evidence(runs = (1..5).map { run(it, pose = undetected()) }))
+        assertTrue(rendered.contains(""""satisfies_s25_device_gate":false"""))
+        assertTrue(rendered.contains(""""pose_detected_records":0"""))
+    }
+
+    @Test
+    fun aSingleRunWithoutADetectedPoseNeverSatisfiesTheGate() {
+        val runs = fiveConsistentRuns().toMutableList()
+        runs[3] = run(4, pose = undetected())
+        assertTrue(
+            renderFiveRunReplayEvidence(evidence(runs = runs)).contains(""""satisfies_s25_device_gate":false"""),
+        )
+    }
+
+    @Test
+    fun aDetectedRecordCountNoRecordSupportsNeverSatisfiesTheGate() {
+        // A caller cannot buy the gate with a number: the count must match the per-frame pattern.
+        val runs = (1..5).map { run(it, pose = undetected().copy(poseDetectedRecords = 2L)) }
+        assertTrue(
+            renderFiveRunReplayEvidence(evidence(runs = runs)).contains(""""satisfies_s25_device_gate":false"""),
+        )
+    }
+
+    @Test
+    fun aPosePresentFrameWithNoLandmarksBehindItNeverSatisfiesTheGate() {
+        val runs = (1..5).map { run(it, pose = detected().copy(normalizedLandmarkCountPerFrame = listOf(33, 0))) }
+        assertTrue(
+            renderFiveRunReplayEvidence(evidence(runs = runs)).contains(""""satisfies_s25_device_gate":false"""),
+        )
+    }
+
+    @Test
+    fun aRunEmittingFewerRecordsThanItSubmittedFramesNeverSatisfiesTheGate() {
+        val runs = (1..5).map {
+            run(
+                it,
+                pose = FiveRunReplayPoseObservation(
+                    posePresentPerFrame = listOf(true),
+                    normalizedLandmarkCountPerFrame = listOf(33),
+                    worldLandmarkCountPerFrame = listOf(33),
+                    poseDetectedRecords = 1L,
+                ),
+            )
+        }
+        assertTrue(
+            renderFiveRunReplayEvidence(evidence(runs = runs)).contains(""""satisfies_s25_device_gate":false"""),
+        )
+    }
+
+    @Test
+    fun runsWhoseDetectionPatternDivergesNeverSatisfyTheGate() {
+        // Detection topology is inside the cross-run equality set: agreeing on the inputs while
+        // disagreeing on what came back is a backend-nondeterminism finding, not a pass.
+        val runs = fiveConsistentRuns().toMutableList()
+        runs[2] = run(
+            3,
+            pose = detected().copy(posePresentPerFrame = listOf(true, false), poseDetectedRecords = 1L),
+        )
+        assertTrue(
+            renderFiveRunReplayEvidence(evidence(runs = runs)).contains(""""satisfies_s25_device_gate":false"""),
+        )
+    }
+
+    @Test
+    fun runsWhoseLandmarkCardinalityDivergesNeverSatisfyTheGate() {
+        val runs = fiveConsistentRuns().toMutableList()
+        runs[1] = run(2, pose = detected().copy(worldLandmarkCountPerFrame = listOf(33, 32)))
+        assertTrue(
+            renderFiveRunReplayEvidence(evidence(runs = runs)).contains(""""satisfies_s25_device_gate":false"""),
+        )
+    }
+
+    @Test
+    fun recordsTheObservedDetectionEvidenceInTheRenderedRecord() {
+        val rendered = renderFiveRunReplayEvidence(evidence())
+        assertTrue(rendered.contains(""""pose_present_per_frame":[true,true]"""))
+        assertTrue(rendered.contains(""""normalized_landmark_count_per_frame":[33,33]"""))
+        assertTrue(rendered.contains(""""world_landmark_count_per_frame":[33,33]"""))
+        assertTrue(rendered.contains(""""pose_detected_records":2"""))
     }
 
     @Test

@@ -13,6 +13,16 @@ data class ReplayFixtureFrame(
     val plane: ByteArray,
     val declaredSha256: String,
 ) {
+    /**
+     * The digest of [plane] as the bytes actually are, computed here rather than read from metadata.
+     *
+     * [declaredSha256] is an untrusted input: it is a string in a committed JSON file, and nothing
+     * about it is evidence that the plane behind it survived staging, packaging, or transfer to a
+     * device intact. Any binding that records what a run replayed must record this value, and
+     * [decodeReplayFixtureMetadata] refuses a fixture where the two disagree.
+     */
+    val actualSha256: String = Sha256Digest.hex(plane)
+
     override fun equals(other: Any?): Boolean =
         this === other || (other is ReplayFixtureFrame && frameIndex == other.frameIndex)
 

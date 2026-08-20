@@ -6,7 +6,7 @@ done; printf '%s' python3)
 VENV_PYTHON := .venv/bin/python
 CLI := $(VENV_PYTHON) -m observation_contracts
 
-.PHONY: bootstrap verify verify-harness-jvm verify-harness-ios verify-harness-foundation verify-kotlin-export verify-harness-android-export-parity verify-harness-detection-replay verify-harness-s25-process-kill verify-harness-replay-export verify-harness-s25-five-run-replay fetch-model-asset
+.PHONY: bootstrap verify verify-harness-jvm verify-harness-ios verify-harness-foundation verify-kotlin-export verify-harness-android-export-parity verify-harness-detection-replay verify-harness-s25-process-kill verify-harness-replay-export verify-harness-s25-five-run-replay fetch-model-asset prepare-harness-gradle-dependencies
 
 bootstrap:
 	@command -v "$(PYTHON)" >/dev/null 2>&1 || { echo "error: Python interpreter '$(PYTHON)' was not found" >&2; exit 1; }
@@ -23,6 +23,27 @@ bootstrap:
 
 fetch-model-asset:
 	$(VENV_PYTHON) tools/fetch_model_asset.py
+
+# The cold-runner preparation seam for `make verify`.
+#
+# `make verify` runs reference/tests/test_model_asset_build_gate.py, which drives the real Gradle
+# task graph with `--offline`. That flag is load-bearing and is never relaxed: it is what proves the
+# delivery gate rejects a missing model asset with no network path able to fetch one. It also
+# forbids resolving the Android Gradle Plugin, so on a clean CI runner with an empty Gradle cache
+# the build dies at "Plugin [id: 'com.android.application', version: '9.1.0'] was not found" and
+# every one of those tests fails for a reason that has nothing to do with the gate.
+#
+# This target populates that cache with one online invocation, and CI runs it before `make verify`
+# (.github/workflows/verify.yml, pinned by reference/tests/test_ci_gradle_cache_ordering.py). It is
+# deliberately NOT a prerequisite of `verify`: `verify` must stay runnable with no network on a warm
+# machine, and coupling the two would smuggle a network dependency into the hermetic suite.
+#
+# It assembles only `jvmVerification` — the mechanically distinct non-delivery variant that is the
+# gate's sole exclusion. The pinned model asset is never fetched here and no skip-shaped property is
+# ever passed, so the gate a cold runner faces is exactly the gate a device build faces, and warming
+# the cache can never become a way to package a delivery APK without the verified asset.
+prepare-harness-gradle-dependencies:
+	cd apps/diagnostic-harness && ./gradlew --no-daemon :androidApp:assembleJvmVerification
 
 verify-harness-jvm:
 	cd apps/diagnostic-harness && ./gradlew --no-daemon :shared:jvmTest :androidApp:assembleJvmVerification

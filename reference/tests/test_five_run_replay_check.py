@@ -2,9 +2,11 @@
 
 `satisfies_gate` is the host-side re-derivation of the same gate `renderFiveRunReplayEvidence`
 (Kotlin, `shared/commonMain`) computes: exactly five runs, all published and CLI-validated, every
-run agreeing on submitted indices/backend timestamps/canonical digests, and the observing device a
-physical Samsung Galaxy S25 Ultra. It must never be satisfiable by an emulator or by a partial or
-inconsistent set of runs, no matter what the on-device record otherwise claims.
+run agreeing on submitted indices/backend timestamps/canonical digests *and* on what the pose
+pipeline returned, every run actually detecting a pose, and the observing device a physical Samsung
+Galaxy S25 Ultra. It must never be satisfiable by an emulator, by a partial or inconsistent set of
+runs, or by five identical runs of a pipeline that detected nothing — the last of which reproduces
+every input-side determinism property perfectly, so nothing else in the record rules it out.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).parents[2] / "tools"))
 
 from check_five_run_replay import (
     FiveRunReplayCheckError,
+    detection_is_non_vacuous,
     extract_record,
     require_exact_suite,
     satisfies_gate,
@@ -26,7 +29,31 @@ from check_five_run_replay import (
 SUITE_MARKER = "class=com.calisthenics.diagnostic.composition.FiveRunReplayDeviceGateTest"
 
 
-def _run(index: int, *, published: bool = True, validated: bool = True, indices=(0, 1)) -> dict:
+DETECTED = {
+    "pose_present_per_frame": [True, True],
+    "normalized_landmark_count_per_frame": [33, 33],
+    "world_landmark_count_per_frame": [33, 33],
+    "pose_detected_records": 2,
+}
+
+# The same two frames through a pipeline that detected nothing. Every input-side field is identical
+# to DETECTED, which is exactly why the gate cannot be left to those fields alone.
+UNDETECTED = {
+    "pose_present_per_frame": [False, False],
+    "normalized_landmark_count_per_frame": [0, 0],
+    "world_landmark_count_per_frame": [0, 0],
+    "pose_detected_records": 0,
+}
+
+
+def _run(
+    index: int,
+    *,
+    published: bool = True,
+    validated: bool = True,
+    indices=(0, 1),
+    pose: dict | None = None,
+) -> dict:
     return {
         "run_index": index,
         "session_id": f"session-{index}",
@@ -34,6 +61,7 @@ def _run(index: int, *, published: bool = True, validated: bool = True, indices=
         "submitted_indices": list(indices),
         "backend_timestamps_ms": [0, 33],
         "canonical_input_sha256": ["c0", "c1"],
+        **(DETECTED if pose is None else pose),
         "manifest_sha256": f"m{index}",
         "frames_sha256": f"n{index}",
         "validated_by_reference_cli": validated,
@@ -107,3 +135,72 @@ def test_satisfies_gate_is_false_when_runs_diverge() -> None:
     runs = [_run(i) for i in range(1, 6)]
     runs[1] = _run(2, indices=(0,))
     assert satisfies_gate(_record(runs=runs)) is False
+
+
+def test_satisfies_gate_is_false_for_five_identical_runs_that_detected_no_pose() -> None:
+    # The finding: an empty pose pipeline agrees with itself on every input-side field, so the gate
+    # would otherwise certify five runs of a pipeline that observed nothing.
+    runs = [_run(i, pose=UNDETECTED) for i in range(1, 6)]
+    assert satisfies_gate(_record(runs=runs)) is False
+
+
+def test_satisfies_gate_is_false_when_one_run_detected_no_pose() -> None:
+    runs = [_run(i) for i in range(1, 6)]
+    runs[3] = _run(4, pose=UNDETECTED)
+    assert satisfies_gate(_record(runs=runs)) is False
+
+
+def test_satisfies_gate_is_false_for_a_detected_count_no_record_supports() -> None:
+    claimed = dict(UNDETECTED, pose_detected_records=2)
+    runs = [_run(i, pose=claimed) for i in range(1, 6)]
+    assert satisfies_gate(_record(runs=runs)) is False
+
+
+def test_satisfies_gate_is_false_when_a_detected_frame_has_no_landmarks_behind_it() -> None:
+    hollow = dict(DETECTED, normalized_landmark_count_per_frame=[33, 0])
+    runs = [_run(i, pose=hollow) for i in range(1, 6)]
+    assert satisfies_gate(_record(runs=runs)) is False
+
+
+def test_satisfies_gate_is_false_when_records_do_not_cover_every_submitted_frame() -> None:
+    short = {
+        "pose_present_per_frame": [True],
+        "normalized_landmark_count_per_frame": [33],
+        "world_landmark_count_per_frame": [33],
+        "pose_detected_records": 1,
+    }
+    runs = [_run(i, pose=short) for i in range(1, 6)]
+    assert satisfies_gate(_record(runs=runs)) is False
+
+
+def test_satisfies_gate_is_false_when_the_detection_pattern_diverges_across_runs() -> None:
+    diverged = {
+        "pose_present_per_frame": [True, False],
+        "normalized_landmark_count_per_frame": [33, 0],
+        "world_landmark_count_per_frame": [33, 0],
+        "pose_detected_records": 1,
+    }
+    runs = [_run(i) for i in range(1, 6)]
+    runs[2] = _run(3, pose=diverged)
+    assert satisfies_gate(_record(runs=runs)) is False
+
+
+def test_satisfies_gate_is_false_when_landmark_cardinality_diverges_across_runs() -> None:
+    runs = [_run(i) for i in range(1, 6)]
+    runs[1] = _run(2, pose=dict(DETECTED, world_landmark_count_per_frame=[33, 32]))
+    assert satisfies_gate(_record(runs=runs)) is False
+
+
+def test_detection_is_non_vacuous_fails_closed_on_a_record_without_pose_fields() -> None:
+    bare = {"submitted_indices": [0, 1]}
+    assert detection_is_non_vacuous(bare) is False
+
+
+def test_extract_record_rejects_a_record_whose_runs_carry_no_pose_observation() -> None:
+    import json
+
+    runs = [_run(i) for i in range(1, 6)]
+    for run in runs:
+        del run["pose_detected_records"]
+    with pytest.raises(FiveRunReplayCheckError):
+        extract_record(_transcript(json.dumps(_record(runs=runs))))

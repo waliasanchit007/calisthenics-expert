@@ -33,6 +33,15 @@ def test_s25_five_run_replay_ledger_reports_pending_or_recorded_status() -> None
         assert all(
             run["published"] and run["validated_by_reference_cli"] for run in recorded["runs"]
         )
+        # A recorded gate must be evidence about a pose pipeline that actually detected something.
+        # Five identical runs of an empty pipeline agree on every input-side field, so without this
+        # a "recorded" ledger could point at evidence of nothing.
+        assert all(run["pose_detected_records"] > 0 for run in recorded["runs"])
+        assert all(
+            sum(1 for present in run["pose_present_per_frame"] if present)
+            == run["pose_detected_records"]
+            for run in recorded["runs"]
+        )
         assert recorded["satisfies_s25_device_gate"] is True
         assert recorded["environment"]["device_class"] == "physical_device"
         assert "S25 Ultra" in recorded["environment"]["marketing_name"]

@@ -1,5 +1,6 @@
 package com.calisthenics.diagnostic.replay
 
+import com.calisthenics.diagnostic.contract.RawPoseFrame
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
@@ -55,6 +56,66 @@ data class FiveRunReplayFixtureBinding(
 )
 
 /**
+ * Derives the fixture binding from the loaded fixture itself, hashing the plane bytes the run
+ * actually read.
+ *
+ * `frameSha256` must never be transcribed from the fixture metadata's declared digests. Those are
+ * strings in a JSON file that travelled to the device beside the planes, so copying them binds the
+ * record to what the fixture *claimed* rather than to what was replayed, and a corrupted plane
+ * would be recorded under the digest of the plane it was supposed to be.
+ * [ReplayFixtureFrame.actualSha256] is computed from the bytes in hand;
+ * [decodeReplayFixtureMetadata] separately refuses a fixture whose declared and actual digests
+ * disagree, so a record built here is bound twice over.
+ *
+ * Derivation lives in `commonMain` rather than in the Android device test so it is covered by host
+ * tests, matching [fiveRunPoseObservationOf] and `frameTopologyOf`.
+ */
+fun fiveRunFixtureBindingOf(fixtureId: String, fixture: ReplayFixture): FiveRunReplayFixtureBinding =
+    FiveRunReplayFixtureBinding(
+        fixtureId = fixtureId,
+        frameWidth = fixture.frameWidth,
+        frameHeight = fixture.frameHeight,
+        frameIndices = fixture.declaredIndices,
+        frameSha256 = fixture.frames.map { it.actualSha256 },
+    )
+
+/**
+ * What one run's own emitted records say about pose detection.
+ *
+ * Without this, the five-run gate is satisfiable by an empty pose pipeline: identical frame
+ * indices, identical backend timestamps, and identical canonical input digests are all properties
+ * of the *input* side, and a run in which MediaPipe returned no pose on any frame reproduces every
+ * one of them perfectly. The gate would then certify five runs of a pipeline that observed nothing
+ * — exactly the vacuity design section 7 introduced the detection tier to close for check 5.
+ *
+ * `poseDetectedRecords` is the session's own count, and `posePresentPerFrame` is the per-record
+ * pattern behind it; carrying both lets the gate reject a count that no record supports.
+ */
+data class FiveRunReplayPoseObservation(
+    val posePresentPerFrame: List<Boolean>,
+    val normalizedLandmarkCountPerFrame: List<Int>,
+    val worldLandmarkCountPerFrame: List<Int>,
+    val poseDetectedRecords: Long,
+)
+
+/**
+ * Derives one run's pose observation from the records the session actually emitted.
+ *
+ * Landmark *values* are deliberately absent, exactly as in [FrameTopology]: what is recorded is
+ * whether a pose came back and how many landmarks stood behind it. Turning coordinates into a
+ * threshold is what check 6 forbids.
+ */
+fun fiveRunPoseObservationOf(
+    records: List<RawPoseFrame>,
+    poseDetectedRecords: Long,
+): FiveRunReplayPoseObservation = FiveRunReplayPoseObservation(
+    posePresentPerFrame = records.map { it.posePresent },
+    normalizedLandmarkCountPerFrame = records.map { it.normalizedImageLandmarks?.size ?: 0 },
+    worldLandmarkCountPerFrame = records.map { it.worldLandmarks?.size ?: 0 },
+    poseDetectedRecords = poseDetectedRecords,
+)
+
+/**
  * One complete replay-through-export cycle: the real MediaPipe replay determinism bindings plus
  * what happened to its export. `validatedByReferenceCli` is only ever set true by the host wrapper
  * that actually ran `observation_contracts validate-session` against the pulled export — it is
@@ -67,6 +128,7 @@ data class FiveRunReplayRunRecord(
     val submittedIndices: List<Long>,
     val backendTimestampsMs: List<Long>,
     val canonicalInputSha256: List<String>,
+    val pose: FiveRunReplayPoseObservation,
     val manifestSha256: String,
     val framesSha256: String,
     val validatedByReferenceCli: Boolean,
@@ -95,8 +157,16 @@ data class FiveRunReplayEvidence(
  * - every run published and validated by the Python reference CLI;
  * - every run submitting the identical frame indices, backend timestamps, and canonical input
  *   digests (the same cross-run determinism equality design section 7 requires elsewhere);
+ * - every run actually detecting a pose — a nonzero detected-record count that the run's own
+ *   per-frame records support, with landmarks behind every detection, and the identical
+ *   detection pattern and cardinality in all five runs;
  * - the observing device is a physical Samsung Galaxy S25 Ultra, never an emulator and never any
  *   other physical device.
+ *
+ * The detection conjunct is not decoration. Frame indices, backend timestamps, and canonical input
+ * digests are all input-side properties that a pipeline detecting nothing reproduces exactly, so
+ * without it five identical empty runs satisfy every other condition and the gate certifies an
+ * empty pose pipeline (see [FiveRunReplayPoseObservation]).
  *
  * Five runs remain evidence collection, not proof of stability (design section 7): this function
  * only certifies that the five runs *happened* and *agreed*, never that agreement generalizes.
@@ -109,14 +179,48 @@ fun renderFiveRunReplayEvidence(evidence: FiveRunReplayEvidence): String {
     val allRunsConsistent = evidence.runs.all { run ->
         run.submittedIndices == firstRun.submittedIndices &&
             run.backendTimestampsMs == firstRun.backendTimestampsMs &&
-            run.canonicalInputSha256 == firstRun.canonicalInputSha256
+            run.canonicalInputSha256 == firstRun.canonicalInputSha256 &&
+            run.pose == firstRun.pose
     }
+    val allRunsDetectedPoses = evidence.runs.all(::detectionIsNonVacuous)
     val allRunsPublishedAndValidated = evidence.runs.all { it.published && it.validatedByReferenceCli }
     val isAuthorizedS25 = evidence.environment.deviceClass == "physical_device" &&
         S25_ULTRA_MARKER in evidence.environment.marketingName
-    val satisfiesGate = runsCompleted == 5 && allRunsConsistent && allRunsPublishedAndValidated && isAuthorizedS25
+    val satisfiesGate = runsCompleted == 5 && allRunsConsistent && allRunsDetectedPoses &&
+        allRunsPublishedAndValidated && isAuthorizedS25
 
     return Json.encodeToString(JsonObject.serializer(), buildRecord(evidence, runsCompleted, satisfiesGate))
+}
+
+/**
+ * Whether one run's records show detection actually happened, rather than only claiming it.
+ *
+ * Every clause closes a way a run with no detection could otherwise read as one:
+ * - one record per submitted frame, so a run that submitted six frames and emitted none is not
+ *   silently described by an empty pose pattern;
+ * - a nonzero detected-record count, which is the finding itself: five identical runs of an empty
+ *   pipeline agree on everything else;
+ * - the count equal to the number of `pose_present` records, so a declared count no record
+ *   supports is rejected rather than believed;
+ * - landmarks behind every detection, because `pose_present = true` with an empty landmark list is
+ *   the same vacuity wearing a boolean (the rule [DetectionTopologyCheck.requireDetectionFired]
+ *   already applies to check 5).
+ */
+private fun detectionIsNonVacuous(run: FiveRunReplayRunRecord): Boolean {
+    val pose = run.pose
+    val frameCount = run.submittedIndices.size
+    if (pose.posePresentPerFrame.size != frameCount) return false
+    if (pose.normalizedLandmarkCountPerFrame.size != frameCount) return false
+    if (pose.worldLandmarkCountPerFrame.size != frameCount) return false
+    if (pose.poseDetectedRecords <= 0L) return false
+    if (pose.posePresentPerFrame.count { it }.toLong() != pose.poseDetectedRecords) return false
+    return pose.posePresentPerFrame.indices.all { position ->
+        !pose.posePresentPerFrame[position] ||
+            (
+                pose.normalizedLandmarkCountPerFrame[position] > 0 &&
+                    pose.worldLandmarkCountPerFrame[position] > 0
+                )
+    }
 }
 
 private fun buildRecord(evidence: FiveRunReplayEvidence, runsCompleted: Int, satisfiesGate: Boolean): JsonObject =
@@ -163,6 +267,14 @@ private fun buildRecord(evidence: FiveRunReplayEvidence, runsCompleted: Int, sat
                         putJsonArray("submitted_indices") { run.submittedIndices.forEach { add(it) } }
                         putJsonArray("backend_timestamps_ms") { run.backendTimestampsMs.forEach { add(it) } }
                         putJsonArray("canonical_input_sha256") { run.canonicalInputSha256.forEach { add(it) } }
+                        putJsonArray("pose_present_per_frame") { run.pose.posePresentPerFrame.forEach { add(it) } }
+                        putJsonArray("normalized_landmark_count_per_frame") {
+                            run.pose.normalizedLandmarkCountPerFrame.forEach { add(it) }
+                        }
+                        putJsonArray("world_landmark_count_per_frame") {
+                            run.pose.worldLandmarkCountPerFrame.forEach { add(it) }
+                        }
+                        put("pose_detected_records", run.pose.poseDetectedRecords)
                         put("manifest_sha256", run.manifestSha256)
                         put("frames_sha256", run.framesSha256)
                         put("validated_by_reference_cli", run.validatedByReferenceCli)

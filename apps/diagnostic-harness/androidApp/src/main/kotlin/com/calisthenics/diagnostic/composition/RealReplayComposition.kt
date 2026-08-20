@@ -181,6 +181,14 @@ class RealReplayComposition(
             sessionRunner.stop(nowNs = clock.nowNs())
             val finalization = sessionRunner.finalize()
             terminal = true
+            // Teardown while this replay was still running (the UI leaving composition mid-run)
+            // abandons the runner, so stop/finalize has nothing left to publish. That is a
+            // cancellation, not a completed run with a failed export, and it must never surface as
+            // an exception escaping this call: the caller is a UI coroutine whose only recovery is
+            // a typed result.
+            if (finalization is FinalizationResult.Cancelled) {
+                return RealReplayResult.Cancelled(finalization.reason)
+            }
             return RealReplayResult.Completed(sessionId, finalization, sessionRunner.snapshot())
         } finally {
             if (!terminal) sessionRunner.abandon()

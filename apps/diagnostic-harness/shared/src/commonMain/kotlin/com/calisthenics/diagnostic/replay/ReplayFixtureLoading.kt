@@ -39,7 +39,7 @@ fun decodeReplayFixtureMetadata(metadataJson: String, readPlane: (path: String) 
             captureTimestampNs = descriptor.getValue("timestamp_ns").jsonPrimitive.long,
             plane = readPlane(path),
             declaredSha256 = descriptor.getValue("sha256").jsonPrimitive.content,
-        )
+        ).also(::requireDeclaredDigestMatchesBytes)
     }
 
     return ReplayFixture(
@@ -47,4 +47,27 @@ fun decodeReplayFixtureMetadata(metadataJson: String, readPlane: (path: String) 
         frameWidth = frameWidthElement.jsonPrimitive.int,
         frameHeight = frameHeightElement.jsonPrimitive.int,
     )
+}
+
+/**
+ * Fails closed when the bytes [readPlane] returned are not the bytes the fixture declares.
+ *
+ * The declared digest is a string in a JSON file; on its own it says nothing about the plane behind
+ * it. Between the committed fixture and a decoded plane sit a Gradle staging task, an APK asset
+ * merge, an `adb install`, and an asset reader, so "the metadata says this digest" and "these bytes
+ * hash to this digest" are different claims. Without this check a run — and every determinism
+ * comparison, export, and five-run gate record derived from it — could be evidence about silently
+ * different pixels while transcribing the digests of the pixels it was supposed to read.
+ *
+ * The failure is the same typed [ReplayFixtureLoadingException] every other unusable-fixture case
+ * raises, so a caller has one thing to catch and one fail-closed path, and the message names the
+ * frame plus both digests rather than only reporting that something did not match.
+ */
+private fun requireDeclaredDigestMatchesBytes(frame: ReplayFixtureFrame) {
+    if (frame.actualSha256 != frame.declaredSha256) {
+        throw ReplayFixtureLoadingException(
+            "fixture frame ${frame.frameIndex} plane does not match its declared digest: " +
+                "declared ${frame.declaredSha256}, actual ${frame.actualSha256}",
+        )
+    }
 }

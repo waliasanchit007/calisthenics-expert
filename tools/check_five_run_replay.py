@@ -9,6 +9,11 @@ against `observation_contracts validate-session`, and — only if every one of t
 prints the record again with `validated_by_reference_cli: true` on every run and
 `satisfies_s25_device_gate` recomputed from that.
 
+The recomputation mirrors the Kotlin renderer exactly, including its detection conjunct: frame
+indices, backend timestamps, and canonical input digests are all input-side properties that a
+pipeline detecting nothing reproduces perfectly, so five consistent runs of an empty pose pipeline
+must never satisfy the gate on either side of the seam.
+
 This script never writes the committed ledger. Per the project's established
 `docs/evidence/device-probes/s25-ultra-process-kill-ledger.json` convention, a human copies the
 printed record into `docs/evidence/replay-five-run/...json` and flips the ledger's `status` field
@@ -30,6 +35,15 @@ _RECORD_PATTERN = re.compile(r"INSTRUMENTATION_STATUS: FiveRunReplayEvidence=(?P
 _SUITE_MARKER = "class=com.calisthenics.diagnostic.composition.FiveRunReplayDeviceGateTest"
 _S25_MARKER = "S25 Ultra"
 _EXPECTED_RUN_COUNT = 5
+_REQUIRED_RUN_FIELDS = (
+    "submitted_indices",
+    "backend_timestamps_ms",
+    "canonical_input_sha256",
+    "pose_present_per_frame",
+    "normalized_landmark_count_per_frame",
+    "world_landmark_count_per_frame",
+    "pose_detected_records",
+)
 
 
 class FiveRunReplayCheckError(Exception):
@@ -57,6 +71,13 @@ def extract_record(transcript: str) -> dict:
     runs = record.get("runs")
     if not isinstance(runs, list) or len(runs) != _EXPECTED_RUN_COUNT:
         raise FiveRunReplayCheckError(f"expected exactly {_EXPECTED_RUN_COUNT} runs, found {runs!r}")
+    for run in runs:
+        missing = [field for field in _REQUIRED_RUN_FIELDS if field not in run]
+        if missing:
+            raise FiveRunReplayCheckError(
+                f"run {run.get('run_index')!r} is missing {missing}; a record that cannot show "
+                "whether any pose was detected is not five-run gate evidence"
+            )
     return record
 
 
@@ -93,6 +114,42 @@ def _validate_one_run(serial: str, package: str, session_id: str, exports_root: 
             )
 
 
+def detection_is_non_vacuous(run: dict) -> bool:
+    """Whether one run's own records show a pose was detected, mirroring the Kotlin renderer.
+
+    Each clause closes a way a run that detected nothing could read as one: one record per
+    submitted frame, a nonzero detected-record count, that count supported by the per-frame pattern
+    rather than merely asserted, and landmarks behind every detection. A record missing any of these
+    fields fails closed rather than raising.
+    """
+    present = run.get("pose_present_per_frame")
+    normalized = run.get("normalized_landmark_count_per_frame")
+    world = run.get("world_landmark_count_per_frame")
+    detected = run.get("pose_detected_records")
+    submitted = run.get("submitted_indices")
+    if not all(isinstance(value, list) for value in (present, normalized, world, submitted)):
+        return False
+    if isinstance(detected, bool) or not isinstance(detected, int):
+        return False
+    if not len(present) == len(normalized) == len(world) == len(submitted):
+        return False
+    if detected <= 0 or sum(1 for value in present if value) != detected:
+        return False
+    return all(
+        not value or (normalized[position] > 0 and world[position] > 0)
+        for position, value in enumerate(present)
+    )
+
+
+def _pose_observation(run: dict) -> tuple:
+    return (
+        run.get("pose_present_per_frame"),
+        run.get("normalized_landmark_count_per_frame"),
+        run.get("world_landmark_count_per_frame"),
+        run.get("pose_detected_records"),
+    )
+
+
 def satisfies_gate(record: dict) -> bool:
     runs = record["runs"]
     environment = record["environment"]
@@ -100,13 +157,16 @@ def satisfies_gate(record: dict) -> bool:
         run["submitted_indices"] == runs[0]["submitted_indices"]
         and run["backend_timestamps_ms"] == runs[0]["backend_timestamps_ms"]
         and run["canonical_input_sha256"] == runs[0]["canonical_input_sha256"]
+        and _pose_observation(run) == _pose_observation(runs[0])
         for run in runs
     )
+    all_detected = all(detection_is_non_vacuous(run) for run in runs)
     all_published_and_validated = all(run["published"] and run["validated_by_reference_cli"] for run in runs)
     is_authorized_s25 = environment["device_class"] == "physical_device" and _S25_MARKER in environment["marketing_name"]
     return (
         record["runs_completed"] == _EXPECTED_RUN_COUNT
         and all_consistent
+        and all_detected
         and all_published_and_validated
         and is_authorized_s25
     )

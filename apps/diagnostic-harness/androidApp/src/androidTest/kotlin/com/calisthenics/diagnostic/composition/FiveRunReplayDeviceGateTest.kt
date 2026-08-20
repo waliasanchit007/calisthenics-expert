@@ -10,11 +10,12 @@ import com.calisthenics.diagnostic.hash.Sha256Digest
 import com.calisthenics.diagnostic.model.parseModelProvenance
 import com.calisthenics.diagnostic.replay.FiveRunReplayEnvironment
 import com.calisthenics.diagnostic.replay.FiveRunReplayEvidence
-import com.calisthenics.diagnostic.replay.FiveRunReplayFixtureBinding
 import com.calisthenics.diagnostic.replay.FiveRunReplayProvenanceBinding
 import com.calisthenics.diagnostic.replay.FiveRunReplayRunRecord
 import com.calisthenics.diagnostic.replay.androidDeviceClassOf
 import com.calisthenics.diagnostic.replay.decodeReplayFixtureMetadata
+import com.calisthenics.diagnostic.replay.fiveRunFixtureBindingOf
+import com.calisthenics.diagnostic.replay.fiveRunPoseObservationOf
 import com.calisthenics.diagnostic.replay.renderFiveRunReplayEvidence
 import com.calisthenics.diagnostic.session.FinalizationResult
 import java.io.File
@@ -77,6 +78,13 @@ class FiveRunReplayDeviceGateTest {
                 submittedIndices = submitted.map { it.frameIndex },
                 backendTimestampsMs = submitted.map { it.backendTimestampMs },
                 canonicalInputSha256 = submitted.map { it.canonicalInputSha256 },
+                // Derived from this run's own emitted records, not declared here: a run of an empty
+                // pose pipeline reproduces every field above exactly, so without this the gate
+                // would certify five identical runs of a pipeline that detected nothing.
+                pose = fiveRunPoseObservationOf(
+                    completed.snapshot.records,
+                    completed.snapshot.counts.poseDetectedRecords,
+                ),
                 manifestSha256 = Sha256Digest.hex(manifestFile.readBytes()),
                 framesSha256 = Sha256Digest.hex(framesFile.readBytes()),
                 // Only the host wrapper, after actually invoking the Python reference CLI against
@@ -94,6 +102,30 @@ class FiveRunReplayDeviceGateTest {
                 runs.first().canonicalInputSha256,
                 run.canonicalInputSha256,
                 "run ${offset + 2} canonical input digests diverged",
+            )
+            // Design section 7 puts output topology inside cross-run equality. Agreeing on the
+            // inputs while disagreeing on what came back is a material backend-nondeterminism
+            // finding under the pinned CPU delegate, not a flake to retry.
+            assertEquals(runs.first().pose, run.pose, "run ${offset + 2} pose observation diverged")
+        }
+
+        // The pipeline must actually have detected something, in every run. This is the
+        // detection-tier admission criterion applied to the device gate: five consistent runs of an
+        // empty pose pipeline satisfy every equality above while observing nothing.
+        runs.forEach { run ->
+            assertTrue(
+                run.pose.poseDetectedRecords > 0L,
+                "run ${run.runIndex} detected no pose on any frame: ${run.pose}",
+            )
+            assertEquals(
+                run.submittedIndices.size,
+                run.pose.posePresentPerFrame.size,
+                "run ${run.runIndex} emitted a record count that does not match its submitted frames",
+            )
+            assertEquals(
+                run.pose.posePresentPerFrame.count { it }.toLong(),
+                run.pose.poseDetectedRecords,
+                "run ${run.runIndex} pose-detected count is not supported by its own records",
             )
         }
 
@@ -119,14 +151,13 @@ class FiveRunReplayDeviceGateTest {
                     modelInputWidth = fixture.frameWidth,
                     modelInputHeight = fixture.frameHeight,
                 ),
-                fixture = FiveRunReplayFixtureBinding(
+                // Digests computed from the plane bytes this device actually read, never the
+                // declared strings that travelled beside them; see fiveRunFixtureBindingOf.
+                fixture = fiveRunFixtureBindingOf(
                     fixtureId = kotlinx.serialization.json.Json.parseToJsonElement(fixtureMetadata)
                         .let { it as kotlinx.serialization.json.JsonObject }
                         .getValue("fixture_id").let { (it as kotlinx.serialization.json.JsonPrimitive).content },
-                    frameWidth = fixture.frameWidth,
-                    frameHeight = fixture.frameHeight,
-                    frameIndices = fixture.declaredIndices,
-                    frameSha256 = fixture.frames.map { it.declaredSha256 },
+                    fixture = fixture,
                 ),
                 runs = runs,
             ),
