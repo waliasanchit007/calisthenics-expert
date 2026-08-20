@@ -6,7 +6,7 @@ done; printf '%s' python3)
 VENV_PYTHON := .venv/bin/python
 CLI := $(VENV_PYTHON) -m observation_contracts
 
-.PHONY: bootstrap verify verify-harness-jvm verify-harness-ios verify-harness-foundation verify-kotlin-export verify-harness-android-export-parity verify-harness-detection-replay verify-harness-s25-process-kill fetch-model-asset
+.PHONY: bootstrap verify verify-harness-jvm verify-harness-ios verify-harness-foundation verify-kotlin-export verify-harness-android-export-parity verify-harness-detection-replay verify-harness-s25-process-kill verify-harness-replay-export verify-harness-s25-five-run-replay fetch-model-asset
 
 bootstrap:
 	@command -v "$(PYTHON)" >/dev/null 2>&1 || { echo "error: Python interpreter '$(PYTHON)' was not found" >&2; exit 1; }
@@ -90,6 +90,74 @@ verify-harness-detection-replay:
 	adb -s "$$serial" shell am instrument -w -r -e class com.calisthenics.diagnostic.mediapipe.DetectionTierReplayTopologyTest com.calisthenics.diagnostic.shared.test/androidx.test.runner.AndroidJUnitRunner >"$$transcript" 2>&1; \
 	cat "$$transcript"; \
 	cd ../.. && $(VENV_PYTHON) tools/check_detection_replay_run.py "$$transcript"
+
+# Task 5: the real replay UI path — real MediaPipe VIDEO replay, real SessionExporter, real
+# AndroidStoragePort — end to end, on any authorized attached device (an emulator is authorized
+# here, exactly like verify-harness-detection-replay; the S25-only gate lives in
+# verify-harness-s25-five-run-replay below). Every export must validate against the Python
+# reference CLI, and the CLI cannot run on-device, so the wrapper pulls the export via
+# `adb shell run-as` (a debug build) and validates it on the host.
+verify-harness-replay-export:
+	@set -eu; \
+	device_count=$$(adb devices -l | tail -n +2 | grep -c 'device product:' || true); \
+	if [ "$$device_count" -ne 1 ]; then \
+		echo "error: verify-harness-replay-export requires exactly one authorized attached device, found $$device_count" >&2; \
+		exit 1; \
+	fi; \
+	serial=$$(adb devices -l | tail -n +2 | grep 'device product:' | awk '{print $$1}'); \
+	cd apps/diagnostic-harness && ./gradlew --no-daemon :androidApp:assembleDebug :androidApp:assembleDebugAndroidTest; \
+	adb -s "$$serial" install -r androidApp/build/outputs/apk/debug/androidApp-debug.apk; \
+	adb -s "$$serial" install -r androidApp/build/outputs/apk/androidTest/debug/androidApp-debug-androidTest.apk; \
+	adb -s "$$serial" shell pm clear com.calisthenics.diagnostic.android; \
+	transcript=$$(mktemp); \
+	trap 'rm -f "$$transcript"' EXIT INT TERM; \
+	adb -s "$$serial" shell am instrument -w -r -e class com.calisthenics.diagnostic.composition.RealReplayCompositionExportTest com.calisthenics.diagnostic.android.test/androidx.test.runner.AndroidJUnitRunner >"$$transcript" 2>&1; \
+	cat "$$transcript"; \
+	cd ../.. && $(VENV_PYTHON) tools/check_real_replay_export.py "$$serial" com.calisthenics.diagnostic.android "$$transcript"
+
+# The five-run S25 device gate (design spec §7 / Task 5 brief). Device-gated exactly like
+# verify-harness-s25-process-kill: requires exactly one authorized physical Samsung Galaxy S25
+# Ultra, never a generic emulator, and never mutates the pending/recorded ledger itself — the
+# ledger at docs/evidence/replay-five-run/s25-ultra-five-run-replay-ledger.json is only ever
+# updated by a human copying the sanitized record this target prints. Five complete runs of the
+# same fixture are evidence collection, not proof of stability: see FiveRunReplayDeviceGateTest.
+verify-harness-s25-five-run-replay:
+	@set -eu; \
+	device_count=$$(adb devices -l | tail -n +2 | grep -c 'device product:' || true); \
+	if [ "$$device_count" -ne 1 ]; then \
+		echo "error: verify-harness-s25-five-run-replay requires exactly one authorized attached device, found $$device_count" >&2; \
+		exit 1; \
+	fi; \
+	serial=$$(adb devices -l | tail -n +2 | grep 'device product:' | awk '{print $$1}'); \
+	case "$$serial" in \
+		emulator-*) \
+			echo "error: attached target '$$serial' is an emulator; only a physical Samsung Galaxy S25 Ultra is an authorized target for this gate" >&2; \
+			exit 1; \
+			;; \
+	esac; \
+	manufacturer=$$(adb -s "$$serial" shell getprop ro.product.manufacturer | tr -d '\r'); \
+	manufacturer_lower=$$(printf '%s' "$$manufacturer" | tr '[:upper:]' '[:lower:]'); \
+	marketing_name=$$(adb -s "$$serial" shell getprop ro.config.marketing_name | tr -d '\r'); \
+	if [ "$$manufacturer_lower" != "samsung" ]; then \
+		echo "error: attached target '$$serial' has manufacturer '$$manufacturer', not the authorized Samsung Galaxy S25 Ultra" >&2; \
+		exit 1; \
+	fi; \
+	case "$$marketing_name" in \
+		*"S25 Ultra"*) : ;; \
+		*) \
+			echo "error: attached target '$$serial' marketing name '$$marketing_name' does not match the authorized Samsung Galaxy S25 Ultra" >&2; \
+			exit 1; \
+			;; \
+	esac; \
+	cd apps/diagnostic-harness && ./gradlew --no-daemon :androidApp:assembleDebug :androidApp:assembleDebugAndroidTest; \
+	adb -s "$$serial" install -r androidApp/build/outputs/apk/debug/androidApp-debug.apk; \
+	adb -s "$$serial" install -r androidApp/build/outputs/apk/androidTest/debug/androidApp-debug-androidTest.apk; \
+	adb -s "$$serial" shell pm clear com.calisthenics.diagnostic.android; \
+	transcript=$$(mktemp); \
+	trap 'rm -f "$$transcript"' EXIT INT TERM; \
+	adb -s "$$serial" shell am instrument -w -r -e class com.calisthenics.diagnostic.composition.FiveRunReplayDeviceGateTest com.calisthenics.diagnostic.android.test/androidx.test.runner.AndroidJUnitRunner >"$$transcript" 2>&1; \
+	cat "$$transcript"; \
+	cd ../.. && $(VENV_PYTHON) tools/check_five_run_replay.py "$$serial" com.calisthenics.diagnostic.android "$$transcript"
 
 # Device-gated per design spec §9.2: requires exactly one authorized physical Samsung Galaxy S25
 # Ultra target, never a generic emulator, and never mutates the pending/recorded ledger itself —

@@ -11,6 +11,7 @@ import com.calisthenics.diagnostic.session.SessionFinalizer
 class SessionExporter(
     private val storage: StoragePort,
     private val manifestTemplate: SessionManifest,
+    private val manifestAtFinalization: (SessionManifest) -> SessionManifest = { it },
 ) : SessionFinalizer {
     private var finalizationResult: FinalizationResult? = null
 
@@ -40,10 +41,10 @@ class SessionExporter(
                 throw StreamReconciliationMismatch
             }
 
-            val manifest = manifestTemplate.copy(
+            val manifest = manifestAtFinalization(manifestTemplate.copy(
                 counts = snapshot.counts,
                 machineInferenceFailures = snapshot.failures,
-            )
+            ))
             storage.writeManifest(attempt, encodeManifest(manifest))
             storage.fsyncFile(attempt, StorageFile.MANIFEST)
             storage.fsyncDirectory(attempt.path)

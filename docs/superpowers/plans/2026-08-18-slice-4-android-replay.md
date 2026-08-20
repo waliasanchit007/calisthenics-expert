@@ -80,12 +80,12 @@
 - [x] The `confirmed` admission is bound, not declared — bound to the pinned model SHA-256, the exact Tasks Vision 1.0.0 pin, the committed fixture's frame digests, and a committed sanitized native-run artifact under `docs/evidence/detection-replay/`, by SHA-256 content binding from `fixture_metadata.json`
 - **Defect found by the instrumented run:** the adapter handed MediaPipe a heap-backed image buffer, so *every* frame failed as `backend_call_failed` ("Cannot get direct access to the input buffer"). No host test could have caught it. Fixed by copying each canonical plane into a fresh direct buffer, with a host regression that reads the buffer back through `ByteBufferExtractor`.
 
-### Task 5: Replay UI, export, and the five-run device gate
+### Task 5: Replay UI, export, and the five-run device gate — **DELIVERED (S25 evidence PENDING)**
 
-- [ ] Fixture selection, run, completion surface; export through `SessionExporter` and the real `AndroidStoragePort`
-- [ ] Every export validates against the Python reference CLI
-- [ ] Five-run harness and evidence ledger; without an S25 the ledger stays `pending` with its named missing precondition, and CI reports pending evidence — never a pass
-- [ ] Five complete runs of the same fixture on the S25 are evidence collection, not an assertion that five proves stability
+- [x] Fixture selection, run, completion surface (`HarnessUiState`/`HarnessApp` gain `ReplayFixtureOption`/`ReplayRunPhase`); export through the real `SessionExporter` and the real `AndroidStoragePort` via the new `RealReplayComposition` (real MediaPipe VIDEO replay through the Task 3 adapter — `DeterministicCore`/`SyntheticFixture` untouched and still exercised only by the Slice 3 `HarnessComposition` parity/process-kill tests). Verified on `emulator-5554` (`sdk_gphone16k_arm64`, API 37): 6/6 frames submitted and emitted, `FinalizationResult.Published`
+- [x] Every export validates against the Python reference CLI — `RealReplayCompositionExportTest` + `make verify-harness-replay-export` (any authorized device, mirrors `verify-harness-detection-replay`'s emulator allowance) pull the on-device export via `adb shell run-as` and run `observation_contracts validate-session`; executed for real, `valid: validate-session`
+- [x] Five-run harness and evidence ledger — `FiveRunReplayDeviceGateTest` (5 real replay-through-export cycles in one invocation) + typed `FiveRunReplayEvidence`/`renderFiveRunReplayEvidence` (`shared/commonMain`, computes `satisfies_s25_device_gate` itself — never caller-declared) + `make verify-harness-s25-five-run-replay` (physical-S25-only gate, mirrors `verify-harness-s25-process-kill`) + `tools/check_five_run_replay.py`. Mechanism proved for real on the emulator (5/5 runs consistent, `satisfies_s25_device_gate:false` as required); no physical S25 attached, so `docs/evidence/replay-five-run/s25-ultra-five-run-replay-ledger.json` honestly stays `{"status": "pending", "missing_precondition": "no physical Samsung Galaxy S25 Ultra attached"}`, and `reference/tests/test_device_evidence_ledger.py` enforces that shape inside `make verify`, which runs in CI — pending evidence, never a silent pass
+- [x] Five complete runs of the same fixture on the S25 are evidence collection, not an assertion that five proves stability — `renderFiveRunReplayEvidence`'s doc comment and `verify-harness-s25-five-run-replay`'s Makefile comment both say so; the gate requires five consistent, published, CLI-validated runs and nothing stronger
 
 ## Environment prerequisites
 

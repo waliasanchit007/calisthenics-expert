@@ -79,6 +79,55 @@ val copyJvmSyntheticExportFixture = tasks.register<Copy>("copyJvmSyntheticExport
     into(layout.buildDirectory.dir("generated/androidTestAssets/synthetic-session"))
 }
 
+// Task 5: the UI's real replay path needs the verified model asset and the committed detection
+// fixture on the device at runtime, not only staged for an instrumented test. This stages both
+// into this delivery module's own main `assets/`, so the packaged APK carries exactly the bytes
+// `verifyModelAsset` above already SHA-verified, under the same `replay/...` layout
+// `:shared:stageDeviceTestReplayResources` uses — one asset shape, two staging sites, so
+// `RealReplayComposition`'s `context.assets.open("replay/...")` reads work identically whichever
+// build produced the APK.
+val repositoryRoot = rootDir.parentFile.parentFile
+val detectionFixtureDir = repositoryRoot.resolve("fixtures/synthetic/valid/fixture_detection")
+val deliveryReplayAssetsDir = layout.buildDirectory.dir("generated/deliveryReplayAssets")
+
+val stageDeliveryReplayAssets = tasks.register("stageDeliveryReplayAssets") {
+    description = "Stages the verified pinned model asset and the detection fixture into this app's main assets."
+    val fixtureMetadataFile = detectionFixtureDir.resolve("fixture_metadata.json")
+    inputs.file(modelProvenanceFile)
+    inputs.file(fixtureMetadataFile)
+    inputs.dir(detectionFixtureDir.resolve("decoded"))
+    outputs.dir(deliveryReplayAssetsDir)
+    outputs.upToDateWhen { false }
+    doLast {
+        val provenanceText = modelProvenanceFile.readText()
+        val provenance = JsonSlurper().parseText(provenanceText) as Map<*, *>
+        val assetName = provenance["asset_name"] as String
+        val assetFile = modelAssetsDir.resolve(assetName)
+        if (!assetFile.isFile) {
+            throw GradleException(
+                "model asset missing at $assetFile; run make fetch-model-asset before assembling " +
+                    "a delivery build",
+            )
+        }
+
+        val staged = deliveryReplayAssetsDir.get().asFile.resolve("replay")
+        staged.deleteRecursively()
+        staged.resolve("detection/decoded").mkdirs()
+        staged.resolve("model_provenance.json").writeText(provenanceText)
+        staged.resolve(assetName).writeBytes(assetFile.readBytes())
+        staged.resolve("detection/fixture_metadata.json").writeText(fixtureMetadataFile.readText())
+        detectionFixtureDir.resolve("decoded").listFiles().orEmpty().sorted().forEach { plane ->
+            staged.resolve("detection/decoded/${plane.name}").writeBytes(plane.readBytes())
+        }
+    }
+}
+
+// Every real asset-merging task (mergeDebugAssets, mergeReleaseAssets, ...) needs the staged
+// bytes; the non-delivery jvmVerification variant is excluded exactly like verifyModelAsset above,
+// so `verify-harness-jvm` never requires the fetched model.
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") && "JvmVerification" !in it.name }
+    .configureEach { dependsOn(stageDeliveryReplayAssets) }
+
 android {
     namespace = "com.calisthenics.diagnostic.android"
     compileSdk = libs.versions.android.compileSdk.get().toInt()
@@ -115,6 +164,9 @@ android {
         getByName("androidTest") {
             assets.srcDir(layout.buildDirectory.dir("generated/androidTestAssets").get().asFile)
         }
+        getByName("main") {
+            assets.srcDir(deliveryReplayAssetsDir.get().asFile)
+        }
     }
 }
 
@@ -128,6 +180,7 @@ dependencies {
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.core)
+    implementation(libs.mediapipe.tasks.vision)
     testImplementation(libs.kotlin.test)
     testImplementation(libs.junit4)
     androidTestImplementation(libs.androidx.test.runner)
