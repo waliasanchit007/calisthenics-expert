@@ -18,7 +18,12 @@ import androidx.compose.ui.unit.dp
 import com.calisthenics.diagnostic.capability.HarnessMode
 
 @Composable
-fun HarnessApp(state: HarnessUiState, onModeSelected: (HarnessMode) -> Unit = {}, onStart: () -> Unit = {}) {
+fun HarnessApp(
+    state: HarnessUiState,
+    onModeSelected: (HarnessMode) -> Unit = {},
+    onFixtureSelected: (ReplayFixtureOption) -> Unit = {},
+    onStart: () -> Unit = {},
+) {
     Column(Modifier.padding(16.dp).verticalScroll(rememberScrollState())) {
         Text("Diagnostic harness", style = MaterialTheme.typography.headlineSmall)
         Text("Platform: ${state.platform}")
@@ -32,6 +37,18 @@ fun HarnessApp(state: HarnessUiState, onModeSelected: (HarnessMode) -> Unit = {}
                 }
             }
         }
+        if (state.selectedMode == HarnessMode.REPLAY) {
+            Text("Fixture", style = MaterialTheme.typography.titleMedium)
+            ReplayFixtureOption.entries.forEach { option ->
+                Row {
+                    RadioButton(
+                        selected = state.selectedFixture == option,
+                        onClick = { onFixtureSelected(option) },
+                    )
+                    Text(option.label)
+                }
+            }
+        }
         Text("Capabilities", style = MaterialTheme.typography.titleMedium)
         state.capabilities.forEach { capability -> Text("${capability.id}: ${capability.state}", Modifier.fillMaxWidth()) }
         if (!state.canStart) {
@@ -39,5 +56,31 @@ fun HarnessApp(state: HarnessUiState, onModeSelected: (HarnessMode) -> Unit = {}
             state.disabledReasons.forEach { Text(it) }
         }
         Button(enabled = state.canStart, onClick = onStart) { Text("Start ${state.selectedMode.name}") }
+        ReplayRunStatus(state.runPhase)
+    }
+}
+
+@Composable
+private fun ReplayRunStatus(phase: ReplayRunPhase) {
+    when (phase) {
+        is ReplayRunPhase.NotStarted -> Unit
+        is ReplayRunPhase.Running -> {
+            Text("Running", style = MaterialTheme.typography.titleMedium)
+            Text("frames submitted: ${phase.framesSubmitted}")
+            Text("records emitted: ${phase.framesEmitted}")
+            Text("poses detected: ${phase.poseDetectedRecords}")
+        }
+        is ReplayRunPhase.Completed -> {
+            Text("Completed", style = MaterialTheme.typography.titleMedium)
+            Text("session: ${phase.summary.sessionId}")
+            Text("published: ${phase.summary.published}")
+            Text("records emitted: ${phase.summary.inferenceRecordsEmitted}")
+            Text("poses detected: ${phase.summary.poseDetectedRecords}")
+            Text("inference failures: ${phase.summary.inferenceFailures}")
+        }
+        is ReplayRunPhase.Failed -> {
+            Text("Failed", style = MaterialTheme.typography.titleMedium)
+            Text(phase.reason)
+        }
     }
 }

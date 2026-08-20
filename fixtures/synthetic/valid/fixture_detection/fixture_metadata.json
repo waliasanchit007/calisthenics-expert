@@ -1,0 +1,134 @@
+{
+  "fixture_metadata_schema_version": "1.0.0",
+  "fixture_id": "b2c3d4e5-6f70-4a81-9b2c-3d4e5f607182",
+  "synthetic": true,
+  "preprocessing_contract_version": "1.0.0",
+  "frame_width": 256,
+  "frame_height": 256,
+  "pixel_format": "rgb24",
+  "color_space": "srgb",
+  "color_range": "full",
+  "channel_order": "rgb",
+  "orientation": "upright",
+  "generator": "tools/generate_detection_fixture.py",
+  "generator_license": "same as repository",
+  "figure_provenance": "rendered from geometric primitives; not a photograph of a person",
+  "detection_evidence": {
+    "status": "confirmed",
+    "admissible_for_topology_checks": true,
+    "confirmed_by": "apps/diagnostic-harness/shared/src/androidDeviceTest/kotlin/com/calisthenics/diagnostic/mediapipe/DetectionTierReplayTopologyTest.kt",
+    "observations": [
+      {
+        "observed_on_utc_date": "2026-08-20",
+        "evidence_artifact": {
+          "path": "docs/evidence/detection-replay/emulator-sdk-gphone16k-arm64-api37.json",
+          "sha256": "b04d6d182110c01be80bd44bce43003ce5923fef9e35ae387c81cabfd35bebba"
+        },
+        "device_class": "emulator",
+        "device_identity": "Google/sdk_gphone16k_arm64/emu64a16k/sdk_gphone16k_arm64",
+        "device_fingerprint": "google/sdk_gphone16k_arm64/emu64a16k:17/CP31.260623.009/15923651:user/dev-keys",
+        "adb_serial": "emulator-5554",
+        "api_level": 37,
+        "android_release": "17",
+        "abi": "arm64-v8a",
+        "delegate": "CPU",
+        "running_mode": "VIDEO",
+        "tasks_vision_version": "1.0.0",
+        "model_asset_name": "pose_landmarker_full.task",
+        "model_sha256": "5134a3aad27a58b93da0088d431f366da362b44e3ccfbe3462b3827a839011b1",
+        "num_poses": 1,
+        "runs_per_invocation": 3,
+        "instrumentation_invocations": 5,
+        "total_fresh_pose_landmarker_runs": 15,
+        "fresh_pose_landmarker_per_run": true,
+        "pose_present_frames": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "pose_count_per_frame": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "normalized_landmark_count_per_frame": [
+          33,
+          33,
+          33,
+          33,
+          33,
+          33
+        ],
+        "world_landmark_count_per_frame": [
+          33,
+          33,
+          33,
+          33,
+          33,
+          33
+        ],
+        "presence_pattern_fully_populated": true,
+        "landmark_observation_sha256": [
+          "45cfc47f2ea419f4415330744c47a92c5ca7bd449dceddfc6f17afdddea5b3cb",
+          "9d3ed87703394585531896fe7c9b8a2720a2e11f495592bb5b466dc3d9216f5d",
+          "24bd1f8a94d90fb95213108d2c92c2c2fe7542d14e5123cbf18043a0ee3f3c3c",
+          "d5b9dacb9d5a58ee98b389e4162caf8046cfd68d739bdcfc97dd7cbc23be0893",
+          "77b55b40ca0cdb523c403fc6ea3ceffdf030a8792f5a25a34e74a55f4a9f4659",
+          "28a51ce898b6c3bce6db030573a3cc39c6e08d656b80938ab8e2bf6440fe8c6a"
+        ],
+        "satisfies_s25_device_gate": false,
+        "note": "Emulator observation only. The five-run Samsung Galaxy S25 Ultra device gate is a separate observation and is not satisfied, in whole or in part, by this entry. No physical S25 was attached when this was recorded."
+      }
+    ]
+  },
+  "frames": [
+    {
+      "frame_index": 0,
+      "timestamp_ns": 0,
+      "path": "decoded/frame_000000.rgb24",
+      "byte_length": 196608,
+      "sha256": "8c7f44df2e490a1b18dc8d56c1e0475ac6a7c79750b0a5d4a28de8b37b7d14c4"
+    },
+    {
+      "frame_index": 1,
+      "timestamp_ns": 33333333,
+      "path": "decoded/frame_000001.rgb24",
+      "byte_length": 196608,
+      "sha256": "a60eec677d115d92a98df22469ef209a6f9668b2277b125c1ecc6442dfc3d17a"
+    },
+    {
+      "frame_index": 2,
+      "timestamp_ns": 33333500,
+      "path": "decoded/frame_000002.rgb24",
+      "byte_length": 196608,
+      "sha256": "8e97408735e5083eecc8496e38a8fd12c4b522397158c145e036eb03338bde00"
+    },
+    {
+      "frame_index": 3,
+      "timestamp_ns": 66666666,
+      "path": "decoded/frame_000003.rgb24",
+      "byte_length": 196608,
+      "sha256": "d4a5f0cf19f5fd35848cf150bfe08f2d794386a2fdbbad80eb88a87d36a8b21f"
+    },
+    {
+      "frame_index": 4,
+      "timestamp_ns": 100000000,
+      "path": "decoded/frame_000004.rgb24",
+      "byte_length": 196608,
+      "sha256": "cbdd85322a6efcee1cf577585e2ab2e2d555154546485304e4d31a281dcbff06"
+    },
+    {
+      "frame_index": 5,
+      "timestamp_ns": 133333333,
+      "path": "decoded/frame_000005.rgb24",
+      "byte_length": 196608,
+      "sha256": "a619365459e4c0cc746cb88b1599f5adfa53fa7039294915c430e20dd68fa4f0"
+    }
+  ]
+}

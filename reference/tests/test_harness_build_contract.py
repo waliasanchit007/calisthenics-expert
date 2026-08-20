@@ -28,6 +28,7 @@ def test_harness_build_contract() -> None:
     makefile = (ROOT / "Makefile").read_text()
     workflow = (ROOT / ".github" / "workflows" / "verify.yml").read_text()
     adr = (ROOT / "docs" / "adr" / "ADR-0004-kmp-android-first-diagnostic-harness.md").read_text()
+    android_app_build = (HARNESS / "androidApp" / "build.gradle.kts").read_text()
     all_gradle_text = "\n".join(
         path.read_text()
         for path in HARNESS.rglob("*")
@@ -81,6 +82,55 @@ def test_harness_build_contract() -> None:
     assert "not a delivery platform" in adr, (
         "catches ADR drift that could misclassify the JVM test host"
     )
+    assert (
+        'tasks.matching { it.name.startsWith("package") && "JvmVerification" !in it.name }'
+        in android_app_build
+    ), (
+        "catches the model-asset gate no longer wired onto every real package-producing task, "
+        "which would let a direct :androidApp:packageDebug invocation bypass verification"
+    )
+    assert "dependsOn(verifyModelAsset)" in android_app_build, (
+        "catches default delivery assembly no longer requiring the verified model asset"
+    )
+    assert "skipModelAssetVerification" not in android_app_build, (
+        "catches the model-asset gate regaining a caller-controlled property bypass, which a "
+        "direct delivery invocation could tack onto packageDebug/packageRelease to skip "
+        "verification"
+    )
+    assert 'create("jvmVerification")' in android_app_build, (
+        "catches the JVM/CI host losing its mechanically distinct, non-delivery build type"
+    )
+    jvm_verification_build_type = android_app_build.split('create("jvmVerification")', 1)[1].split(
+        "\n    }", 1
+    )[0]
+    assert "applicationIdSuffix" in jvm_verification_build_type, (
+        "catches the JVM/CI verification variant losing its distinct application identity, which "
+        "is what keeps it mechanically separate from the delivery app"
+    )
+    assert "versionNameSuffix" in jvm_verification_build_type, (
+        "catches the JVM/CI verification variant losing its distinct version identity"
+    )
+    assert (
+        ":androidApp:assembleJvmVerification"
+        in makefile.split("verify-harness-jvm:", 1)[1].split("\n\n", 1)[0]
+    ), (
+        "catches the JVM/CI verification target reverting to the delivery assembleDebug/"
+        "packageDebug task graph, which would once again require the model asset on a host that "
+        "is not a delivery platform"
+    )
+    assert (
+        ":androidApp:packageDebug"
+        not in makefile.split("verify-harness-jvm:", 1)[1].split("\n\n", 1)[0]
+    ), "catches the JVM/CI verification target reintroducing the delivery packaging task"
+    for delivery_target in (
+        "verify-harness-android-export-parity:",
+        "verify-harness-s25-process-kill:",
+    ):
+        delivery_block = makefile.split(delivery_target, 1)[1].split("\nverify-", 1)[0]
+        assert "JvmVerification" not in delivery_block, (
+            f"catches the non-delivery JVM verification variant leaking into the device-delivery "
+            f"target {delivery_target.rstrip(':')}"
+        )
 
 
 def test_kotlin_export_contract_is_wired_to_python_authority() -> None:
@@ -253,6 +303,45 @@ def test_s25_process_kill_target_accepts_zero_status_with_process_crashed_signal
         "catches the process-kill gate losing the exact 'Process crashed' signal match, which "
         "must remain the load-bearing evidence of a genuine kill regardless of shell status"
     )
+
+
+def test_detection_replay_target_delegates_its_verdict_to_the_run_checker() -> None:
+    """The device wrapper must not decide passage by grepping a generic success line.
+
+    `am instrument` exits 0 even when tests fail, so the output is load-bearing — but a `^OK (`
+    match accepts `OK (0 tests)`, accepts a different suite, and accepts a run that emitted no
+    observation. The verdict belongs to the checker's exit status, which is host-tested in
+    `reference/tests/test_detection_replay_evidence.py`.
+    """
+    makefile = (ROOT / "Makefile").read_text()
+    target = makefile.split("verify-harness-detection-replay:", 1)[1].split(
+        "\nverify-harness-s25-process-kill:", 1
+    )[0]
+
+    assert "am instrument -w -r" in target, (
+        "catches the loss of raw instrumentation results, without which the transcript carries no "
+        "per-test class/name/status blocks and the suite cannot be verified at all"
+    )
+    assert "tools/check_detection_replay_run.py" in target, (
+        "catches the device wrapper losing the run checker that requires the exact suite, all "
+        "three of its tests, and the sanitized evidence record"
+    )
+    assert "grep -q '^OK ('" not in target, (
+        "catches the device wrapper reverting to a generic success-line grep, which accepts "
+        "OK (0 tests) and a run of any other suite"
+    )
+    assert target.lstrip().startswith("@set -eu"), (
+        "catches the device wrapper losing errexit, which would let a failing step be stepped over"
+    )
+    checker_line = next(
+        line for line in target.splitlines() if "check_detection_replay_run.py" in line
+    )
+    assert "||" not in checker_line and "; true" not in checker_line, (
+        f"catches the checker's exit status being swallowed on the way to make: {checker_line!r}"
+    )
+    checker = (ROOT / "tools/check_detection_replay_run.py").read_text()
+    assert "verify_instrumented_run" in checker
+    assert "verify_committed_evidence" in checker
 
 
 def test_ios_host_embeds_shared_compose_controller() -> None:

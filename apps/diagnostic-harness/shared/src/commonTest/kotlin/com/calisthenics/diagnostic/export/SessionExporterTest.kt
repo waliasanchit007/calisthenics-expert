@@ -16,6 +16,7 @@ import com.calisthenics.diagnostic.contract.SemanticVersion
 import com.calisthenics.diagnostic.contract.SessionManifest
 import com.calisthenics.diagnostic.contract.Sha256
 import com.calisthenics.diagnostic.contract.Uuid
+import com.calisthenics.diagnostic.contract.decodeManifest
 import com.calisthenics.diagnostic.session.FinalizationResult
 import com.calisthenics.diagnostic.session.SealedSessionSnapshot
 import com.calisthenics.diagnostic.session.TerminalState
@@ -33,6 +34,28 @@ import kotlin.test.assertTrue
  * [FakeStorage] and the real `AndroidStoragePort`.
  */
 class SessionExporterTest {
+    @Test
+    fun endedAtManifestValueIsProducedDuringFinalizationAfterReplayFramesAreReconciled() {
+        val fake = FakeStorage()
+        val storage = FaultInjectingStoragePort(fake)
+        val beforeReplay = "2026-01-01T00:00:00Z"
+        val afterReplay = "2026-01-01T00:00:10Z"
+        val template = manifest().copy(clock = manifest().clock.copy(endedAtUtc = beforeReplay))
+        val result = SessionExporter(
+            storage,
+            template,
+            manifestAtFinalization = { current ->
+                assertTrue(storage.operations.contains("reconcile"))
+                current.copy(clock = current.clock.copy(endedAtUtc = afterReplay))
+            },
+        ).finalize(snapshot(listOf(frame(posePresent = true))))
+
+        assertIs<FinalizationResult.Published>(result)
+        val exportedManifest = decodeManifest(fake.attempts.single().manifest!!)
+        assertEquals(afterReplay, exportedManifest.clock.endedAtUtc)
+        assertTrue(storage.operations.indexOf("reconcile") < storage.operations.indexOf("writeManifest"))
+    }
+
     @Test
     fun fixedCommitOrderIsObservable() {
         val storage = FaultInjectingStoragePort(FakeStorage())

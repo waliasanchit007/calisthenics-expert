@@ -47,6 +47,28 @@ sealed interface FinalizationResult {
         val failureCode: String,
         val detail: String,
     ) : FinalizationResult
+
+    /**
+     * The session was abandoned before it could be finalized: nothing was published and no
+     * finalizer ran.
+     *
+     * This is the typed outcome of the teardown race. A caller that abandons a run mid-flight — UI
+     * teardown while a replay is still submitting frames — leaves the session `FAILED`, and the
+     * `stop()`/`finalize()` sequence that follows in the caller's own completion path then has
+     * nothing legitimate left to do. Before this existed, that sequence threw
+     * `IllegalStateException("session must be sealed before finalization")` out of the run, which is
+     * a crash rather than an outcome.
+     *
+     * It is deliberately distinct from [Failed]: that means a session which genuinely reached
+     * finalization and failed there. Conflating the two would report an abandoned run as an export
+     * defect and leave a torn-down run indistinguishable from a real storage failure in the
+     * evidence. Only the abandonment path produces this; every other route to `FAILED` still
+     * surfaces as itself.
+     */
+    data class Cancelled(
+        override val sealedSnapshot: SealedSessionSnapshot,
+        val reason: String,
+    ) : FinalizationResult
 }
 
 fun interface SessionFinalizer {
@@ -105,6 +127,8 @@ class SessionRunner(
     private var diagnosticDropsAfterSeal = 0L
     private var sealedSnapshot: SealedSessionSnapshot? = null
     private var finalizationResult: FinalizationResult? = null
+    private var inferenceDisposed = false
+    private var abandonedBeforeFinalization = false
 
     init {
         require(drainTimeoutNs >= 0) { "drain timeout must be non-negative" }
@@ -191,6 +215,19 @@ class SessionRunner(
 
     fun finalize(): FinalizationResult = dispatcher.dispatch {
         finalizationResult?.let { return@dispatch it }
+        // The teardown race, resolved as an outcome rather than a crash. A caller that abandoned
+        // this run mid-flight still runs its own stop/finalize completion path, and this is the
+        // only lifecycle state in which that path has nothing legitimate to do: the session is
+        // already terminal, its snapshot is already sealed, and publishing it would export a
+        // session the owner gave up on. Decided inside the dispatcher, so the decision cannot race
+        // an abandonment arriving from another thread; and scoped strictly to abandonment, so a
+        // genuine internal failure still surfaces through the check below rather than being
+        // relabelled as a cancellation.
+        if (lifecycle == SessionLifecycle.FAILED && abandonedBeforeFinalization) {
+            val snapshot = checkNotNull(sealedSnapshot) { "an abandoned session must carry a sealed snapshot" }
+            return@dispatch FinalizationResult.Cancelled(snapshot, ABANDONED_BEFORE_FINALIZATION)
+                .also { finalizationResult = it }
+        }
         check(lifecycle == SessionLifecycle.SEALED) { "session must be sealed before finalization" }
         val snapshot = sealedSnapshot ?: seal()
         transitionTo(SessionLifecycle.ASSEMBLING)
@@ -205,6 +242,31 @@ class SessionRunner(
     }
 
     fun snapshot(): SessionRunnerSnapshot = dispatcher.dispatch { snapshotInternal() }
+
+    /**
+     * Explicit, idempotent abandonment: forces a session that has not already reached a terminal
+     * state (`PUBLISHED` or `FAILED`) into `FAILED`, via the same [failSession] path an unexpected
+     * internal error already uses. This is for a run the caller is giving up on outside the normal
+     * stop/drain/finalize sequence — e.g. tearing down a run whose owned resources must not be
+     * leaked even though it never reached completion. Disposing the owned inference happens once,
+     * from the single [transitionTo] terminal-transition point shared with [finalize]; see
+     * [disposeInferenceIfOwned]. Safe to call repeatedly, including after the session has already
+     * reached `FAILED` on its own, or after it has already `PUBLISHED` (a no-op in that case: a
+     * successfully published session can never be retroactively failed).
+     *
+     * An abandonment that actually forced the session terminal is remembered, so a later
+     * [finalize] on the caller's normal completion path returns
+     * [FinalizationResult.Cancelled] instead of throwing. The flag is set only on that branch: a
+     * session already `FAILED` for its own reasons is not retroactively reclassified as abandoned,
+     * so a real failure keeps reporting itself as one.
+     */
+    fun abandon(): SessionRunnerSnapshot = dispatcher.dispatch {
+        if (lifecycle != SessionLifecycle.PUBLISHED && lifecycle != SessionLifecycle.FAILED) {
+            abandonedBeforeFinalization = true
+            failSession()
+        }
+        snapshotInternal()
+    }
 
     private fun <T> admit(event: RunnerEvent, handler: () -> T): T? = dispatcher.dispatch {
         if (lifecycle == SessionLifecycle.SEALED || lifecycle == SessionLifecycle.ASSEMBLING ||
@@ -316,6 +378,22 @@ class SessionRunner(
         check(transitionAllowed(lifecycle, next)) { "invalid lifecycle transition $lifecycle -> $next" }
         lifecycle = next
         transitionHistory += next
+        if (next == SessionLifecycle.PUBLISHED || next == SessionLifecycle.FAILED) {
+            disposeInferenceIfOwned()
+        }
+    }
+
+    /**
+     * The single terminal-transition binding point: successful publication and every path into
+     * `FAILED` (an internal error via [failSession], a finalizer failure, or explicit [abandon])
+     * all pass through [transitionTo], so disposal is guaranteed exactly once regardless of which
+     * terminal path a session actually takes. [inference] is disposed only when it implements
+     * [Disposable] — a plain [InferencePort] implementation is completely unaffected.
+     */
+    private fun disposeInferenceIfOwned() {
+        if (inferenceDisposed) return
+        inferenceDisposed = true
+        (inference as? Disposable)?.dispose()
     }
 
     private fun transitionAllowed(current: SessionLifecycle, next: SessionLifecycle): Boolean = when (current) {
@@ -331,6 +409,11 @@ class SessionRunner(
     private fun imageWidth(): Int = sessionConfiguration.imageWidth
 
     private fun imageHeight(): Int = sessionConfiguration.imageHeight
+
+    companion object {
+        /** The stable reason recorded on a [FinalizationResult.Cancelled] produced by [abandon]. */
+        const val ABANDONED_BEFORE_FINALIZATION: String = "session_abandoned_before_finalization"
+    }
 
     private fun snapshotInternal(): SessionRunnerSnapshot {
         val ledgerSnapshot = ledger.snapshot()

@@ -22,6 +22,13 @@ jobs:
           distribution: temurin
           java-version: "21"
       - run: make bootstrap
+      # `make verify` runs the --offline model-asset build-gate tests. On a clean runner the Gradle
+      # cache is empty, so --offline cannot even resolve the Android Gradle Plugin and those tests
+      # fail at plugin resolution instead of exercising the gate. This step resolves the plugins,
+      # dependencies, and AGP tooling they need, using only the non-delivery jvmVerification
+      # variant, so the delivery gate itself stays untouched. Ordering pinned by
+      # reference/tests/test_ci_gradle_cache_ordering.py.
+      - run: make prepare-harness-gradle-dependencies
       - run: make verify
       - run: make verify-harness-jvm
       - run: make verify-kotlin-export
