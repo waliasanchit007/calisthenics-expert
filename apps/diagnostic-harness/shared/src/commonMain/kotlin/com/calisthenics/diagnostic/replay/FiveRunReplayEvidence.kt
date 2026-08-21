@@ -15,36 +15,18 @@ const val FIVE_RUN_REPLAY_EVIDENCE_SCHEMA_VERSION: String = "1.0.0"
 /** Discriminator so a reader can never mistake this record for the Task 4 detection observation. */
 const val FIVE_RUN_REPLAY_RECORD_KIND: String = "five_run_replay_device_gate_observation"
 
-/** The marketing-name substring that identifies the authorized five-run gate target, when present. */
-private const val S25_ULTRA_MARKER = "S25 Ultra"
-
-/**
- * The Galaxy S25 Ultra model-number family: `SM-S938B/U/N/W` across regions.
- *
- * Model number is the authoritative identifier, not marketing name. Retail S25 Ultra firmware does
- * not necessarily populate `ro.config.marketing_name` — the device this gate was written for
- * reports it empty — so a marketing-name-only rule rejects the very hardware it exists to
- * authorize. It fails closed, which is the safe direction, but it blocks evidence collection
- * entirely. Marketing name remains an accepted additional signal, never the only one.
- */
-private const val S25_ULTRA_MODEL_PREFIX = "SM-S938"
-
-/** The one authorized manufacturer, compared case-insensitively. */
-private const val AUTHORIZED_MANUFACTURER = "samsung"
-
 /**
  * Whether [environment] is the one authorized physical five-run gate target.
  *
- * Shared so the Kotlin renderer, `tools/check_five_run_replay.py`, and the Makefile gate cannot
- * drift apart. All three previously carried their own copy of this rule.
+ * Delegates to [isAuthorizedS25Target], the single home for this rule.
  */
 fun isAuthorizedFiveRunGateTarget(environment: FiveRunReplayEnvironment): Boolean =
-    environment.deviceClass == "physical_device" &&
-        environment.manufacturer.lowercase() == AUTHORIZED_MANUFACTURER &&
-        (
-            environment.model.uppercase().startsWith(S25_ULTRA_MODEL_PREFIX) ||
-                S25_ULTRA_MARKER in environment.marketingName
-            )
+    isAuthorizedS25Target(
+        deviceClass = environment.deviceClass,
+        manufacturer = environment.manufacturer,
+        model = environment.model,
+        marketingName = environment.marketingName,
+    )
 
 /**
  * The device the five complete runs were observed on. Derived from platform build markers by the

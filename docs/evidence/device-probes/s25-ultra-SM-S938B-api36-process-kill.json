@@ -1,0 +1,27 @@
+{
+  "artifact_schema_version": "1.0.0",
+  "contains_landmark_coordinates": false,
+  "emitted_by": "com.calisthenics.diagnostic.export.ProcessKillDuringExportTest",
+  "environment": {
+    "abi": "arm64-v8a",
+    "android_release": "16",
+    "api_level": 36,
+    "device_class": "physical_device",
+    "device_fingerprint": "samsung/pa3qxins/pa3q:16/BP4A.251205.006/S938BXXSBCZG3_OXMBCZG3:user/release-keys",
+    "device_identity": "samsung/SM-S938B/pa3q/pa3qxins",
+    "manufacturer": "samsung",
+    "marketing_name": "",
+    "model": "SM-S938B"
+  },
+  "observation": {
+    "export_root_corruption_count": 0,
+    "killed_at_operation": "destinationExists",
+    "process_crash_confirmed": true,
+    "staging_residue_classification": "CrashResidue",
+    "staging_residue_count": 1
+  },
+  "record_kind": "process_kill_during_export_device_gate_observation",
+  "sanitized": true,
+  "satisfies_s25_process_kill_gate": true,
+  "session_id": "5f6a7b8c-9d0e-4f1a-8b2c-3d4e5f6a7b8c"
+}
