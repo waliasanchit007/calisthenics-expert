@@ -1,0 +1,6 @@
+{
+  "missing_precondition": "No physical Samsung Galaxy S25 Ultra (SM-S938 family) camera observation has been recorded. `make verify-harness-s25-camera-probe` has never run against an attached authorized device, so the sensor timestamp source, the raw android.media.Image.dataSpace behind CameraX's nullable underlying-image bridge, and whether that bridge produces an image at all are all unobserved on the target hardware.",
+  "note": "Design section 8 requires this observation before the live Android capture adapter is built. Until it is recorded, live admission is unproven rather than denied, and no CameraX/YUV/LIVE_STREAM acquisition may be implemented on the strength of an assumption about what the S25 reports. The probe, the transcript checker, and the Make target are in place; only the physical run is outstanding.",
+  "record_kind": "camera_capability_probe_device_gate_observation",
+  "status": "pending"
+}

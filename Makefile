@@ -6,7 +6,7 @@ done; printf '%s' python3)
 VENV_PYTHON := .venv/bin/python
 CLI := $(VENV_PYTHON) -m observation_contracts
 
-.PHONY: bootstrap verify verify-harness-jvm verify-harness-ios verify-harness-foundation verify-kotlin-export verify-harness-android-export-parity verify-harness-detection-replay verify-harness-s25-process-kill verify-harness-replay-export verify-harness-s25-five-run-replay fetch-model-asset prepare-harness-gradle-dependencies
+.PHONY: bootstrap verify verify-harness-jvm verify-harness-ios verify-harness-foundation verify-kotlin-export verify-harness-android-export-parity verify-harness-detection-replay verify-harness-s25-process-kill verify-harness-replay-export verify-harness-s25-five-run-replay verify-harness-s25-camera-probe fetch-model-asset prepare-harness-gradle-dependencies
 
 bootstrap:
 	@command -v "$(PYTHON)" >/dev/null 2>&1 || { echo "error: Python interpreter '$(PYTHON)' was not found" >&2; exit 1; }
@@ -267,6 +267,83 @@ verify-kotlin-export:
 	printf 'frames sha256: %s\n' "$$second_frames_hash"; \
 	cd ../..; \
 	$(CLI) validate-session apps/diagnostic-harness/shared/build/conformance/synthetic-session/manifest.json apps/diagnostic-harness/shared/build/conformance/synthetic-session/frames.ndjson
+
+# The S25 camera capability probe (design spec section 8, Slice 5 precondition). Device-gated on
+# exactly the same preamble as verify-harness-s25-process-kill and
+# verify-harness-s25-five-run-replay: exactly one attached authorized target, never an emulator,
+# and Samsung plus the SM-S938 model family with the "S25 Ultra" marketing-name fallback —
+# consistent with isAuthorizedS25Target, the single home of that rule (shared/commonMain). An
+# emulated camera reports whatever the host image made up, so it says nothing about what the S25
+# sensor and CameraX's underlying-image bridge actually do.
+#
+# Like every other device gate here, this never writes the pending/recorded ledger at
+# docs/evidence/device-probes/s25-ultra-camera-capability-ledger.json. The checker prints the
+# sanitized record and a human copies it.
+#
+# `am instrument` exits 0 even when the test fails, so its status is preserved and printed for
+# diagnostics rather than trusted as the verdict, and any non-zero value fails the target before
+# the transcript is interpreted at all. The verdict itself belongs to
+# tools/check_camera_capability_probe.py, whose exit status distinguishes three outcomes:
+#
+#   0 — one passing probe test, one parseable sanitized record, live capture admissible;
+#   1 — the transcript could not be trusted (no record, two records, wrong suite, OK (0 tests),
+#       missing required fields, or a declared verdict contradicting the observations);
+#   3 — the probe succeeded and live capture is NOT admissible: UNKNOWN timestamps, an unknown
+#       DataSpace, or an unavailable underlying-image bridge. Design spec section 8 keeps the
+#       harness fail-closed here and stops the milestone for a material scope/contract decision;
+#       the observation is real evidence and is still printed for recording.
+#
+# Those regressions are hermetic and host-side, in
+# reference/tests/test_camera_capability_probe_check.py.
+verify-harness-s25-camera-probe:
+	@set -eu; \
+	device_count=$$(adb devices -l | tail -n +2 | awk '$$2=="device"' | wc -l | tr -d ' '); \
+	if [ "$$device_count" -ne 1 ]; then \
+		echo "error: verify-harness-s25-camera-probe requires exactly one authorized attached device, found $$device_count" >&2; \
+		exit 1; \
+	fi; \
+	serial=$$(adb devices -l | tail -n +2 | awk '$$2=="device" {print $$1}'); \
+	case "$$serial" in \
+		emulator-*) \
+			echo "error: attached target '$$serial' is an emulator; only a physical Samsung Galaxy S25 Ultra is an authorized target for this probe" >&2; \
+			exit 1; \
+			;; \
+	esac; \
+	manufacturer=$$(adb -s "$$serial" shell getprop ro.product.manufacturer | tr -d '\r'); \
+	manufacturer_lower=$$(printf '%s' "$$manufacturer" | tr '[:upper:]' '[:lower:]'); \
+	marketing_name=$$(adb -s "$$serial" shell getprop ro.config.marketing_name | tr -d '\r'); \
+	model=$$(adb -s "$$serial" shell getprop ro.product.model | tr -d '\r'); \
+	model_upper=$$(printf '%s' "$$model" | tr '[:lower:]' '[:upper:]'); \
+	if [ "$$manufacturer_lower" != "samsung" ]; then \
+		echo "error: attached target '$$serial' has manufacturer '$$manufacturer', not the authorized Samsung Galaxy S25 Ultra" >&2; \
+		exit 1; \
+	fi; \
+	authorized=0; \
+	case "$$model_upper" in SM-S938*) authorized=1 ;; esac; \
+	case "$$marketing_name" in *"S25 Ultra"*) authorized=1 ;; esac; \
+	if [ "$$authorized" -ne 1 ]; then \
+		echo "error: attached target '$$serial' model '$$model' marketing name '$$marketing_name' does not match the authorized Samsung Galaxy S25 Ultra" >&2; \
+		exit 1; \
+	fi; \
+	printf 'camera capability probe target: serial=%s model=%s marketing_name=%s api=%s\n' \
+		"$$serial" "$$model" "$$marketing_name" \
+		"$$(adb -s "$$serial" shell getprop ro.build.version.sdk | tr -d '\r')"; \
+	cd apps/diagnostic-harness && ./gradlew --no-daemon :androidApp:assembleDebug :androidApp:assembleDebugAndroidTest; \
+	adb -s "$$serial" install -r androidApp/build/outputs/apk/debug/androidApp-debug.apk; \
+	adb -s "$$serial" install -r androidApp/build/outputs/apk/androidTest/debug/androidApp-debug-androidTest.apk; \
+	transcript=$$(mktemp); \
+	trap 'rm -f "$$transcript"' EXIT INT TERM; \
+	set +e; \
+	adb -s "$$serial" shell am instrument -w -r -e class com.calisthenics.diagnostic.probe.CameraCapabilityProbeTest com.calisthenics.diagnostic.android.test/androidx.test.runner.AndroidJUnitRunner >"$$transcript" 2>&1; \
+	instrument_status=$$?; \
+	set -e; \
+	cat "$$transcript"; \
+	printf 'camera probe instrumentation exit status: %s\n' "$$instrument_status"; \
+	if [ "$$instrument_status" -ne 0 ]; then \
+		echo "error: am instrument exited $$instrument_status; the transcript is not a trustworthy observation" >&2; \
+		exit "$$instrument_status"; \
+	fi; \
+	cd ../.. && $(VENV_PYTHON) tools/check_camera_capability_probe.py "$$transcript"
 
 verify:
 	$(VENV_PYTHON) -m ruff format --check reference

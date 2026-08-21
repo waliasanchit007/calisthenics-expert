@@ -189,6 +189,142 @@ def test_android_probe_has_executable_instrumentation_wiring() -> None:
     assert "ProbeResult(" not in probe_test
     assert "BuildConfig.PROBE_GIT_SHA" in probe_test
 
+    # Design section 8 evidence. `println` never reaches `am instrument -w` output, so a record
+    # printed that way is a record the transcript checker can never see; the run would look
+    # successful and produce nothing to record.
+    assert "renderCameraCapabilityEvidence(" in probe_test
+    assert "println(" not in probe_test, (
+        "catches the record being printed to stdout, which am instrument -w never reports"
+    )
+    assert probe_test.count("sendStatus(") == 1, (
+        "catches the probe emitting zero records (nothing to record) or more than one (the checker "
+        "refuses to guess which belongs to this run)"
+    )
+    assert "CameraCapabilityEvidence" in probe_test, (
+        "catches drift in the status-bundle key tools/check_camera_capability_probe.py greps for"
+    )
+    # The renderer computes admission; the test must not decide it and must not gate its own pass
+    # on the outcome. A blocking observation is a successful probe whose record still gets emitted.
+    assert "satisfies_s25_camera_live_admission" not in probe_test
+
+
+def test_camera_probe_admission_rule_has_exactly_one_home() -> None:
+    """The device-authorization rule existed as four divergent copies once. Not a fifth, and not a
+    second copy of the camera admission rule beside it."""
+    evidence = (
+        HARNESS
+        / "shared/src/commonMain/kotlin/com/calisthenics/diagnostic/replay/CameraCapabilityEvidence.kt"
+    ).read_text()
+    probe_result = (
+        HARNESS / "androidApp/src/main/kotlin/com/calisthenics/diagnostic/probe/ProbeResult.kt"
+    ).read_text()
+
+    assert "isAuthorizedS25Target(" in evidence, (
+        "catches the camera renderer restating the device-authorization rule instead of delegating"
+    )
+    assert "SM-S938" not in evidence and "samsung" not in evidence.lower(), (
+        "catches a fifth copy of the S25 authorization rule appearing in the camera renderer"
+    )
+    assert "cameraObservationBlockingReasons(" in probe_result, (
+        "catches ProbeResult.isLiveAdmissible regaining its own copy of the admission rule, which "
+        "already diverged once by omitting the underlying-image bridge and the UNKNOWN DataSpace"
+    )
+    assert '"REALTIME"' not in probe_result, (
+        "catches the admission rule being restated in ProbeResult"
+    )
+    # commonMain cannot see android.hardware.DataSpace, so the sentinel is restated there and
+    # pinned to the platform constant by exactly one unit test.
+    assert "const val CAMERA_DATASPACE_UNKNOWN: Int = 0" in evidence
+    sentinel_test = (
+        HARNESS
+        / "androidApp/src/test/kotlin/com/calisthenics/diagnostic/probe/CameraProbeDataSpaceSentinelTest.kt"
+    ).read_text()
+    assert "DataSpace.DATASPACE_UNKNOWN" in sentinel_test
+    assert "CAMERA_DATASPACE_UNKNOWN" in sentinel_test
+
+
+def test_s25_camera_probe_target_delegates_its_verdict_to_the_checker() -> None:
+    """The camera-probe wrapper must decide nothing by grepping a success line.
+
+    `am instrument` exits 0 even when tests fail, and `^OK (` matches `OK (0 tests)` and any other
+    suite. Worse, "the probe ran" and "the probe observed something admissible" are different
+    questions here: `UNKNOWN` timestamps or an unavailable underlying-image bridge are real
+    observations that must block. Both verdicts belong to the checker's exit status, which is
+    host-tested in reference/tests/test_camera_capability_probe_check.py.
+    """
+    makefile = (ROOT / "Makefile").read_text()
+    probe_test = (
+        HARNESS
+        / "androidApp/src/androidTest/kotlin/com/calisthenics/diagnostic/probe/CameraCapabilityProbeTest.kt"
+    )
+    target = makefile.split("verify-harness-s25-camera-probe:", 1)[1].split("\nverify:", 1)[0]
+
+    assert probe_test.is_file()
+    phony_line = makefile.split("\n.PHONY", 1)[1].split("\n", 1)[0]
+    assert "verify-harness-s25-camera-probe" in phony_line, (
+        "catches the new device gate never being declared phony alongside the others"
+    )
+    assert target.lstrip().startswith("@set -eu"), (
+        "catches the wrapper losing errexit, which would let a failing step be stepped over"
+    )
+    assert "awk '$$2==\"device\"'" in target, (
+        "catches the wrapper counting attached targets by any means other than the established "
+        "authorized-device column match"
+    )
+    assert 'device_count" -ne 1' in target, (
+        "catches the wrapper accepting zero or several attached targets, either of which makes the "
+        "recorded serial meaningless"
+    )
+    assert "emulator-*)" in target, (
+        "catches the wrapper accepting an emulator; an emulated camera says nothing about what the "
+        "S25 sensor reports"
+    )
+    assert 'manufacturer_lower" != "samsung"' in target
+    assert "SM-S938*)" in target, (
+        "catches the wrapper losing the authoritative model-number match; retail S25 Ultra "
+        "firmware may report ro.config.marketing_name as empty, and a marketing-name-only rule "
+        "rejects the genuine device"
+    )
+    assert '*"S25 Ultra"*)' in target, (
+        "catches the wrapper losing the marketing-name fallback isAuthorizedS25Target also allows"
+    )
+    assert (
+        ":androidApp:assembleDebug" in target and ":androidApp:assembleDebugAndroidTest" in target
+    )
+    assert target.count('adb -s "$$serial" install') == 2, (
+        "catches the wrapper running against a stale installed APK"
+    )
+    assert "com.calisthenics.diagnostic.probe.CameraCapabilityProbeTest" in target
+    assert "am instrument -w -r" in target, (
+        "catches the loss of raw instrumentation results, without which the transcript carries no "
+        "per-test class/name/status blocks and the emitted record never appears at all"
+    )
+    instrument_line = next(line for line in target.splitlines() if "am instrument" in line)
+    assert "|| true" not in instrument_line, (
+        "catches the wrapper swallowing the instrumentation status"
+    )
+    assert "instrument_status" in target, (
+        "catches the wrapper discarding the instrumentation exit status instead of preserving it"
+    )
+    assert "tools/check_camera_capability_probe.py" in target, (
+        "catches the wrapper losing the checker that requires the exact suite, its one passing "
+        "test, and exactly one parseable sanitized record"
+    )
+    checker_line = next(
+        line for line in target.splitlines() if "check_camera_capability_probe.py" in line
+    )
+    assert "||" not in checker_line and "; true" not in checker_line, (
+        f"catches the checker's exit status being swallowed on the way to make: {checker_line!r}"
+    )
+    assert "grep -q '^OK ('" not in target, (
+        "catches the wrapper reverting to a generic success-line grep, which accepts OK (0 tests) "
+        "and a run of any other suite"
+    )
+    assert "s25-ultra-camera-capability-ledger.json" not in target, (
+        "catches the camera gate mutating the pending evidence ledger itself; the ledger is only "
+        "ever updated by a human copying the printed sanitized record"
+    )
+
 
 def test_android_storage_probe_has_executable_instrumentation_wiring() -> None:
     probe_test = (
