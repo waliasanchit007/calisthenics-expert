@@ -1,11 +1,20 @@
 package com.calisthenics.diagnostic.export
 
+import android.os.Build
+import android.os.Bundle
 import android.os.Process
+import android.util.Log
 import androidx.test.platform.app.InstrumentationRegistry
 import com.calisthenics.diagnostic.composition.HarnessComposition
 import com.calisthenics.diagnostic.conformance.SyntheticFixture
 import com.calisthenics.diagnostic.contract.Counts
 import com.calisthenics.diagnostic.contract.Uuid
+import com.calisthenics.diagnostic.probe.readMarketingName
+import com.calisthenics.diagnostic.replay.androidDeviceClassOf
+import com.calisthenics.diagnostic.replay.ProcessKillEnvironment
+import com.calisthenics.diagnostic.replay.ProcessKillEvidence
+import com.calisthenics.diagnostic.replay.ProcessKillObservation
+import com.calisthenics.diagnostic.replay.renderProcessKillEvidence
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
@@ -49,6 +58,48 @@ class ProcessKillDuringExportTest {
             residues.single(),
             "a process killed before commit completes must classify as CrashResidue, not Abandoned",
         )
+
+        // Emit the sanitized record for the human recording step, exactly as the five-run gate
+        // does. The renderer computes the gate flag from these observations; nothing here declares
+        // it. `process_crash_confirmed` is supplied by the harness that saw the transcript, so it
+        // is passed as false here and set true only by the Makefile target, which is the only
+        // layer that actually witnessed the crash.
+        val record = renderProcessKillEvidence(
+            ProcessKillEvidence(
+                emittedBy = "com.calisthenics.diagnostic.export.ProcessKillDuringExportTest",
+                environment = ProcessKillEnvironment(
+                    deviceClass = androidDeviceClassOf(Build.FINGERPRINT, Build.HARDWARE),
+                    deviceIdentity = "${Build.MANUFACTURER}/${Build.MODEL}/${Build.DEVICE}/${Build.PRODUCT}",
+                    deviceFingerprint = Build.FINGERPRINT,
+                    apiLevel = Build.VERSION.SDK_INT,
+                    androidRelease = Build.VERSION.RELEASE,
+                    abi = Build.SUPPORTED_ABIS.joinToString(","),
+                    manufacturer = Build.MANUFACTURER,
+                    model = Build.MODEL,
+                    marketingName = readMarketingName(),
+                ),
+                sessionId = SyntheticFixture.sessionId.value,
+                observation = ProcessKillObservation(
+                    killedAtOperation = "destinationExists",
+                    processCrashConfirmed = false,
+                    exportRootCorruptions = corruptions.map { it.path },
+                    stagingResidueCount = residues.size,
+                    stagingResidueClassification = "CrashResidue",
+                ),
+            ),
+        )
+        // `println` never reaches `am instrument -w` output; the record must be reported as an
+        // instrumentation status, mirroring the five-run gate.
+        InstrumentationRegistry.getInstrumentation().sendStatus(
+            PROCESS_KILL_STATUS_CODE,
+            Bundle().apply { putString(PROCESS_KILL_TAG, record) },
+        )
+        Log.i(PROCESS_KILL_TAG, record)
+    }
+
+    private companion object {
+        const val PROCESS_KILL_TAG = "ProcessKillEvidence"
+        const val PROCESS_KILL_STATUS_CODE = 4
     }
 }
 

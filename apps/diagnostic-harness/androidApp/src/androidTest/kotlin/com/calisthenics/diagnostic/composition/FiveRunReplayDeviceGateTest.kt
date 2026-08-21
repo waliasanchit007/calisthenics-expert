@@ -1,5 +1,6 @@
 package com.calisthenics.diagnostic.composition
 
+import com.calisthenics.diagnostic.probe.readMarketingName
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -171,14 +172,7 @@ class FiveRunReplayDeviceGateTest {
         Log.i(FIVE_RUN_REPLAY_TAG, record)
     }
 
-    /** `ro.config.marketing_name` is not exposed by the public `Build` API; read via `getprop`. */
-    private fun marketingName(context: android.content.Context): String = try {
-        Runtime.getRuntime().exec(arrayOf("getprop", "ro.config.marketing_name")).let { process ->
-            process.inputStream.bufferedReader().readText().trim().also { process.waitFor() }
-        }
-    } catch (_: Exception) {
-        ""
-    }
+    private fun marketingName(context: android.content.Context): String = readMarketingName()
 
     companion object {
         const val FIVE_RUN_REPLAY_TAG = "FiveRunReplayEvidence"

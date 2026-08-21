@@ -237,6 +237,8 @@ verify-harness-s25-process-kill:
 		exit 1; \
 	fi; \
 	set +e; \
+	verify_transcript=$$(mktemp); \
+	trap 'rm -f "$$verify_transcript"' EXIT INT TERM; \
 	first_output=$$(adb -s "$$serial" shell am instrument -w -e class com.calisthenics.diagnostic.export.ProcessKillDuringExportTest#killDuringCommit com.calisthenics.diagnostic.android.test/androidx.test.runner.AndroidJUnitRunner 2>&1); \
 	first_exit_code=$$?; \
 	set -e; \
@@ -246,7 +248,9 @@ verify-harness-s25-process-kill:
 		echo "error: killDuringCommit output does not identify an instrumentation process crash (\"Process crashed\"); refusing to trust unrelated or stale evidence" >&2; \
 		exit 1; \
 	fi; \
-	adb -s "$$serial" shell am instrument -w -e class com.calisthenics.diagnostic.export.ProcessKillDuringExportTest#verifyNoPartialEntryAndResidueClassification com.calisthenics.diagnostic.android.test/androidx.test.runner.AndroidJUnitRunner
+	adb -s "$$serial" shell am instrument -w -e class com.calisthenics.diagnostic.export.ProcessKillDuringExportTest#verifyNoPartialEntryAndResidueClassification com.calisthenics.diagnostic.android.test/androidx.test.runner.AndroidJUnitRunner >"$$verify_transcript" 2>&1; \
+	cat "$$verify_transcript"; \
+	cd ../.. && $(VENV_PYTHON) tools/record_process_kill_evidence.py "$$verify_transcript"
 
 verify-kotlin-export:
 	@set -eu; \

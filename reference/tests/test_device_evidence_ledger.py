@@ -11,8 +11,30 @@ def test_s25_process_kill_ledger_reports_pending_or_recorded_status() -> None:
     assert ledger["status"] in {"pending", "recorded"}
     if ledger["status"] == "pending":
         assert ledger["missing_precondition"]
-    else:
-        assert ledger["evidence_file"]
+        return
+
+    # A recorded ledger must be checked against the record it points at, to the same standard as
+    # the five-run gate. Asserting only that an evidence_file key exists would let a "recorded"
+    # status point at anything at all.
+    assert ledger["evidence_file"]
+    recorded = json.loads((ROOT / ledger["evidence_file"]).read_text())
+    observation = recorded["observation"]
+
+    # Without a real process death every other condition is trivially satisfied by a session that
+    # simply exported cleanly, and the gate would certify crash safety it never tested.
+    assert observation["process_crash_confirmed"] is True
+    assert observation["export_root_corruption_count"] == 0
+    assert observation["staging_residue_count"] == 1
+    # A killed process cannot have written a deliberate abort marker.
+    assert observation["staging_residue_classification"] == "CrashResidue"
+    assert recorded["satisfies_s25_process_kill_gate"] is True
+
+    environment = recorded["environment"]
+    assert environment["device_class"] == "physical_device"
+    assert environment["manufacturer"].lower() == "samsung"
+    assert environment.get("model", "").upper().startswith("SM-S938") or (
+        "S25 Ultra" in environment.get("marketing_name", "")
+    )
 
 
 def test_s25_five_run_replay_ledger_reports_pending_or_recorded_status() -> None:
