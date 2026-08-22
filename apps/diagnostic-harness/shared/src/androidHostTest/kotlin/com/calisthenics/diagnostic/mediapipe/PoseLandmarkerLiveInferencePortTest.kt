@@ -6,7 +6,10 @@ import com.google.mediapipe.framework.image.ByteBufferExtractor
 import com.google.mediapipe.framework.image.ByteBufferImageBuilder
 import com.google.mediapipe.framework.image.MPImage
 import java.nio.ByteBuffer
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executor
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -39,11 +42,13 @@ private class FakeLiveDetector : PoseLandmarkerLiveDetector {
         private set
     var closeCalls = 0
         private set
+    var onDetect: (() -> Unit)? = null
 
     override fun detectAsync(image: MPImage, backendTimestampMs: Long) {
         detectCalls++
         lastImage = image
         lastTimestampMs = backendTimestampMs
+        onDetect?.invoke()
     }
 
     override fun close() {
@@ -161,8 +166,114 @@ class PoseLandmarkerLiveInferencePortTest {
         assertFalse(port.hasPendingInference)
         executor.runNext()
         val failure = assertNotNull(callbackResult) as InferenceResult.Failure
-        assertEquals("backend_timestamp_mismatch", failure.classification)
+        assertEquals("backend_call_failed", failure.classification)
+        assertEquals("backend_timestamp_mismatch", failure.sourceErrorCode)
 
+        callbackImage.close()
+        port.dispose()
+    }
+
+    @Test
+    fun occupiedRejectionCreatesAndClosesNoUnownedImage() {
+        val detector = FakeLiveDetector()
+        val executor = ManualExecutor()
+        var imageCreates = 0
+        var imageCloses = 0
+        val port = PoseLandmarkerLiveInferencePort(
+            detector,
+            LIVE_WIDTH,
+            LIVE_HEIGHT,
+            { 0L },
+            executor,
+            imageFactory = { buffer, width, height ->
+                imageCreates++
+                ByteBufferImageBuilder(buffer, width, height, MPImage.IMAGE_FORMAT_RGB).build()
+            },
+            closeImage = { imageCloses++; it.close() },
+        )
+
+        port.submit(0L, ByteArray(LIVE_WIDTH * LIVE_HEIGHT * 3), 10L) {}
+        assertFailsWith<IllegalStateException> {
+            port.submit(1L, ByteArray(LIVE_WIDTH * LIVE_HEIGHT * 3), 11L) {}
+        }
+
+        assertEquals(1, imageCreates)
+        assertEquals(0, imageCloses)
+        port.cancel(0L)
+        assertEquals(1, imageCloses)
+        port.dispose()
+    }
+
+    @Test
+    fun concurrentSubmissionsHaveOneAtomicAdmissionAndOneImageCreation() {
+        val detector = FakeLiveDetector()
+        val enteredDetector = CountDownLatch(1)
+        val releaseDetector = CountDownLatch(1)
+        detector.onDetect = {
+            enteredDetector.countDown()
+            check(releaseDetector.await(5, TimeUnit.SECONDS))
+        }
+        var imageCreates = 0
+        val secondFailure = AtomicReference<Throwable?>(null)
+        val port = PoseLandmarkerLiveInferencePort(
+            detector,
+            LIVE_WIDTH,
+            LIVE_HEIGHT,
+            { 0L },
+            ManualExecutor(),
+            imageFactory = { buffer, width, height ->
+                imageCreates++
+                ByteBufferImageBuilder(buffer, width, height, MPImage.IMAGE_FORMAT_RGB).build()
+            },
+        )
+
+        val first = Thread { port.submit(0L, ByteArray(LIVE_WIDTH * LIVE_HEIGHT * 3), 10L) {} }
+        first.start()
+        assertTrue(enteredDetector.await(5, TimeUnit.SECONDS))
+        val second = Thread {
+            try {
+                port.submit(1L, ByteArray(LIVE_WIDTH * LIVE_HEIGHT * 3), 11L) {}
+            } catch (error: Throwable) {
+                secondFailure.set(error)
+            }
+        }
+        second.start()
+        second.join(5_000)
+        releaseDetector.countDown()
+        first.join(5_000)
+
+        assertTrue(secondFailure.get() is IllegalStateException)
+        assertEquals(1, imageCreates)
+        port.dispose()
+    }
+
+    @Test
+    fun unhealthyRejectionCreatesNoImageAfterTimestampMismatchClosesThePort() {
+        val detector = FakeLiveDetector()
+        val executor = ManualExecutor()
+        var imageCreates = 0
+        var imageCloses = 0
+        val port = PoseLandmarkerLiveInferencePort(
+            detector,
+            LIVE_WIDTH,
+            LIVE_HEIGHT,
+            { 0L },
+            executor,
+            imageFactory = { buffer, width, height ->
+                imageCreates++
+                ByteBufferImageBuilder(buffer, width, height, MPImage.IMAGE_FORMAT_RGB).build()
+            },
+            closeImage = { imageCloses++; it.close() },
+        )
+        port.submit(0L, ByteArray(LIVE_WIDTH * LIVE_HEIGHT * 3), 10L) {}
+        val callbackImage = image()
+        port.onResult(PoseLandmarkerDetection(false, 0, null, null), 11L, callbackImage)
+
+        assertFailsWith<IllegalStateException> {
+            port.submit(1L, ByteArray(LIVE_WIDTH * LIVE_HEIGHT * 3), 12L) {}
+        }
+        assertEquals(1, imageCreates)
+        assertEquals(1, imageCloses)
         callbackImage.close()
         port.dispose()
     }
@@ -258,6 +369,67 @@ class PoseLandmarkerLiveInferencePortTest {
         executor.runNext()
 
         assertTrue(true, "the queued callback failure must be contained by the port")
+        callbackImage.close()
+        port.dispose()
+    }
+
+    @Test
+    fun clockFailureReturnsOneSchemaValidBackendFailureWithoutEscapingListener() {
+        val detector = FakeLiveDetector()
+        val executor = ManualExecutor()
+        var callbackResult: InferenceResult? = null
+        var callbacks = 0
+        val port = PoseLandmarkerLiveInferencePort(
+            detector,
+            LIVE_WIDTH,
+            LIVE_HEIGHT,
+            { error("clock unavailable") },
+            executor,
+        )
+        port.submit(0L, ByteArray(LIVE_WIDTH * LIVE_HEIGHT * 3), 10L) {
+            callbacks++
+            callbackResult = it
+        }
+        val callbackImage = image()
+
+        port.onResult(PoseLandmarkerDetection(false, 0, null, null), 10L, callbackImage)
+        executor.runNext()
+
+        val failure = assertNotNull(callbackResult) as InferenceResult.Failure
+        assertEquals("backend_call_failed", failure.classification)
+        assertEquals("callback_clock_failed", failure.sourceErrorCode)
+        assertEquals(1, callbacks)
+        callbackImage.close()
+        port.dispose()
+    }
+
+    @Test
+    fun ownedImageCloseFailureReturnsOneBackendFailureWithoutEscapingListener() {
+        val detector = FakeLiveDetector()
+        val executor = ManualExecutor()
+        var callbackResult: InferenceResult? = null
+        var callbacks = 0
+        val port = PoseLandmarkerLiveInferencePort(
+            detector,
+            LIVE_WIDTH,
+            LIVE_HEIGHT,
+            { 0L },
+            executor,
+            closeImage = { error("owned image close failed") },
+        )
+        port.submit(0L, ByteArray(LIVE_WIDTH * LIVE_HEIGHT * 3), 10L) {
+            callbacks++
+            callbackResult = it
+        }
+        val callbackImage = image()
+
+        port.onResult(PoseLandmarkerDetection(false, 0, null, null), 10L, callbackImage)
+        executor.runNext()
+
+        val failure = assertNotNull(callbackResult) as InferenceResult.Failure
+        assertEquals("backend_call_failed", failure.classification)
+        assertEquals("owned_image_close_failed", failure.sourceErrorCode)
+        assertEquals(1, callbacks)
         callbackImage.close()
         port.dispose()
     }

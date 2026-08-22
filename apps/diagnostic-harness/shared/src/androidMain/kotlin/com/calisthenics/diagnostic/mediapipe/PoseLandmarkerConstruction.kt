@@ -86,13 +86,21 @@ fun buildPoseLandmarkerOptions(
     liveListeners?.let { listeners ->
         optionsBuilder
             .setResultListener { result, image ->
-                listeners.resultListener(
-                    poseLandmarkerDetectionOf(result.landmarks(), result.worldLandmarks()),
-                    result.timestampMs(),
-                    image,
-                )
+                notifyLiveResultSafely(
+                    timestampMs = { result.timestampMs() },
+                    callbackImage = image,
+                    listeners = listeners,
+                ) {
+                    poseLandmarkerDetectionOf(result.landmarks(), result.worldLandmarks())
+                }
             }
-            .setErrorListener { error -> listeners.errorListener(error) }
+            .setErrorListener { error ->
+                try {
+                    listeners.errorListener(error)
+                } catch (_: Throwable) {
+                    // No native listener exception may escape to MediaPipe.
+                }
+            }
     }
 
     val options = optionsBuilder.build()

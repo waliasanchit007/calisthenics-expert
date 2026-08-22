@@ -7,6 +7,8 @@ import com.calisthenics.diagnostic.model.ModelProvenanceException
 import com.calisthenics.diagnostic.model.verifyModelAsset
 import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarker
 import java.io.File
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 
 /** Builds one fresh LIVE_STREAM detector and port per live session. */
 class PoseLandmarkerLiveAdapterFactory(
@@ -38,14 +40,16 @@ class PoseLandmarkerLiveAdapterFactory(
             actualByteCount = modelBytes.size.toLong(),
         )
 
-        var port: PoseLandmarkerLiveInferencePort? = null
-        var preconstructionDrops = 0L
+        val portReference = AtomicReference<PoseLandmarkerLiveInferencePort?>(null)
+        val preconstructionDrops = AtomicLong(0L)
         val listeners = PoseLandmarkerLiveListenerBundle(
             resultListener = { detection, timestampMs, image ->
-                port?.onResult(detection, timestampMs, image) ?: run { preconstructionDrops++ }
+                portReference.get()?.onResult(detection, timestampMs, image)
+                    ?: preconstructionDrops.incrementAndGet()
             },
             errorListener = { error ->
-                port?.onError(error) ?: run { preconstructionDrops++ }
+                portReference.get()?.onError(error)
+                    ?: preconstructionDrops.incrementAndGet()
             },
         )
         val constructed = buildPoseLandmarkerOptions(
@@ -62,8 +66,8 @@ class PoseLandmarkerLiveAdapterFactory(
             modelInputHeight,
             nowNs,
         )
-        port = createdPort
-        diagnosticPreconstructionCallbackDrops = preconstructionDrops
+        portReference.set(createdPort)
+        diagnosticPreconstructionCallbackDrops = preconstructionDrops.get()
         lastConstructionEvidence = constructed.evidence
         return createdPort
     }

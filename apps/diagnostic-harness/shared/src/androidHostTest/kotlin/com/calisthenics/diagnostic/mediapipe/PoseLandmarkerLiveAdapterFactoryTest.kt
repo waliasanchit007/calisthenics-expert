@@ -4,6 +4,8 @@ import com.calisthenics.diagnostic.hash.Sha256Digest
 import com.calisthenics.diagnostic.model.ModelProvenance
 import com.calisthenics.diagnostic.model.ModelProvenanceException
 import com.google.mediapipe.framework.image.MPImage
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -80,6 +82,41 @@ class PoseLandmarkerLiveAdapterFactoryTest {
         factory.create().dispose()
 
         assertEquals(1L, factory.diagnosticPreconstructionCallbackDrops)
+        assertEquals(true, listeners != null)
+    }
+
+    @Test
+    fun callbackAfterCrossThreadInstallationRoutesToTheInstalledPort() {
+        val callbackStarted = CountDownLatch(1)
+        val allowCallback = CountDownLatch(1)
+        var listeners: PoseLandmarkerLiveListenerBundle? = null
+        var callbackThread: Thread? = null
+        val factory = PoseLandmarkerLiveAdapterFactory(
+            provenance = LIVE_PROVENANCE,
+            modelInputWidth = 256,
+            modelInputHeight = 256,
+            readModelBytes = { LIVE_MODEL_BYTES },
+            nowNs = { 0L },
+            constructDetector = { _, supplied ->
+                listeners = supplied
+                callbackThread = Thread {
+                    callbackStarted.countDown()
+                    check(allowCallback.await(5, TimeUnit.SECONDS))
+                    supplied.errorListener(IllegalStateException("late"))
+                }
+                callbackThread!!.start()
+                check(callbackStarted.await(5, TimeUnit.SECONDS))
+                FactoryStubDetector()
+            },
+        )
+
+        val port = factory.create()
+        allowCallback.countDown()
+        callbackThread!!.join(5_000)
+
+        assertEquals(0L, factory.diagnosticPreconstructionCallbackDrops)
+        assertEquals(1L, port.diagnosticCallbackDrops)
+        port.dispose()
         assertEquals(true, listeners != null)
     }
 

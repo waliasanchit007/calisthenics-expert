@@ -21,12 +21,17 @@ class PoseLandmarkerLiveInferencePort(
     private val modelInputHeight: Int,
     private val nowNs: () -> Long,
     private val callbackExecutor: Executor = Executors.newSingleThreadExecutor(),
+    private val imageFactory: (ByteBuffer, Int, Int) -> MPImage = { buffer, width, height ->
+        ByteBufferImageBuilder(buffer, width, height, MPImage.IMAGE_FORMAT_RGB).build()
+    },
+    private val closeImage: (MPImage) -> Unit = { it.close() },
 ) : InferencePort, Disposable {
     private sealed interface Slot {
         data object Empty : Slot
         data class Occupied(
             val submissionIndex: Long,
             val backendTimestampMs: Long,
+            val directInput: ByteBuffer,
             val image: MPImage,
             val callback: (InferenceResult) -> Unit,
         ) : Slot
@@ -64,35 +69,34 @@ class PoseLandmarkerLiveInferencePort(
                 "dimensions ${modelInputWidth}x$modelInputHeight (expected $expectedLength bytes)"
         }
 
-        val directInput = ByteBuffer.allocateDirect(canonicalInput.size)
-            .put(canonicalInput.copyOf())
-            .also { it.flip() }
-        val image = ByteBufferImageBuilder(
-            directInput,
-            modelInputWidth,
-            modelInputHeight,
-            MPImage.IMAGE_FORMAT_RGB,
-        ).build()
-
-        synchronized(monitor) {
+        val occupied = synchronized(monitor) {
             check(healthy && slot is Slot.Empty) {
                 if (!healthy) "live inference port is unhealthy" else "live inference slot is occupied"
             }
-            slot = Slot.Occupied(submissionIndex, backendTimestampMs, image, callback)
+            // Reservation and resource creation share this monitor. A rejected submission
+            // therefore cannot allocate an image that is outside the authoritative slot.
+            val directInput = ByteBuffer.allocateDirect(canonicalInput.size)
+                .put(canonicalInput.copyOf())
+                .also { it.flip() }
+            val image = imageFactory(directInput, modelInputWidth, modelInputHeight)
+            Slot.Occupied(submissionIndex, backendTimestampMs, directInput, image, callback).also {
+                slot = it
+            }
         }
 
         try {
-            detector.detectAsync(image, backendTimestampMs)
+            detector.detectAsync(occupied.image, backendTimestampMs)
         } catch (error: Throwable) {
             val released = releaseSubmission(submissionIndex)
             released?.let { owned ->
-                closeOwnedImage(owned.image)
+                val closeFailure = closeOwnedImage(owned.image)
                 enqueue(
                     owned.callback,
                     InferenceResult.Failure(
                         failureSource = "backend",
                         classification = "backend_call_failed",
-                        detail = error.message,
+                        sourceErrorCode = closeFailure?.let { "owned_image_close_failed" } ?: "detect_async_failed",
+                        detail = error.message ?: closeFailure?.message,
                     ),
                 )
             }
@@ -117,28 +121,46 @@ class PoseLandmarkerLiveInferencePort(
         } ?: return
 
         val (occupied, timestampMatches) = terminal
-        closeOwnedImage(occupied.image)
-        val result = if (timestampMatches) {
-            InferenceResult.Success(
-                inferenceEndNs = nowNs(),
-                posePresent = detection.posePresent,
-                normalizedImageLandmarks = detection.normalizedLandmarks,
-                worldLandmarks = detection.worldLandmarks,
+        val closeFailure = closeOwnedImage(occupied.image)
+        val result = if (closeFailure != null) {
+            InferenceResult.Failure(
+                failureSource = "backend",
+                classification = "backend_call_failed",
+                sourceErrorCode = "owned_image_close_failed",
+                detail = closeFailure.message,
             )
-        } else {
+        } else if (!timestampMatches) {
             synchronized(monitor) { healthy = false }
             InferenceResult.Failure(
                 failureSource = "backend",
-                classification = "backend_timestamp_mismatch",
+                classification = "backend_call_failed",
+                sourceErrorCode = "backend_timestamp_mismatch",
                 detail = "expected ${occupied.backendTimestampMs}, received $callbackTimestampMs",
             )
+        } else {
+            try {
+                InferenceResult.Success(
+                    inferenceEndNs = nowNs(),
+                    posePresent = detection.posePresent,
+                    normalizedImageLandmarks = detection.normalizedLandmarks,
+                    worldLandmarks = detection.worldLandmarks,
+                )
+            } catch (error: Throwable) {
+                synchronized(monitor) { healthy = false }
+                InferenceResult.Failure(
+                    failureSource = "backend",
+                    classification = "backend_call_failed",
+                    sourceErrorCode = "callback_clock_failed",
+                    detail = error.message,
+                )
+            }
         }
         // callbackImage is supplied by MediaPipe and deliberately not closed here.
         enqueue(occupied.callback, result)
     }
 
     /** Called by the native listener; an error is attributable only while the slot is occupied. */
-    fun onError(error: RuntimeException) {
+    fun onError(error: Throwable) {
         val occupied = synchronized(monitor) {
             val current = slot as? Slot.Occupied
             if (current == null) {
@@ -151,13 +173,17 @@ class PoseLandmarkerLiveInferencePort(
             current
         } ?: return
 
-        closeOwnedImage(occupied.image)
+        val closeFailure = closeOwnedImage(occupied.image)
+        val sourceErrorCode = closeFailure?.let { "owned_image_close_failed" }
+            ?: (error as? PoseLandmarkerLiveCallbackException)?.sourceErrorCode
+            ?: "mediapipe_error"
         enqueue(
             occupied.callback,
             InferenceResult.Failure(
                 failureSource = "backend",
                 classification = "backend_call_failed",
-                detail = error.message,
+                sourceErrorCode = sourceErrorCode,
+                detail = error.message ?: closeFailure?.message,
             ),
         )
     }
@@ -196,9 +222,17 @@ class PoseLandmarkerLiveInferencePort(
         current
     }
 
-    private fun closeOwnedImage(image: MPImage) {
-        image.close()
-        synchronized(monitor) { ownedImageCloses++ }
+    private fun closeOwnedImage(image: MPImage): Throwable? {
+        var failure: Throwable? = null
+        try {
+            closeImage(image)
+        } catch (error: Throwable) {
+            failure = error
+            synchronized(monitor) { healthy = false }
+        } finally {
+            synchronized(monitor) { ownedImageCloses++ }
+        }
+        return failure
     }
 
     private fun enqueue(callback: (InferenceResult) -> Unit, result: InferenceResult) {
