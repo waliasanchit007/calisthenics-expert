@@ -9,7 +9,6 @@ import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
-import java.lang.reflect.InvocationTargetException
 
 class SessionRunnerTest {
     @Test
@@ -106,22 +105,22 @@ class SessionRunnerTest {
         val inference = RecordingInferencePort()
         val runner = runner(scheduler, inference, RecordingFinalizer())
 
-        assertEquals(false, hasPendingInference(runner))
+        assertEquals(false, runner.hasPendingInference())
         val submission = runner.submit(0, 100, 110, byteArrayOf(1))!!
-        assertEquals(true, hasPendingInference(runner))
+        assertEquals(true, runner.hasPendingInference())
 
         // The backend call has returned, but no asynchronous terminal callback has arrived.
-        assertEquals(true, hasPendingInference(runner))
+        assertEquals(true, runner.hasPendingInference())
 
         inference.complete(submission, InferenceResult.Success(120, posePresent = false))
-        assertEquals(false, hasPendingInference(runner))
+        assertEquals(false, runner.hasPendingInference())
 
         val timedOut = runner(VirtualDeadlineScheduler(), RecordingInferencePort(), RecordingFinalizer())
         val timedOutSubmission = timedOut.submit(0, 100, 110, byteArrayOf(1))!!
         timedOut.stop(nowNs = 200)
         timedOut.postDeadline()
         assertEquals(timedOutSubmission, timedOut.snapshot().sealedSnapshot!!.terminalMap.keys.single())
-        assertEquals(false, hasPendingInference(timedOut))
+        assertEquals(false, timedOut.hasPendingInference())
     }
 
     @Test
@@ -593,9 +592,4 @@ class SessionRunnerTest {
         const val TEST_HEIGHT = 256
     }
 
-    private fun hasPendingInference(runner: SessionRunner): Boolean = try {
-        runner.javaClass.getMethod("hasPendingInference").invoke(runner) as Boolean
-    } catch (error: InvocationTargetException) {
-        throw error.targetException
-    }
 }
