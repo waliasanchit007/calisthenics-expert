@@ -139,7 +139,7 @@ class SessionRunner(
         captureTimestampNs: Long,
         inferenceStartNs: Long,
         input: ByteArray,
-    ): Long? = admit(RunnerEvent.Submit(frameIndex, captureTimestampNs, inferenceStartNs, input.copyOf())) {
+    ): Long? = admit(RunnerEvent.Submit(frameIndex, captureTimestampNs, inferenceStartNs, input)) {
         require(inferenceStartNs >= captureTimestampNs) {
             "inference must start at or after capture"
         }
@@ -200,6 +200,9 @@ class SessionRunner(
     }
 
     fun postDeadline(): Unit = admit(RunnerEvent.DeadlineExpired) { expireDeadline() }.let { }
+
+    /** Conservative dispatcher-confined view; the port's own slot remains authoritative. */
+    fun hasPendingInference(): Boolean = dispatcher.dispatch { pendingSubmissionIndices.isNotEmpty() }
 
     fun cancel(submissionIndex: Long): Unit = admit(RunnerEvent.Cancel(submissionIndex)) {
         check(submissionIndex in pendingSubmissionIndices) { "submission is not pending" }
@@ -328,6 +331,7 @@ class SessionRunner(
     private fun expireDeadline() {
         if (lifecycle != SessionLifecycle.DRAINING) return
         pendingSubmissionIndices.toList().forEach { submissionIndex ->
+            inference.cancel(submissionIndex)
             classifyFailure(
                 submissionIndex,
                 InferenceResult.Failure("harness", "session_teardown_timeout"),

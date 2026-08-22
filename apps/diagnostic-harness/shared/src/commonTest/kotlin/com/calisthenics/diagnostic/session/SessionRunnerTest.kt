@@ -9,6 +9,7 @@ import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import java.lang.reflect.InvocationTargetException
 
 class SessionRunnerTest {
     @Test
@@ -83,6 +84,44 @@ class SessionRunnerTest {
         assertEquals("harness", failure.failureSource)
         assertEquals("session_teardown_timeout", failure.classification)
         assertEquals(TerminalState.TIMED_OUT, runner.snapshot().sealedSnapshot!!.terminalMap[submission])
+    }
+
+    @Test
+    fun deadlineExpiryCancelsEachPendingInferenceBeforeRecordingTheTimeout() {
+        val scheduler = VirtualDeadlineScheduler()
+        val inference = RecordingInferencePort()
+        val runner = runner(scheduler, inference, RecordingFinalizer())
+        val submission = runner.submit(0, 100, 110, byteArrayOf(1))!!
+
+        runner.stop(nowNs = 200)
+        scheduler.advanceTo(1_200)
+
+        assertEquals(listOf("submit:$submission", "cancel:$submission"), inference.events)
+        assertEquals("session_teardown_timeout", runner.snapshot().sealedSnapshot!!.failures.single().classification)
+    }
+
+    @Test
+    fun pendingInferenceAdvisoryRemainsOccupiedUntilACompletionOrDrainTimeout() {
+        val scheduler = VirtualDeadlineScheduler()
+        val inference = RecordingInferencePort()
+        val runner = runner(scheduler, inference, RecordingFinalizer())
+
+        assertEquals(false, hasPendingInference(runner))
+        val submission = runner.submit(0, 100, 110, byteArrayOf(1))!!
+        assertEquals(true, hasPendingInference(runner))
+
+        // The backend call has returned, but no asynchronous terminal callback has arrived.
+        assertEquals(true, hasPendingInference(runner))
+
+        inference.complete(submission, InferenceResult.Success(120, posePresent = false))
+        assertEquals(false, hasPendingInference(runner))
+
+        val timedOut = runner(VirtualDeadlineScheduler(), RecordingInferencePort(), RecordingFinalizer())
+        val timedOutSubmission = timedOut.submit(0, 100, 110, byteArrayOf(1))!!
+        timedOut.stop(nowNs = 200)
+        timedOut.postDeadline()
+        assertEquals(timedOutSubmission, timedOut.snapshot().sealedSnapshot!!.terminalMap.keys.single())
+        assertEquals(false, hasPendingInference(timedOut))
     }
 
     @Test
@@ -481,6 +520,7 @@ class SessionRunnerTest {
             private set
         var cancelled = 0
             private set
+        val events = mutableListOf<String>()
 
         override fun submit(
             submissionIndex: Long,
@@ -489,11 +529,13 @@ class SessionRunnerTest {
             callback: (InferenceResult) -> Unit,
         ) {
             submissions++
+            events += "submit:$submissionIndex"
             callbacks[submissionIndex] = callback
         }
 
         override fun cancel(submissionIndex: Long) {
             cancelled++
+            events += "cancel:$submissionIndex"
         }
 
         fun complete(submissionIndex: Long, result: InferenceResult) {
@@ -549,5 +591,11 @@ class SessionRunnerTest {
         val TEST_SCHEMA_VERSION = SemanticVersion("1.1.0")
         const val TEST_WIDTH = 256
         const val TEST_HEIGHT = 256
+    }
+
+    private fun hasPendingInference(runner: SessionRunner): Boolean = try {
+        runner.javaClass.getMethod("hasPendingInference").invoke(runner) as Boolean
+    } catch (error: InvocationTargetException) {
+        throw error.targetException
     }
 }
