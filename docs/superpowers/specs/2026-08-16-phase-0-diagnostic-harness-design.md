@@ -253,6 +253,15 @@ Using `STRATEGY_BLOCK_PRODUCER` would move delay into the camera pipeline withou
 - Before session start, record source format, colour standard, colour range, raw DataSpace, orientation, mirroring, source width, and source height.
 - Capture width/height describe the source buffer before orientation. Canonical scale/pad operates on the upright post-rotation plane.
 
+The recorded S25 capability evidence admits one concrete live adapter configuration for this
+milestone: camera ID `0`, `YUV_420_888`, timestamp source `REALTIME`, raw DataSpace `146931712`,
+colour standard `BT601`, colour range `FULL`, and an available CameraX underlying-image bridge.
+The live source selects camera ID `0` explicitly rather than relying on a generic back-camera
+selector. Every delivered buffer is checked against the admitted pixel format, DataSpace, colour
+standard/range, and bridge availability before submission. Any different or unavailable value is
+a typed blocking observation and stops the session; this milestone does not silently select
+another conversion matrix or reinterpret the probe evidence.
+
 ### MediaPipe boundary
 
 - Exactly one LIVE_STREAM call may be in flight.
@@ -269,6 +278,9 @@ The released decoded-frame and live-capture preprocessing contracts are normativ
 
 - Fixture replay starts from tightly packed RGB24 sRGB full-range bytes.
 - Live conversion uses the admitted YUV colour standard/range and source plane layout.
+- The Android adapter in this milestone implements BT601/FULL conversion only. BT709, LIMITED,
+  or any other known-but-unproven combination remains fail-closed until its own committed
+  source-format vectors and physical capability evidence are admitted.
 - Orientation and mirroring are applied before canonical scale-to-fit.
 - Scale-to-fit uses center-of-pixel mapping, exact-fraction bilinear sampling with half-up channel rounding, and exact black padding as released.
 - Source-format YUV byte vectors cover row stride, pixel stride, odd dimensions, rotation, mirroring, matrix, and range cases.
