@@ -93,23 +93,23 @@ git commit -m "feat: add BT601 full-range YUV conformance"
 - `CameraXFrameSource.start(onFrame, onFailure)` binds camera ID `0` explicitly (filtering by Camera2 camera ID, not generic lens facing) to lifecycle with YUV output and keep-latest backpressure; `stop()` is idempotent and unbinds only owned use cases.
 - `LiveFrameAdmission(configuredFps)` produces `CADENCE_SELECTION`, `BACKPRESSURE`, `PREPROCESSING_FAILED`, `SESSION_STOPPING`, or `SUBMIT`; cadence decisions use capture timestamps and support exactly 10, 15, and 30 FPS.
 
-- [ ] **Step 1: RED — pin copying, immediate close, and admitted metadata**
+- [x] **Step 1: RED — pin copying, immediate close, and admitted metadata**
 
 Write host tests around a narrow image/plane seam showing that callbacks receive immutable bytes even after source buffers are mutated; all three plane strides survive; source metadata is copied; and the proxy close action happens before `onFrame` returns. Pin exact CameraX constants in a build-contract test.
 
-- [ ] **Step 2: RED — pin cadence and exhaustive classification**
+- [x] **Step 2: RED — pin cadence and exhaustive classification**
 
 Write common tests for 10/15/30 FPS cadence, same-timestamp behavior, stopped-session classification, occupied-slot backpressure, preprocessing failure, and the invariant that one delivered callback yields exactly one terminal admission decision.
 
-- [ ] **Step 3: GREEN — implement acquisition and pure admission**
+- [x] **Step 3: GREEN — implement acquisition and pure admission**
 
 Add the CAMERA permission only. Reuse the probe's CameraX dispatcher/lifecycle conventions, but do not reuse its one-shot timeout semantics as the session source. Decode every buffer's DataSpace and reject any value other than the recorded BT601/FULL result before exposing the frame.
 
-- [ ] **Step 4: Verify mutations**
+- [x] **Step 4: Verify mutations**
 
 Temporarily remove the U-plane copy, change keep-latest to block-producer, and allow a second classification for one callback. Each relevant focused test must fail. Revert each mutation and run focused JVM/Android host tests.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/diagnostic-harness/androidApp/src/main/AndroidManifest.xml apps/diagnostic-harness/androidApp/src/main/kotlin/com/calisthenics/diagnostic/camera apps/diagnostic-harness/androidApp/src/test/kotlin/com/calisthenics/diagnostic/camera apps/diagnostic-harness/shared/src/commonMain/kotlin/com/calisthenics/diagnostic/live apps/diagnostic-harness/shared/src/commonTest/kotlin/com/calisthenics/diagnostic/live
@@ -120,6 +120,7 @@ git commit -m "feat: add immutable CameraX live acquisition"
 
 **Files:**
 - Create: `apps/diagnostic-harness/shared/src/androidMain/kotlin/com/calisthenics/diagnostic/mediapipe/PoseLandmarkerLiveInferencePort.kt`
+- Create: `apps/diagnostic-harness/shared/src/androidMain/kotlin/com/calisthenics/diagnostic/mediapipe/PoseLandmarkerLiveDetector.kt`
 - Create: `apps/diagnostic-harness/shared/src/androidMain/kotlin/com/calisthenics/diagnostic/mediapipe/PoseLandmarkerLiveAdapterFactory.kt`
 - Create: `apps/diagnostic-harness/shared/src/androidHostTest/kotlin/com/calisthenics/diagnostic/mediapipe/PoseLandmarkerLiveInferencePortTest.kt`
 - Create: `apps/diagnostic-harness/shared/src/androidHostTest/kotlin/com/calisthenics/diagnostic/mediapipe/PoseLandmarkerLiveAdapterFactoryTest.kt`
@@ -129,24 +130,49 @@ git commit -m "feat: add immutable CameraX live acquisition"
 
 **Interfaces:**
 - `PoseLandmarkerLiveAdapterFactory.create()` verifies a `LIVE_STREAM` provenance/model asset and constructs one fresh landmarker per session with result and error listeners wired before construction.
-- `PoseLandmarkerLiveInferencePort : InferencePort, Disposable` owns canonical direct buffers/images until the asynchronous callback, maps the callback timestamp to exactly one pending submission, and closes all resources exactly once.
-- `SessionRunner.hasPendingInference(): Boolean` is dispatcher-confined and is the authoritative one-slot query for the live controller.
+- `PoseLandmarkerLiveDetector` is the host-testable native seam; result mapping and timestamp
+  extraction occur at this boundary because MediaPipe 1.0.0's result factory is package-private.
+- `PoseLandmarkerLiveInferencePort : InferencePort, Disposable` owns one monitor-confined
+  `Empty | Occupied | Closed` slot, its canonical direct buffer, and only the `MPImage` it creates.
+  It validates the result timestamp, releases ownership before notification, and enqueues runner
+  notification on a port-owned executor rather than blocking MediaPipe's callback thread.
+- `SessionRunner.hasPendingInference(): Boolean` is a dispatcher-confined conservative advisory
+  gate: stale-occupied is allowed; stale-free is not. Port ownership is authoritative.
+- LIVE_STREAM listener wiring is required iff the options running mode is LIVE_STREAM. A
+  pre-construction sink is installed with the port after detector creation and records, rather
+  than dereferences, any pre-install callback.
 
 - [ ] **Step 1: RED — asynchronous ownership and callback mapping**
 
-Test that `detectAsync` returning does not release input or slot ownership, a result callback releases exactly once, an error callback produces `backend_call_failed`, duplicate/unknown callbacks fail closed, cancel/drain timeout releases owned resources, and dispose closes a fresh detector exactly once.
+Test that `detectAsync` returning does not release input or slot ownership; result/error releases
+the slot and owned image exactly once before queued runner notification; timestamp mismatch fails
+closed; duplicate/unknown/late callbacks cannot enter the runner; unattributable errors latch the
+port unhealthy; cancel/drain timeout releases owned resources; callback exceptions never escape
+the MediaPipe listener thread; and disposal closes a fresh detector exactly once without waiting
+on a callback blocked in the session dispatcher. Never close the callback-supplied `MPImage`.
 
 - [ ] **Step 2: RED — expose the pending-slot query**
 
-Add `SessionRunner` tests showing the query is false initially, true after submission, and false only after success, failure, or drain timeout—not after the backend call merely returns.
+Add `SessionRunner` tests showing the advisory query is false initially, true after submission,
+and false only after success, failure, or drain timeout—not after the backend call merely returns.
+Pin that deadline expiry invokes `InferencePort.cancel(submissionIndex)` before recording
+`session_teardown_timeout`. Remove the unused admit-time copy while retaining the copy at the
+port boundary.
 
 - [ ] **Step 3: GREEN — implement the live factory/port and query**
 
-Share construction-site evidence with the replay adapter without weakening replay's CPU/VIDEO gate. Preserve model/task-option evidence exactly. Use MediaPipe's `detectAsync` and native listeners; do not emulate LIVE_STREAM with `detectForVideo`.
+Share construction-site evidence with the replay adapter without weakening replay's CPU/VIDEO
+gate. Preserve model/task-option evidence exactly. Require a listener bundle iff running mode is
+LIVE_STREAM and reject it for VIDEO/IMAGE. Use MediaPipe's `detectAsync` and native listeners; do
+not emulate LIVE_STREAM with `detectForVideo`. Supply callback `nowNs` in the same rebased session
+clock domain. The actual live composition uses `SingleThreadSessionDispatcher`; the port's local
+monitor and callback executor remain independent of that dispatcher.
 
 - [ ] **Step 4: Verify mutations**
 
-Temporarily clear ownership immediately after `detectAsync` and temporarily allow creation with VIDEO provenance. The corresponding tests must fail. Revert and run all androidHost/session tests.
+Temporarily clear ownership immediately after `detectAsync`, notify the runner before clearing the
+slot, omit deadline cancellation, and allow creation with VIDEO provenance. The corresponding
+tests must fail. Revert and run all androidHost/session tests.
 
 - [ ] **Step 5: Commit**
 
@@ -172,10 +198,19 @@ git commit -m "feat: add MediaPipe live-stream inference"
 - The composition validates the recorded camera-capability evidence before constructing the source or session, rebases CameraX and inference clocks to one `t0`, converts YUV, applies existing scale/pad, and routes each callback through exactly one `SessionRunner.submit` or `skip` call.
 - The manifest records session kind `live`, camera metadata, preprocessing `1.0.0`, configured/achieved cadence, exact MediaPipe construction evidence, source dimensions before orientation, and canonical model-input dimensions after preprocessing.
 - Shared UI exposes Replay/Live mode, 10/15/30 FPS, capability/failure reasons, live counters, start, and stop. Permission denial or revocation is typed and fail-closed.
+- A five-second controller-owned in-flight stall fence starts with each successful submission. A
+  result/error cancels it. Expiry stops acquisition and the session, exposes typed internal
+  `live_inference_stalled`, and lets the existing drain deadline record
+  `session_teardown_timeout`; it never relabels the drop as `backend_call_failed`.
 
 - [ ] **Step 1: RED — composition admission and timestamp domain**
 
-Write host tests with fake acquisition/inference/storage seams for wrong camera metadata, all four skip reasons, a shared `t0 = 0` rebase, source-vs-model dimensions, one-slot backpressure, stop/drain/finalize order, and exact manifest source metadata.
+Write host tests with fake acquisition/inference/storage seams for wrong camera metadata, all four
+skip reasons, a shared `t0 = 0` rebase including callback-time `nowNs`, source-vs-model dimensions,
+one-slot backpressure, the five-second silent-drop stall fence, stop/drain/finalize order, and exact
+manifest source metadata. Prove the stall path stops the session, reports
+`live_inference_stalled` internally, and records only the existing `session_teardown_timeout`
+contract classification.
 
 - [ ] **Step 2: RED — UI reachability and permission behavior**
 

@@ -266,10 +266,33 @@ another conversion matrix or reinterpret the probe evidence.
 
 - Exactly one LIVE_STREAM call may be in flight.
 - The in-flight slot stores submission index, capture timestamp, backend timestamp, inference start, and the immutable input.
-- The slot is released only by a result/error callback or the drain timeout fence, never by `detectAsync` returning.
+- The LIVE_STREAM port's monitor-confined slot is the ownership authority. `SessionRunner`'s
+  pending-submission view is a conservative advisory gate: it may briefly report occupied after
+  the port has released ownership, but it must never report free while the port remains occupied.
+- The slot is released only by a result/error callback, explicit cancellation, disposal, or the
+  drain timeout fence, never by `detectAsync` returning. Result timestamps must equal the slot's
+  backend timestamp; a mismatch fails the occupied submission closed and latches the port unhealthy.
+- Result/error listeners clear the slot and close only the `MPImage` created by the port before
+  notifying `SessionRunner`. They never close the callback-supplied image. Notification is enqueued
+  on a port-owned callback executor so MediaPipe's callback thread never blocks on the session
+  dispatcher. No callback exception may escape into MediaPipe's thread.
+- A callback against an empty or closed slot is a diagnostic drop and cannot re-enter
+  `SessionRunner`. An unattributable error additionally latches the port unhealthy. Disposal is
+  idempotent, closes owned resources exactly once, and cannot deadlock against a callback waiting
+  for the session dispatcher.
+- LIVE_STREAM listeners are installed in the options builder before detector construction. A
+  listener sink exists before construction and is installed with the port afterward; any
+  pre-install callback is recorded as a diagnostic and cannot dereference an absent port.
 - MediaPipe's internal detector resize and tracker-derived ROI are backend behaviour, not harness-controlled canonical preprocessing. Pin and record model SHA, Tasks Vision version, delegate, running mode, and all task options.
 - No external ROI is supplied in this milestone.
 - A backend error becomes `backend_call_failed`. Missing completion at the drain deadline becomes `session_teardown_timeout`; the harness does not fabricate a backend error.
+- MediaPipe may accept a LIVE_STREAM input without producing a callback. The live controller owns
+  a five-second in-flight stall fence. Expiry stops acquisition and the session, surfaces a typed
+  internal `live_inference_stalled` failure in app state, and lets the normal drain fence classify
+  the still-missing completion as `session_teardown_timeout`. It does not fabricate
+  `backend_call_failed` or add a new released-contract classification.
+- Live capture supplies callback-time `nowNs` rebased to the same session-relative monotonic `t0`
+  as capture and inference-start timestamps.
 - `inference_frames_submitted` increments only after preprocessing succeeds and immediately before the inference call is dispatched. A frame whose preprocessing fails is not a submission and is attributed to the `preprocessing_failed` skip reason.
 
 ## 9. Preprocessing
