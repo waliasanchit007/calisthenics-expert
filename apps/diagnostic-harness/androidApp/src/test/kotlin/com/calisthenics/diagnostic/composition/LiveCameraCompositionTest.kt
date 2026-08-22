@@ -262,6 +262,38 @@ class LiveCameraCompositionTest {
     }
 
     @Test
+    fun finalizerManifestCallbackDoesNotDeadlockStopFinalization() {
+        val harness = Harness(invokeManifestAtFinalization = true)
+        val stopReturned = CountDownLatch(1)
+        val stopError = AtomicReference<Throwable?>(null)
+        val completion = AtomicReference<LiveCameraCompletion?>(null)
+        val stopThread = Thread {
+            runCatching { harness.composition.stop() }
+                .onSuccess(completion::set)
+                .onFailure(stopError::set)
+            stopReturned.countDown()
+        }
+        try {
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            stopThread.start()
+
+            assertTrue(stopReturned.await(1, TimeUnit.SECONDS), "stop/finalization deadlocked")
+            stopThread.join(1_000)
+            assertNull(stopError.get())
+            assertIs<FinalizationResult.Published>(assertNotNull(completion.get()).finalization)
+            assertTrue(harness.manifestCallbackInvoked)
+        } finally {
+            if (stopThread.isAlive) {
+                stopThread.interrupt()
+                stopThread.join(1_000)
+                harness.manifestCallbackInvokedLatch.await(1, TimeUnit.SECONDS)
+            }
+            harness.composition.abandon()
+            harness.scheduler.awaitShutdown()
+        }
+    }
+
+    @Test
     fun callbackAfterStopCompletesTheDrainWithoutWaitingForDeadline() {
         withHarness(Harness()) { harness ->
             assertIs<LiveCameraStartResult.Started>(harness.start(10))
@@ -311,6 +343,7 @@ class LiveCameraCompositionTest {
         registrationResult: SessionRunnerRegistrationResult = SessionRunnerRegistrationResult.ACCEPTED,
         sourceFactoryFailure: Throwable? = null,
         sourceStartFailure: Throwable? = null,
+        invokeManifestAtFinalization: Boolean = false,
     ) {
         val events = mutableListOf<String>()
         val inference = FakeInference(events)
@@ -321,6 +354,8 @@ class LiveCameraCompositionTest {
         var inferenceCreations = 0
         var finalizerCreated = false
         var finalizerCalls = 0
+        var manifestCallbackInvoked = false
+        val manifestCallbackInvokedLatch = CountDownLatch(1)
         lateinit var manifest: com.calisthenics.diagnostic.contract.SessionManifest
         private var started = false
 
@@ -341,13 +376,18 @@ class LiveCameraCompositionTest {
                     inferenceCreations++
                     LiveInference(inference, inference, constructionEvidence)
                 },
-                sessionFinalizerFactory = { template, _ ->
+                sessionFinalizerFactory = { template, manifestAtFinalization ->
                     finalizerFailure?.let { throw it }
                     finalizerCreated = true
                     manifest = template
                     object : SessionFinalizer {
                         override fun finalize(snapshot: com.calisthenics.diagnostic.session.SealedSessionSnapshot): FinalizationResult {
                             finalizerCalls++
+                            if (invokeManifestAtFinalization) {
+                                manifestAtFinalization(template)
+                                manifestCallbackInvoked = true
+                                manifestCallbackInvokedLatch.countDown()
+                            }
                             return FinalizationResult.Published(snapshot)
                         }
                     }

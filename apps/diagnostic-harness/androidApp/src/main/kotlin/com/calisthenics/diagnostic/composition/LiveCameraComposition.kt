@@ -209,26 +209,38 @@ class LiveCameraComposition internal constructor(
     private var abandonRequested = false
 
     fun start(configuredInferenceFps: Int, onProgress: (SessionRunnerSnapshot) -> Unit = {}): LiveCameraStartResult {
+        var unavailable: LiveCameraStartResult.Unavailable? = null
+        var releasePlan: ResourceReleasePlan? = null
+        var createdRunner: SessionRunner? = null
+        var createdSessionId: Uuid? = null
+        var liveSource: LiveFrameSource? = null
         synchronized(monitor) {
             if (resourcesReleased) {
                 return LiveCameraStartResult.Unavailable(LiveUnavailableReason.Initialization("live_session_closed"))
             }
             if (configuredInferenceFps !in setOf(10, 15, 30)) {
-                return unavailableAfterStartupFailure(LiveUnavailableReason.Initialization("unsupported_inference_fps"))
+                unavailable = LiveCameraStartResult.Unavailable(LiveUnavailableReason.Initialization("unsupported_inference_fps"))
+                releasePlan = captureResourceReleasePlanLocked(abandonRunner = true)
+                return@synchronized
             }
             if (sessionId != null) {
                 return LiveCameraStartResult.Unavailable(LiveUnavailableReason.Initialization("live_session_already_started"))
             }
             if (!dependencies.permissionGranted) {
-                return unavailableAfterStartupFailure(LiveUnavailableReason.CameraPermissionDenied)
+                unavailable = LiveCameraStartResult.Unavailable(LiveUnavailableReason.CameraPermissionDenied)
+                releasePlan = captureResourceReleasePlanLocked(abandonRunner = true)
+                return@synchronized
             }
             val blockingReasons = exactCameraCapabilityBlockingReasons(dependencies.cameraCapability)
             if (blockingReasons.isNotEmpty()) {
-                return unavailableAfterStartupFailure(LiveUnavailableReason.CameraCapability(blockingReasons))
+                unavailable = LiveCameraStartResult.Unavailable(LiveUnavailableReason.CameraCapability(blockingReasons))
+                releasePlan = captureResourceReleasePlanLocked(abandonRunner = true)
+                return@synchronized
             }
             sessionStartNs = dependencies.clock.nowNs()
             val id = dependencies.sessionIdProvider()
             sessionId = id
+            createdSessionId = id
             try {
                 val liveInference = dependencies.inferenceFactory(::relativeNowNs)
                 inference = liveInference
@@ -264,63 +276,97 @@ class LiveCameraComposition internal constructor(
                     dispatcher = runnerDispatcher,
                 )
                 runner = sessionRunner
+                createdRunner = sessionRunner
                 liveDeadlineScheduler.afterDeadline = {
-                    synchronized(monitor) { this@LiveCameraComposition.runner?.let(::finishIfSealed) }
+                    val currentRunner = synchronized(monitor) { this@LiveCameraComposition.runner }
+                    currentRunner?.let(::finishIfSealed)
                 }
-                if (dependencies.registerRunner(sessionRunner) != SessionRunnerRegistrationResult.ACCEPTED) {
-                    return unavailableAfterStartupFailure(
-                        LiveUnavailableReason.Initialization("session_registration_rejected"),
-                    )
-                }
-                val liveSource = dependencies.sourceFactory()
-                source = liveSource
             } catch (error: Throwable) {
-                releaseResourcesLocked(abandonRunner = true)
-                return LiveCameraStartResult.Unavailable(
+                unavailable = LiveCameraStartResult.Unavailable(
                     LiveUnavailableReason.Initialization(error.message ?: "live_initialization_failed"),
                 )
+                releasePlan = captureResourceReleasePlanLocked(abandonRunner = true)
             }
-            val liveSource = checkNotNull(source)
-            admission = LiveFrameAdmission(configuredInferenceFps)
-            try {
-                liveSource.start(
-                    onFrame = { frame -> handleFrame(frame, onProgress) },
-                    onFailure = { failure -> handleSourceFailure(failure, onProgress) },
+        }
+        releasePlan?.let(::performRelease)
+        unavailable?.let { return it }
+
+        val runnerToRegister = checkNotNull(createdRunner)
+        val registration = runCatching { dependencies.registerRunner(runnerToRegister) }
+            .getOrElse { SessionRunnerRegistrationResult.REJECTED }
+        if (registration != SessionRunnerRegistrationResult.ACCEPTED) {
+            val registrationPlan = synchronized(monitor) {
+                unavailable = LiveCameraStartResult.Unavailable(
+                    LiveUnavailableReason.Initialization("session_registration_rejected"),
                 )
-            } catch (error: Throwable) {
-                releaseResourcesLocked(abandonRunner = true)
-                return LiveCameraStartResult.Unavailable(
+                captureResourceReleasePlanLocked(abandonRunner = true)
+            }
+            performRelease(registrationPlan)
+            return checkNotNull(unavailable)
+        }
+
+        var sourceFailure: LiveCameraStartResult.Unavailable? = null
+        val sourcePlan = synchronized(monitor) {
+            if (resourcesReleased || abandonRequested) {
+                sourceFailure = LiveCameraStartResult.Unavailable(LiveUnavailableReason.Initialization("live_session_closed"))
+                null
+            } else {
+                try {
+                    liveSource = dependencies.sourceFactory()
+                    source = liveSource
+                    admission = LiveFrameAdmission(configuredInferenceFps)
+                    null
+                } catch (error: Throwable) {
+                    sourceFailure = LiveCameraStartResult.Unavailable(
+                        LiveUnavailableReason.Initialization(error.message ?: "live_initialization_failed"),
+                    )
+                    captureResourceReleasePlanLocked(abandonRunner = true)
+                }
+            }
+        }
+        sourcePlan?.let(::performRelease)
+        sourceFailure?.let { return it }
+
+        val startedSource = checkNotNull(liveSource)
+        try {
+            startedSource.start(
+                onFrame = { frame -> handleFrame(frame, onProgress) },
+                onFailure = { failure -> handleSourceFailure(failure, onProgress) },
+            )
+        } catch (error: Throwable) {
+            val startPlan = synchronized(monitor) {
+                val result = LiveCameraStartResult.Unavailable(
                     LiveUnavailableReason.Initialization(error.message ?: "live_source_start_failed"),
                 )
+                unavailable = result
+                captureResourceReleasePlanLocked(abandonRunner = true)
             }
-            return LiveCameraStartResult.Started(id)
+            performRelease(startPlan)
+            return checkNotNull(unavailable)
         }
+        return LiveCameraStartResult.Started(checkNotNull(createdSessionId))
     }
 
     /** Releases live-owned resources without entering the five-second drain path. */
     fun abandon() {
-        synchronized(monitor) {
+        val plan = synchronized(monitor) {
             if (resourcesReleased || abandonRequested) return
             abandonRequested = true
             stopping = true
             admission?.stop()
             disposeStallHandleLocked()
-            stopSourceLocked()
-            if (runner == null) {
-                releaseResourcesLocked(abandonRunner = true)
-                monitor.notifyAll()
-                return
-            }
-            val runnerToAbandon = runner
+            captureResourceReleasePlanLocked(abandonRunner = true)
+        }
+        if (plan == null) return
+        stopReleasedSource(plan.source)
+        if (plan.runner != null) {
             Thread {
-                runCatching { runnerToAbandon?.abandon() }
-                synchronized(monitor) {
-                    if (!resourcesReleased) {
-                        releaseResourcesLocked(abandonRunner = false)
-                        monitor.notifyAll()
-                    }
-                }
+                performRelease(plan, sourceAlreadyStopped = true)
+                synchronized(monitor) { monitor.notifyAll() }
             }.start()
+        } else {
+            performRelease(plan, sourceAlreadyStopped = true)
+            synchronized(monitor) { monitor.notifyAll() }
         }
     }
 
@@ -341,8 +387,11 @@ class LiveCameraComposition internal constructor(
 
     fun completion(): LiveCameraCompletion? = synchronized(monitor) { completion }
 
-    fun snapshot(): SessionRunnerSnapshot? = synchronized(monitor) {
-        completion?.snapshot ?: runner?.snapshot()
+    fun snapshot(): SessionRunnerSnapshot? {
+        val completed = synchronized(monitor) { completion?.snapshot }
+        if (completed != null) return completed
+        val currentRunner = synchronized(monitor) { runner }
+        return currentRunner?.snapshot()
     }
 
     fun manifest(): SessionManifest? = synchronized(monitor) { manifest }
@@ -352,16 +401,28 @@ class LiveCameraComposition internal constructor(
             if (stalled) LiveInternalFailure.LiveInferenceStalled else null
         }
 
+    private data class FrameWork(
+        val runner: SessionRunner,
+        val index: Long,
+        val timestampNs: Long,
+        val classification: com.calisthenics.diagnostic.live.LiveFrameClassification,
+        val canonical: ByteArray?,
+    )
+
     private fun handleFrame(frame: OwnedYuvFrame, onProgress: (SessionRunnerSnapshot) -> Unit) {
-        synchronized(monitor) {
+        val work = synchronized(monitor) {
             val currentRunner = runner ?: return
             val currentAdmission = admission ?: return
             val rebasedCaptureNs = frame.timestampNs - sessionStartNs
             val index = frameIndex++
             if (rebasedCaptureNs < 0L) {
-                currentRunner.skip(index, 0L, SkipReason.PREPROCESSING_FAILED)
-                onProgress(currentRunner.snapshot())
-                return
+                return@synchronized FrameWork(
+                    runner = currentRunner,
+                    index = index,
+                    timestampNs = 0L,
+                    classification = com.calisthenics.diagnostic.live.LiveFrameClassification.PREPROCESSING_FAILED,
+                    canonical = null,
+                )
             }
             observedSourceWidth = observedSourceWidth ?: frame.width
             observedSourceHeight = observedSourceHeight ?: frame.height
@@ -395,57 +456,62 @@ class LiveCameraComposition internal constructor(
                 )
             } catch (_: Throwable) {
                 val classification = currentAdmission.classify(rebasedCaptureNs, preprocessingSucceeded = false)
-                recordClassification(currentRunner, index, rebasedCaptureNs, classification)
-                onProgress(currentRunner.snapshot())
-                return
+                return@synchronized FrameWork(currentRunner, index, rebasedCaptureNs, classification, null)
             }
 
-            when (val classification = currentAdmission.classify(rebasedCaptureNs)) {
-                com.calisthenics.diagnostic.live.LiveFrameClassification.SUBMIT -> {
-                    val inferenceStartNs = relativeNowNs()
-                    val submissionIndex = currentRunner.submit(index, rebasedCaptureNs, inferenceStartNs, canonical)
-                    if (submissionIndex != null && !inferenceTerminal(submissionIndex)) {
-                        stallHandle?.dispose()
-                        stallHandle = dependencies.scheduler.scheduleAt(relativeNowNs() + STALL_TIMEOUT_NS) {
+            FrameWork(
+                runner = currentRunner,
+                index = index,
+                timestampNs = rebasedCaptureNs,
+                classification = currentAdmission.classify(rebasedCaptureNs),
+                canonical = canonical,
+            )
+        }
+
+        when (work.classification) {
+            com.calisthenics.diagnostic.live.LiveFrameClassification.SUBMIT -> {
+                val inferenceStartNs = relativeNowNs()
+                val submissionIndex = work.runner.submit(
+                    work.index,
+                    work.timestampNs,
+                    inferenceStartNs,
+                    checkNotNull(work.canonical),
+                )
+                if (submissionIndex != null) {
+                    val terminal = synchronized(monitor) { inferenceTerminal(submissionIndex) }
+                    if (!terminal) {
+                        val newStallHandle = dependencies.scheduler.scheduleAt(relativeNowNs() + STALL_TIMEOUT_NS) {
                             onInferenceStall(submissionIndex, onProgress)
                         }
+                        val keepHandle = synchronized(monitor) {
+                            if (resourcesReleased || stopping || inferenceTerminal(submissionIndex)) {
+                                false
+                            } else {
+                                stallHandle?.dispose()
+                                stallHandle = newStallHandle
+                                true
+                            }
+                        }
+                        if (!keepHandle) newStallHandle.dispose()
                     }
                 }
-
-                com.calisthenics.diagnostic.live.LiveFrameClassification.CADENCE_SELECTION ->
-                    currentRunner.skip(index, rebasedCaptureNs, SkipReason.CADENCE_SELECTION)
-
-                com.calisthenics.diagnostic.live.LiveFrameClassification.BACKPRESSURE ->
-                    currentRunner.skip(index, rebasedCaptureNs, SkipReason.BACKPRESSURE)
-
-                com.calisthenics.diagnostic.live.LiveFrameClassification.PREPROCESSING_FAILED ->
-                    currentRunner.skip(index, rebasedCaptureNs, SkipReason.PREPROCESSING_FAILED)
-
-                com.calisthenics.diagnostic.live.LiveFrameClassification.SESSION_STOPPING ->
-                    currentRunner.skip(index, rebasedCaptureNs, SkipReason.SESSION_STOPPING)
             }
-            onProgress(currentRunner.snapshot())
+
+            else -> work.runner.skip(work.index, work.timestampNs, work.classification.toSkipReason())
         }
+        onProgress(work.runner.snapshot())
     }
 
-    private fun recordClassification(
-        currentRunner: SessionRunner,
-        index: Long,
-        timestampNs: Long,
-        classification: com.calisthenics.diagnostic.live.LiveFrameClassification,
-    ) {
-        val reason = when (classification) {
-            com.calisthenics.diagnostic.live.LiveFrameClassification.CADENCE_SELECTION -> SkipReason.CADENCE_SELECTION
-            com.calisthenics.diagnostic.live.LiveFrameClassification.BACKPRESSURE -> SkipReason.BACKPRESSURE
-            com.calisthenics.diagnostic.live.LiveFrameClassification.PREPROCESSING_FAILED -> SkipReason.PREPROCESSING_FAILED
-            com.calisthenics.diagnostic.live.LiveFrameClassification.SESSION_STOPPING -> SkipReason.SESSION_STOPPING
-            com.calisthenics.diagnostic.live.LiveFrameClassification.SUBMIT -> return
-        }
-        currentRunner.skip(index, timestampNs, reason)
+    private fun com.calisthenics.diagnostic.live.LiveFrameClassification.toSkipReason(): SkipReason = when (this) {
+        com.calisthenics.diagnostic.live.LiveFrameClassification.CADENCE_SELECTION -> SkipReason.CADENCE_SELECTION
+        com.calisthenics.diagnostic.live.LiveFrameClassification.BACKPRESSURE -> SkipReason.BACKPRESSURE
+        com.calisthenics.diagnostic.live.LiveFrameClassification.PREPROCESSING_FAILED -> SkipReason.PREPROCESSING_FAILED
+        com.calisthenics.diagnostic.live.LiveFrameClassification.SESSION_STOPPING -> SkipReason.SESSION_STOPPING
+        com.calisthenics.diagnostic.live.LiveFrameClassification.SUBMIT -> error("submitted frame has no skip reason")
     }
 
     private fun onInferenceTerminal(submissionIndex: Long) {
-        synchronized(monitor) {
+        val currentRunner = synchronized(monitor) {
             terminalSubmissionIndices += submissionIndex
             try {
                 admission?.completeSubmission()
@@ -456,98 +522,138 @@ class LiveCameraComposition internal constructor(
                 stallHandle?.dispose()
                 stallHandle = null
             }
-            runner?.let { finishIfSealed(it) }
-            monitor.notifyAll()
+            runner
         }
+        currentRunner?.let(::finishIfSealed)
+        synchronized(monitor) { monitor.notifyAll() }
     }
 
     private fun onInferenceStall(submissionIndex: Long, onProgress: (SessionRunnerSnapshot) -> Unit) {
-        synchronized(monitor) {
-            if (stopping || completion != null || !runnerHasPending(submissionIndex)) return
+        val pendingRunner = synchronized(monitor) {
+            if (stopping || completion != null) return
+            runner
+        }
+        if (pendingRunner == null || !pendingRunner.hasPendingInference()) return
+        val stopWork = synchronized(monitor) {
+            if (stopping || completion != null || terminalSubmissionIndices.contains(submissionIndex)) return
             stalled = true
             requestStopLocked()
-            runner?.let {
-                onProgress(it.snapshot())
-                finishIfSealed(it)
-            }
         }
+        performStop(stopWork, onProgress)
     }
 
     private fun handleSourceFailure(failure: Throwable, onProgress: (SessionRunnerSnapshot) -> Unit) {
-        synchronized(monitor) {
+        val stopWork = synchronized(monitor) {
             if (completion != null) return
             requestStopLocked()
-            runner?.let {
-                onProgress(it.snapshot())
-                finishIfSealed(it)
-            }
         }
+        performStop(stopWork, onProgress)
     }
 
     private fun requestStop() {
-        synchronized(monitor) { requestStopLocked() }
+        val stopWork = synchronized(monitor) { requestStopLocked() }
+        performStop(stopWork)
     }
 
-    private fun requestStopLocked() {
-        if (stopping) return
+    private data class StopWork(
+        val source: LiveFrameSource?,
+        val runner: SessionRunner?,
+    )
+
+    private fun requestStopLocked(): StopWork? {
+        if (stopping) return null
         stopping = true
         admission?.stop()
         disposeStallHandleLocked()
-        stopSourceLocked()
-        runner?.stop(relativeNowNs())
-        runner?.let(::finishIfSealed)
+        return StopWork(
+            source = takeSourceToStopLocked(),
+            runner = runner,
+        )
     }
 
     private fun finishIfSealed(currentRunner: SessionRunner) {
-        if (finalizationStarted || completion != null || abandonRequested) return
         val state = currentRunner.snapshot()
         if (state.lifecycle != com.calisthenics.diagnostic.session.SessionLifecycle.SEALED) return
-        finalizationStarted = true
+        synchronized(monitor) {
+            if (finalizationStarted || completion != null || abandonRequested) return
+            finalizationStarted = true
+        }
         val finalization = currentRunner.finalize()
-        val finished = LiveCameraCompletion(
-            sessionId = checkNotNull(sessionId),
-            finalization = finalization,
-            snapshot = currentRunner.snapshot(),
-            internalFailure = if (stalled) LiveInternalFailure.LiveInferenceStalled else null,
-        )
-        completion = finished
-        releaseResourcesLocked(abandonRunner = false)
+        val finalSnapshot = currentRunner.snapshot()
+        val finishedAndPlan = synchronized(monitor) {
+            if (completion != null || abandonRequested) return
+            val finished = LiveCameraCompletion(
+                sessionId = checkNotNull(sessionId),
+                finalization = finalization,
+                snapshot = finalSnapshot,
+                internalFailure = if (stalled) LiveInternalFailure.LiveInferenceStalled else null,
+            )
+            completion = finished
+            finished to captureResourceReleasePlanLocked(abandonRunner = false)
+        }
+        val finished = finishedAndPlan.first
+        performRelease(finishedAndPlan.second)
         runCatching { dependencies.onCompletion(finished) }
-        monitor.notifyAll()
+        synchronized(monitor) { monitor.notifyAll() }
     }
 
-    private fun unavailableAfterStartupFailure(reason: LiveUnavailableReason): LiveCameraStartResult.Unavailable {
-        releaseResourcesLocked(abandonRunner = true)
-        return LiveCameraStartResult.Unavailable(reason)
+    private fun performStop(stopWork: StopWork?, onProgress: ((SessionRunnerSnapshot) -> Unit)? = null) {
+        if (stopWork == null) return
+        stopReleasedSource(stopWork.source)
+        val stoppedSnapshot = stopWork.runner?.stop(relativeNowNs())
+        if (stoppedSnapshot != null) onProgress?.invoke(stoppedSnapshot)
+        stopWork.runner?.let(::finishIfSealed)
     }
 
-    private fun stopSourceLocked() {
-        if (sourceStopped) return
-        sourceStopped = true
+    private fun stopReleasedSource(source: LiveFrameSource?) {
         runCatching { source?.stop() }
     }
 
-    private fun releaseResourcesLocked(abandonRunner: Boolean) {
-        if (resourcesReleased) return
+    private data class ResourceReleasePlan(
+        val source: LiveFrameSource?,
+        val runner: SessionRunner?,
+        val inference: LiveInference?,
+        val dispatcher: SingleThreadSessionDispatcher?,
+        val scheduler: LiveScheduler,
+        val abandonRunner: Boolean,
+    )
+
+    private fun captureResourceReleasePlanLocked(abandonRunner: Boolean): ResourceReleasePlan? {
+        if (resourcesReleased) return null
         resourcesReleased = true
-        stopSourceLocked()
         disposeStallHandleLocked()
-        if (abandonRunner) {
-            runner?.let { runnerToAbandon ->
-                runCatching { runnerToAbandon.abandon() }
-            }
+        val sourceToStop = takeSourceToStopLocked()
+        return ResourceReleasePlan(
+            source = sourceToStop,
+            runner = runner,
+            inference = inference,
+            dispatcher = sessionDispatcher,
+            scheduler = dependencies.scheduler,
+            abandonRunner = abandonRunner,
+        )
+    }
+
+    private fun performRelease(plan: ResourceReleasePlan?, sourceAlreadyStopped: Boolean = false) {
+        if (plan == null) return
+        if (!sourceAlreadyStopped) stopReleasedSource(plan.source)
+        if (plan.abandonRunner) {
+            plan.runner?.let { runnerToAbandon -> runCatching { runnerToAbandon.abandon() } }
         }
-        runCatching { inference?.disposable?.dispose() }
-        runCatching { sessionDispatcher?.shutdown() }
-        runCatching { dependencies.scheduler.shutdown() }
+        runCatching { plan.inference?.disposable?.dispose() }
+        runCatching { plan.dispatcher?.shutdown() }
+        runCatching { plan.scheduler.shutdown() }
+    }
+
+    private fun takeSourceToStopLocked(): LiveFrameSource? {
+        if (sourceStopped) return null
+        sourceStopped = true
+        return source
     }
 
     private fun disposeStallHandleLocked() {
         runCatching { stallHandle?.dispose() }
         stallHandle = null
     }
-
-    private fun runnerHasPending(submissionIndex: Long): Boolean = runner?.hasPendingInference() == true
 
     private var terminalSubmissionIndices = mutableSetOf<Long>()
 
