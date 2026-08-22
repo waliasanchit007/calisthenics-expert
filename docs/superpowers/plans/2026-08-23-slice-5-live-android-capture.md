@@ -142,7 +142,7 @@ git commit -m "feat: add immutable CameraX live acquisition"
   pre-construction sink is installed with the port after detector creation and records, rather
   than dereferences, any pre-install callback.
 
-- [ ] **Step 1: RED — asynchronous ownership and callback mapping**
+- [x] **Step 1: RED — asynchronous ownership and callback mapping**
 
 Test that `detectAsync` returning does not release input or slot ownership; result/error releases
 the slot and owned image exactly once before queued runner notification; timestamp mismatch fails
@@ -151,7 +151,7 @@ port unhealthy; cancel/drain timeout releases owned resources; callback exceptio
 the MediaPipe listener thread; and disposal closes a fresh detector exactly once without waiting
 on a callback blocked in the session dispatcher. Never close the callback-supplied `MPImage`.
 
-- [ ] **Step 2: RED — expose the pending-slot query**
+- [x] **Step 2: RED — expose the pending-slot query**
 
 Add `SessionRunner` tests showing the advisory query is false initially, true after submission,
 and false only after success, failure, or drain timeout—not after the backend call merely returns.
@@ -159,7 +159,7 @@ Pin that deadline expiry invokes `InferencePort.cancel(submissionIndex)` before 
 `session_teardown_timeout`. Remove the unused admit-time copy while retaining the copy at the
 port boundary.
 
-- [ ] **Step 3: GREEN — implement the live factory/port and query**
+- [x] **Step 3: GREEN — implement the live factory/port and query**
 
 Share construction-site evidence with the replay adapter without weakening replay's CPU/VIDEO
 gate. Preserve model/task-option evidence exactly. Require a listener bundle iff running mode is
@@ -168,13 +168,13 @@ not emulate LIVE_STREAM with `detectForVideo`. Supply callback `nowNs` in the sa
 clock domain. The actual live composition uses `SingleThreadSessionDispatcher`; the port's local
 monitor and callback executor remain independent of that dispatcher.
 
-- [ ] **Step 4: Verify mutations**
+- [x] **Step 4: Verify mutations**
 
 Temporarily clear ownership immediately after `detectAsync`, notify the runner before clearing the
 slot, omit deadline cancellation, and allow creation with VIDEO provenance. The corresponding
 tests must fail. Revert and run all androidHost/session tests.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/diagnostic-harness/shared/src/androidMain/kotlin/com/calisthenics/diagnostic/mediapipe apps/diagnostic-harness/shared/src/androidHostTest/kotlin/com/calisthenics/diagnostic/mediapipe apps/diagnostic-harness/shared/src/commonMain/kotlin/com/calisthenics/diagnostic/session/SessionRunner.kt apps/diagnostic-harness/shared/src/commonTest/kotlin/com/calisthenics/diagnostic/session/SessionRunnerTest.kt
