@@ -1,6 +1,13 @@
 {
-  "missing_precondition": "No physical Samsung Galaxy S25 Ultra (SM-S938 family) camera observation has been recorded. `make verify-harness-s25-camera-probe` has never run against an attached authorized device, so the sensor timestamp source, the raw android.media.Image.dataSpace behind CameraX's nullable underlying-image bridge, and whether that bridge produces an image at all are all unobserved on the target hardware.",
-  "note": "Design section 8 requires this observation before the live Android capture adapter is built. Until it is recorded, live admission is unproven rather than denied, and no CameraX/YUV/LIVE_STREAM acquisition may be implemented on the strength of an assumption about what the S25 reports. The probe, the transcript checker, and the Make target are in place; only the physical run is outstanding.",
+  "android_release": "16",
+  "api_level": 36,
+  "device_class": "physical_device",
+  "device_identity": "samsung/SM-S938B/pa3q/pa3qxins",
+  "evidence_file": "docs/evidence/device-probes/s25-ultra-SM-S938B-api36-camera-capability.json",
+  "evidence_sha256": "475bc9592b702f75c7890fb62a520e1ebe2e32e961d8de6cd15c9436ed51fde7",
+  "live_admission": "admitted",
+  "note": "Section 8 camera capability probe recorded on a physical Samsung Galaxy S25 Ultra. Camera 0 reported REALTIME timestamps and raw DataSpace 146931712, decoded as BT601/FULL, through an available CameraX underlying-image bridge. This admits the approved live Android target; it does not claim that the live adapter has been implemented or validated.",
   "record_kind": "camera_capability_probe_device_gate_observation",
-  "status": "pending"
+  "recorded_on_utc_date": "2026-08-22",
+  "status": "recorded"
 }

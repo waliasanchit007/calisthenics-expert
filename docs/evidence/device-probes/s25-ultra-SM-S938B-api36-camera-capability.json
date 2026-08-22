@@ -1,0 +1,37 @@
+{
+  "artifact_schema_version": "1.0.0",
+  "authorized_s25_target": true,
+  "contains_landmark_coordinates": false,
+  "emitted_by": "com.calisthenics.diagnostic.probe.CameraCapabilityProbeTest",
+  "environment": {
+    "abi": "arm64-v8a",
+    "android_release": "16",
+    "api_level": 36,
+    "device_class": "physical_device",
+    "device_fingerprint": "samsung/pa3qxins/pa3q:16/BP4A.251205.006/S938BXXSBCZG3_OXMBCZG3:user/release-keys",
+    "device_identity": "samsung/SM-S938B/pa3q/pa3qxins",
+    "manufacturer": "samsung",
+    "marketing_name": "",
+    "model": "SM-S938B"
+  },
+  "live_admission_blocking_reasons": [],
+  "non_participant_observation": true,
+  "observation": {
+    "camera_id": "0",
+    "pixel_format": "YUV_420_888",
+    "source_color_range": "FULL",
+    "source_color_standard": "BT601",
+    "source_dataspace_raw": 146931712,
+    "timestamp_source": "REALTIME",
+    "underlying_image_available": true
+  },
+  "observation_subject": "device_camera_capability",
+  "provenance": {
+    "camerax_version": "1.6.1",
+    "os_build": "BP4A.251205.006.S938BXXSBCZG3",
+    "probe_git_sha": "5d0cf67ab97ad6e5e7b8d67f932d0db7d961742a"
+  },
+  "record_kind": "camera_capability_probe_device_gate_observation",
+  "sanitized": true,
+  "satisfies_s25_camera_live_admission": true
+}
