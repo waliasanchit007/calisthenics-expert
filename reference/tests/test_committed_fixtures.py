@@ -68,7 +68,9 @@ def test_committed_yuv420_vector_has_literal_bytes_and_independent_hashes() -> N
         assert case["expected_sha256"] == hashlib.sha256(expected).hexdigest()
         for plane_name in ("y", "u", "v"):
             plane = case[plane_name]
-            assert plane["bytes"]
+            plane_bytes = bytes(plane["bytes"])
+            assert plane["byte_length"] == len(plane_bytes)
+            assert plane["sha256"] == hashlib.sha256(plane_bytes).hexdigest()
             assert plane["row_stride"] > 0
             assert plane["pixel_stride"] > 0
 

@@ -381,7 +381,9 @@ def test_admits_self_contained_yuv420_preprocessing_vector(tmp_path: Path) -> No
     )
     _stage(root)
 
-    assert guard_repository(root, mode="staged") == []
+    assert _codes(root, mode="staged") == [
+        (f"{vector_root}/vector.json", "REPOSITORY.INVALID_FIXTURE_DECLARATION")
+    ]
 
 
 def test_does_not_admit_preprocessing_bytes_from_a_sibling_vector_directory(

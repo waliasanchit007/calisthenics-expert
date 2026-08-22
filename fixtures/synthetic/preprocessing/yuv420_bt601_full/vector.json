@@ -18,17 +18,23 @@
       "y": {
         "bytes": [16, 64, 128, 235, 0, 0, 0, 32, 96, 192, 0, 0, 48, 112, 208, 0],
         "row_stride": 5,
-        "pixel_stride": 1
+        "pixel_stride": 1,
+        "byte_length": 16,
+        "sha256": "e7157c1d72a1257d5aec71041efaf9fa4a9a51e0d8fbf63b2625fd1576bdf9a8"
       },
       "u": {
         "bytes": [90, 0, 240, 0, 0, 0, 128, 0, 54, 0, 0, 0],
         "row_stride": 6,
-        "pixel_stride": 2
+        "pixel_stride": 2,
+        "byte_length": 12,
+        "sha256": "ab493fbe4c24786a30dca20738caac3688214e24606b7bd15aff26cc20b64390"
       },
       "v": {
         "bytes": [240, 0, 110, 0, 0, 0, 128, 0, 180, 0, 0, 0],
         "row_stride": 6,
-        "pixel_stride": 2
+        "pixel_stride": 2,
+        "byte_length": 12,
+        "sha256": "0de3c7b9440a247cafe77b089ea0789b9c70ef21e695ac0592b4e6c0629ada93"
       },
       "color_standard": "BT601",
       "color_range": "FULL",
@@ -45,17 +51,23 @@
       "y": {
         "bytes": [32, 96, 0, 160, 224, 0, 48, 112, 0],
         "row_stride": 3,
-        "pixel_stride": 1
+        "pixel_stride": 1,
+        "byte_length": 9,
+        "sha256": "5e9528a715d00a5c88f6fc0ef2890e4e69ef2ac42bf1d0b3e03034ec3a70fa91"
       },
       "u": {
         "bytes": [90, 240, 128, 54],
         "row_stride": 2,
-        "pixel_stride": 1
+        "pixel_stride": 1,
+        "byte_length": 4,
+        "sha256": "4ec68d14a9e73e224ab98f6f8bb0c2f2abcdf1177193d5cff7903ee89a44833e"
       },
       "v": {
         "bytes": [240, 110, 128, 180],
         "row_stride": 2,
-        "pixel_stride": 1
+        "pixel_stride": 1,
+        "byte_length": 4,
+        "sha256": "97365c4c28ff73646b3cc9b54c9be10c6663c82911f360e790d8896ec033ea3e"
       },
       "color_standard": "BT601",
       "color_range": "FULL",

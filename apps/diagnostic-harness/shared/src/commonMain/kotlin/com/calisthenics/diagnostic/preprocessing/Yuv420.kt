@@ -19,11 +19,33 @@ class YuvPlane(bytes: ByteArray, val rowStride: Int, val pixelStride: Int) {
         get() = storage.copyOf()
 
     internal fun requireBounds(width: Int, height: Int, name: String) {
-        val last = (height - 1) * rowStride + (width - 1) * pixelStride
-        require(storage.size > last) { "$name plane bytes do not cover declared dimensions" }
+        val logicalRowBytes = checkedAdd(
+            checkedMultiply((width - 1).toLong(), pixelStride.toLong(), name),
+            1L,
+            name,
+        )
+        require(rowStride.toLong() >= logicalRowBytes) { "$name plane rowStride does not cover a logical row" }
+        val last = checkedAdd(
+            checkedMultiply((height - 1).toLong(), rowStride.toLong(), name),
+            checkedMultiply((width - 1).toLong(), pixelStride.toLong(), name),
+            name,
+        )
+        require(last < storage.size.toLong()) { "$name plane bytes do not cover declared dimensions" }
     }
 
     internal fun sample(x: Int, y: Int): Int = storage[y * rowStride + x * pixelStride].toInt() and 0xFF
+
+    private fun checkedMultiply(left: Long, right: Long, name: String): Long = try {
+        Math.multiplyExact(left, right)
+    } catch (_: ArithmeticException) {
+        throw IllegalArgumentException("$name plane geometry overflows Long")
+    }
+
+    private fun checkedAdd(left: Long, right: Long, name: String): Long = try {
+        Math.addExact(left, right)
+    } catch (_: ArithmeticException) {
+        throw IllegalArgumentException("$name plane geometry overflows Long")
+    }
 }
 
 data class Yuv420Frame(

@@ -679,12 +679,22 @@ def _validate_yuv420_vector(document: Mapping[str, Any]) -> str | None:
             plane = case[plane_name]
             if not isinstance(plane, Mapping) or not isinstance(plane.get("bytes"), list):
                 return f"YUV420 {plane_name} plane bytes are malformed"
+            plane_bytes = plane["bytes"]
+            if any(not isinstance(value, int) or not 0 <= value <= 255 for value in plane_bytes):
+                return f"YUV420 {plane_name} plane bytes must be integers in 0..255"
+            if (
+                not _positive_integer(plane.get("byte_length"))
+                or not isinstance(plane.get("sha256"), str)
+                or not _SHA256_RE.fullmatch(plane["sha256"])
+                or plane["byte_length"] != len(plane_bytes)
+            ):
+                return f"YUV420 {plane_name} plane length or SHA-256 is malformed"
+            if hashlib.sha256(bytes(plane_bytes)).hexdigest() != plane["sha256"]:
+                return f"YUV420 {plane_name} plane SHA-256 does not match literal bytes"
             if not _positive_integer(plane.get("row_stride")) or not _positive_integer(
                 plane.get("pixel_stride")
             ):
                 return f"YUV420 {plane_name} strides must be positive integers"
-            if any(not isinstance(value, int) or not 0 <= value <= 255 for value in plane["bytes"]):
-                return f"YUV420 {plane_name} plane bytes must be integers in 0..255"
     return None
 
 
