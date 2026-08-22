@@ -35,16 +35,20 @@ class YuvPlane(bytes: ByteArray, val rowStride: Int, val pixelStride: Int) {
 
     internal fun sample(x: Int, y: Int): Int = storage[y * rowStride + x * pixelStride].toInt() and 0xFF
 
-    private fun checkedMultiply(left: Long, right: Long, name: String): Long = try {
-        Math.multiplyExact(left, right)
-    } catch (_: ArithmeticException) {
-        throw IllegalArgumentException("$name plane geometry overflows Long")
+    private fun checkedMultiply(left: Long, right: Long, name: String): Long {
+        require(left >= 0L && right >= 0L) { "$name plane geometry must be non-negative" }
+        if (left != 0L && right > Long.MAX_VALUE / left) {
+            throw IllegalArgumentException("$name plane geometry overflows Long")
+        }
+        return left * right
     }
 
-    private fun checkedAdd(left: Long, right: Long, name: String): Long = try {
-        Math.addExact(left, right)
-    } catch (_: ArithmeticException) {
-        throw IllegalArgumentException("$name plane geometry overflows Long")
+    private fun checkedAdd(left: Long, right: Long, name: String): Long {
+        require(left >= 0L && right >= 0L) { "$name plane geometry must be non-negative" }
+        if (left > Long.MAX_VALUE - right) {
+            throw IllegalArgumentException("$name plane geometry overflows Long")
+        }
+        return left + right
     }
 }
 

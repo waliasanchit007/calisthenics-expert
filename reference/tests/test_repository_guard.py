@@ -341,7 +341,7 @@ def test_admits_committed_nested_preprocessing_vector_layout(tmp_path: Path) -> 
     assert guard_repository(root, mode="staged") == []
 
 
-def test_admits_self_contained_yuv420_preprocessing_vector(tmp_path: Path) -> None:
+def test_rejects_self_contained_yuv420_vector_missing_plane_integrity(tmp_path: Path) -> None:
     root = _repository(tmp_path)
     vector_root = "fixtures/synthetic/preprocessing/yuv420_bt601_full"
     _write(
