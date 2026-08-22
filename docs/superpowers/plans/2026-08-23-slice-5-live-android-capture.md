@@ -44,11 +44,11 @@
 - Produce `fun yuv420ToUprightRgb24(frame: Yuv420Frame): ByteArray` and upright dimension helpers.
 - Use fixed-point integer arithmetic with explicit half-up rounding and channel clamping; do not depend on Android colour utilities or floating-point platform behavior.
 
-- [ ] **Step 1: Commit an independently derived vector before production code**
+- [x] **Step 1: Commit an independently derived vector before production code**
 
 Create one textual vector containing literal Y/U/V plane bytes, dimensions, row/pixel strides, BT601/FULL metadata, rotation/mirroring cases, literal expected RGB24 bytes, byte lengths, and SHA-256 values. It must include chroma values for which BT601 and BT709 differ after rounding, padded rows, chroma pixel stride greater than one, and odd source dimensions. Expected bytes must be calculated independently of `yuv420ToUprightRgb24` and documented in the vector.
 
-- [ ] **Step 2: RED — parse the committed vector and demand exact output**
+- [x] **Step 2: RED — parse the committed vector and demand exact output**
 
 Add common tests that load the vector and assert defensive copying, plane-bound checks, exact RGB byte output, upright dimensions, rotation, and mirroring. Add Python repository tests that independently recompute each committed SHA and reject missing vector fields. Run:
 
@@ -58,11 +58,11 @@ cd apps/diagnostic-harness && ./gradlew --no-daemon :shared:jvmTest --tests '*Yu
 
 Expected: FAIL because the YUV types/converter do not exist.
 
-- [ ] **Step 3: GREEN — implement the minimum pure converter**
+- [x] **Step 3: GREEN — implement the minimum pure converter**
 
 Implement only the admitted BT601/FULL path. Reject unsupported matrix/range values at construction or conversion; do not add dormant BT709/LIMITED coefficients. Address Y, U, and V by their own row/pixel strides, map upright output coordinates back into source coordinates for rotation/mirroring, convert one pixel, clamp to `0..255`, and emit packed row-major RGB24.
 
-- [ ] **Step 4: Verify exact conformance and the matrix mutation**
+- [x] **Step 4: Verify exact conformance and the matrix mutation**
 
 Run the focused test, then temporarily replace the BT601 red/green/blue coefficients with the corresponding BT709 coefficients. The committed-vector test must fail on byte inequality. Revert the mutation and rerun focused tests plus:
 
@@ -71,7 +71,7 @@ make verify
 make verify-harness-jvm
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add fixtures/synthetic/preprocessing/yuv420_bt601_full apps/diagnostic-harness/shared/src/commonMain/kotlin/com/calisthenics/diagnostic/preprocessing/Yuv420.kt apps/diagnostic-harness/shared/src/commonTest/kotlin/com/calisthenics/diagnostic/preprocessing/Yuv420Test.kt reference/tests/test_committed_fixtures.py reference/tests/test_repository_guard.py
