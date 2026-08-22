@@ -23,13 +23,15 @@ class CameraXFrameSource(
 ) {
     private val lifecycleDispatcher = AndroidCameraLifecycleDispatcher()
     private val analyzerExecutor = Executors.newSingleThreadExecutor()
-    private var provider: ProcessCameraProvider? = null
-    private var analysis: ImageAnalysis? = null
+    private val lifecycleGeneration = CameraXLifecycleGeneration<ProcessCameraProvider, ImageAnalysis> { provider, useCase ->
+        lifecycleDispatcher.dispatch(5_000L) { provider.unbind(useCase) }
+    }
     private var stopped = true
 
     fun start(onFrame: (OwnedYuvFrame) -> Unit, onFailure: (Throwable) -> Unit) {
         check(stopped) { "CameraXFrameSource is already started" }
         stopped = false
+        val generation = lifecycleGeneration.begin()
         val future = ProcessCameraProvider.getInstance(context)
         future.addListener({
             runCatching {
@@ -54,12 +56,12 @@ class CameraXFrameSource(
                 useCase.setAnalyzer(analyzerExecutor) { image ->
                     handleImage(image, onFrame, onFailure)
                 }
-                if (stopped) return@runCatching
+                if (!lifecycleGeneration.complete(generation, cameraProvider, useCase)) return@runCatching
                 lifecycleDispatcher.dispatch(5_000L) {
-                    cameraProvider.bindToLifecycle(lifecycleOwner, selector, useCase)
+                    if (lifecycleGeneration.isCurrent(generation)) {
+                        cameraProvider.bindToLifecycle(lifecycleOwner, selector, useCase)
+                    }
                 }
-                provider = cameraProvider
-                analysis = useCase
             }.onFailure(onFailure)
         }, analyzerExecutor)
     }
@@ -67,11 +69,7 @@ class CameraXFrameSource(
     fun stop() {
         if (stopped) return
         stopped = true
-        val cameraProvider = provider ?: return
-        val useCase = analysis ?: return
-        lifecycleDispatcher.dispatch(5_000L) { cameraProvider.unbind(useCase) }
-        analysis = null
-        provider = null
+        lifecycleGeneration.stop()
     }
 
     @OptIn(ExperimentalGetImage::class)
@@ -87,6 +85,51 @@ class CameraXFrameSource(
 
     companion object {
         const val BACKPRESSURE_STRATEGY = ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST
+    }
+}
+
+internal class CameraXLifecycleGeneration<P, U>(
+    private val unbind: (provider: P, useCase: U) -> Unit,
+) {
+    private var nextGeneration = 0L
+    private var running = false
+    private var active: Pair<P, U>? = null
+
+    val hasActiveBinding: Boolean
+        get() = active != null
+
+    val activeBinding: Pair<P, U>?
+        get() = active
+
+    @Synchronized
+    fun begin(): Long {
+        active?.let { (provider, useCase) -> unbind(provider, useCase) }
+        active = null
+        running = true
+        nextGeneration += 1L
+        return nextGeneration
+    }
+
+    @Synchronized
+    fun complete(generation: Long, provider: P, useCase: U): Boolean {
+        if (!running || generation != nextGeneration) {
+            unbind(provider, useCase)
+            return false
+        }
+        active = provider to useCase
+        return true
+    }
+
+    @Synchronized
+    fun isCurrent(generation: Long): Boolean = running && generation == nextGeneration
+
+    @Synchronized
+    fun stop() {
+        if (!running && active == null) return
+        running = false
+        nextGeneration += 1L
+        active?.let { (provider, useCase) -> unbind(provider, useCase) }
+        active = null
     }
 }
 

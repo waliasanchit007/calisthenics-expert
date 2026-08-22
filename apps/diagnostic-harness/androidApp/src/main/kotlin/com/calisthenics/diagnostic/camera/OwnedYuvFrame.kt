@@ -76,9 +76,9 @@ internal interface OwnedImage {
 }
 
 internal fun captureOwnedYuvFrame(source: OwnedImage, onFrame: (OwnedYuvFrame) -> Unit): OwnedYuvFrame {
-    try {
+    val frame = try {
         require(source.planes.size == 3) { "YUV_420_888 must provide three planes" }
-        val frame = OwnedYuvFrame(
+        OwnedYuvFrame(
             yBytes = source.planes[0].bytes,
             yRowStride = source.planes[0].rowStride,
             yPixelStride = source.planes[0].pixelStride,
@@ -97,11 +97,9 @@ internal fun captureOwnedYuvFrame(source: OwnedImage, onFrame: (OwnedYuvFrame) -
             colorRange = source.colorRange,
             timestampNs = source.timestampNs,
         )
+    } finally {
         source.close()
-        onFrame(frame)
-        return frame
-    } catch (failure: Throwable) {
-        source.close()
-        throw failure
     }
+    onFrame(frame)
+    return frame
 }

@@ -7,6 +7,7 @@ import com.calisthenics.diagnostic.preprocessing.YuvColorStandard
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import org.junit.Test
 
@@ -64,6 +65,33 @@ class OwnedYuvFrameTest {
         assertEquals(146931712, OwnedYuvFrame.ADMITTED_RAW_DATASPACE)
     }
 
+    @Test
+    fun closesSourceExactlyOnceWhenConsumerThrows() {
+        val source = validImage()
+
+        assertFailsWith<IllegalStateException> {
+            captureOwnedYuvFrame(source) { error("consumer failed") }
+        }
+
+        assertEquals(1, source.closeCount)
+    }
+
+    private fun validImage() = FakeImage(
+        planes = listOf(
+            FakePlane(byteArrayOf(1), rowStride = 1, pixelStride = 1),
+            FakePlane(byteArrayOf(2), rowStride = 1, pixelStride = 1),
+            FakePlane(byteArrayOf(3), rowStride = 1, pixelStride = 1),
+        ),
+        width = 1,
+        height = 1,
+        rotation = FrameRotation.R0,
+        mirrored = false,
+        rawDataSpace = 146931712,
+        colorStandard = YuvColorStandard.BT601,
+        colorRange = YuvColorRange.FULL,
+        timestampNs = 0L,
+    )
+
     private class FakeImage(
         override val planes: List<SourcePlane>,
         override val width: Int,
@@ -76,9 +104,11 @@ class OwnedYuvFrameTest {
         override val timestampNs: Long,
     ) : OwnedImage {
         var closed = false
+        var closeCount = 0
 
         override fun close() {
             closed = true
+            closeCount += 1
         }
 
         fun mutateBuffers() {
