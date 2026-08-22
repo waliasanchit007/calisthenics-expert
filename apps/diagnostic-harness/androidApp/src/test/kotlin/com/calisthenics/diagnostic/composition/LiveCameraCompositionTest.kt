@@ -25,6 +25,18 @@ import java.util.concurrent.atomic.AtomicReference
 
 class LiveCameraCompositionTest {
     @Test
+    fun testHarnessCleanupCompletesAStartedSessionWithPendingInference() {
+        withHarness(Harness()) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            harness.source.emit(frame(timestampNs = 1_000_002_000L))
+
+            harness.close()
+
+            assertNotNull(harness.composition.completion())
+        }
+    }
+
+    @Test
     fun deniedCameraPermissionFailsClosedBeforeSourceOrSessionCreation() {
         val harness = Harness(permissionGranted = false)
 
@@ -50,126 +62,139 @@ class LiveCameraCompositionTest {
 
     @Test
     fun everyDeliveredFrameHasExactlyOneSubmitOrSkipClassification() {
-        val harness = Harness()
-        assertIs<LiveCameraStartResult.Started>(harness.composition.start(10))
+        withHarness(Harness()) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
 
-        harness.source.emit(frame(timestampNs = 1_000_001_000L))
-        harness.source.emit(frame(timestampNs = 1_000_002_000L)) // backpressure
-        harness.inference.completeSuccess()
-        harness.source.emit(frame(timestampNs = 1_000_003_000L)) // cadence
-        harness.source.emit(malformedFrame(timestampNs = 1_100_001_001L)) // preprocessing
-        harness.source.onStopFrame = { frame(timestampNs = 1_000_400_000L) }
-        harness.composition.stop()
+            harness.source.emit(frame(timestampNs = 1_000_001_000L))
+            harness.source.emit(frame(timestampNs = 1_000_002_000L)) // backpressure
+            harness.inference.completeSuccess()
+            harness.source.emit(frame(timestampNs = 1_000_003_000L)) // cadence
+            harness.source.emit(malformedFrame(timestampNs = 1_100_001_001L)) // preprocessing
+            harness.source.onStopFrame = { frame(timestampNs = 1_000_400_000L) }
+            harness.composition.stop()
 
-        val snapshot = assertNotNull(harness.composition.snapshot())
-        assertEquals(5L, snapshot.counts.cameraFramesReceived)
-        assertEquals(1L, snapshot.counts.inferenceFramesSubmitted)
-        assertEquals(4L, snapshot.counts.framesSkippedBeforeInference)
-        assertEquals(
-            mapOf(
-                "backpressure" to 1L,
-                "cadence_selection" to 1L,
-                "preprocessing_failed" to 1L,
-                "session_stopping" to 1L,
-            ),
-            snapshot.counts.framesSkippedBeforeInferenceByReason,
-        )
-        assertEquals(1, harness.inference.submissionCount)
+            val snapshot = assertNotNull(harness.composition.snapshot())
+            assertEquals(5L, snapshot.counts.cameraFramesReceived)
+            assertEquals(1L, snapshot.counts.inferenceFramesSubmitted)
+            assertEquals(4L, snapshot.counts.framesSkippedBeforeInference)
+            assertEquals(
+                mapOf(
+                    "backpressure" to 1L,
+                    "cadence_selection" to 1L,
+                    "preprocessing_failed" to 1L,
+                    "session_stopping" to 1L,
+                ),
+                snapshot.counts.framesSkippedBeforeInferenceByReason,
+            )
+            assertEquals(1, harness.inference.submissionCount)
+        }
     }
 
     @Test
     fun captureInferenceStartAndCallbackUseOneSessionRelativeClock() {
-        val harness = Harness(clockNowNs = 1_000_000_000L)
-        assertIs<LiveCameraStartResult.Started>(harness.composition.start(10))
+        withHarness(Harness(clockNowNs = 1_000_000_000L)) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
 
-        harness.source.emit(frame(timestampNs = 1_000_002_000L))
-        harness.inference.completeSuccess()
+            harness.source.emit(frame(timestampNs = 1_000_002_000L))
+            harness.inference.completeSuccess()
 
-        val record = assertNotNull(harness.composition.snapshot()).records.single()
-        val manifest = assertNotNull(harness.composition.manifest())
-        assertEquals(2_000L, record.captureTimestampNs)
-        assertEquals(3_000L, record.inferenceStartNs)
-        assertEquals(5_000L, record.inferenceEndNs)
-        assertEquals(0L, manifest.clock.t0MonotonicNs)
-        assertEquals("session_relative_monotonic_ns", manifest.clock.monotonicTimeBase)
+            val record = assertNotNull(harness.composition.snapshot()).records.single()
+            val manifest = assertNotNull(harness.composition.manifest())
+            assertEquals(2_000L, record.captureTimestampNs)
+            assertEquals(3_000L, record.inferenceStartNs)
+            assertEquals(5_000L, record.inferenceEndNs)
+            assertEquals(0L, manifest.clock.t0MonotonicNs)
+            assertEquals("session_relative_monotonic_ns", manifest.clock.monotonicTimeBase)
+        }
     }
 
     @Test
     fun rotationMirroringAndScalePadAreAppliedAndManifestSeparatesDimensions() {
-        val harness = Harness(modelInputWidth = 2, modelInputHeight = 2)
-        assertIs<LiveCameraStartResult.Started>(harness.composition.start(10))
-        harness.source.emit(frame(width = 2, height = 4, rotation = FrameRotation.R90, mirrored = true))
-        assertEquals(1, harness.inference.submissionCount)
-        assertEquals(12, harness.inference.lastInput!!.size)
-        val manifest = assertNotNull(harness.composition.manifest())
-        assertEquals(2, manifest.camera.captureWidth)
-        assertEquals(4, manifest.camera.captureHeight)
-        assertEquals(2, manifest.modelInput.modelInputWidth)
-        assertEquals(2, manifest.modelInput.modelInputHeight)
-        assertEquals("live_conformance", manifest.sessionKind)
-        assertEquals("live_stream", manifest.posePipeline.runningMode)
-        assertEquals("mediapipe_pose_landmarker", manifest.posePipeline.backendName)
-        assertTrue(manifest.studyContext.containsKey("mediapipe_construction_evidence"))
+        withHarness(Harness(modelInputWidth = 2, modelInputHeight = 2)) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            harness.source.emit(frame(width = 2, height = 4, rotation = FrameRotation.R90, mirrored = true))
+            assertEquals(1, harness.inference.submissionCount)
+            assertEquals(12, harness.inference.lastInput!!.size)
+            val manifest = assertNotNull(harness.composition.manifest())
+            assertEquals(2, manifest.camera.captureWidth)
+            assertEquals(4, manifest.camera.captureHeight)
+            assertEquals(2, manifest.modelInput.modelInputWidth)
+            assertEquals(2, manifest.modelInput.modelInputHeight)
+            assertEquals("live_conformance", manifest.sessionKind)
+            assertEquals("live_stream", manifest.posePipeline.runningMode)
+            assertEquals("mediapipe_pose_landmarker", manifest.posePipeline.backendName)
+            assertTrue(manifest.studyContext.containsKey("mediapipe_construction_evidence"))
+        }
     }
 
     @Test
     fun silentInferenceStallStopsAcquisitionAndPublishesOnlyTeardownTimeout() {
-        val harness = Harness()
-        assertIs<LiveCameraStartResult.Started>(harness.composition.start(10))
-        harness.source.onStopFrame = { frame(timestampNs = 1_000_400_000L) }
-        harness.source.emit(frame(timestampNs = 1_000_002_000L))
+        withHarness(Harness()) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            harness.source.onStopFrame = { frame(timestampNs = 1_000_400_000L) }
+            harness.source.emit(frame(timestampNs = 1_000_002_000L))
 
-        harness.scheduler.fireNext() // five-second live stall fence
-        assertTrue(harness.source.stopped)
-        assertTrue(harness.composition.internalFailure is LiveInternalFailure.LiveInferenceStalled)
-        harness.scheduler.fireNext() // ordinary SessionRunner drain deadline
+            harness.scheduler.fireNext() // five-second live stall fence
+            assertTrue(harness.source.stopped)
+            assertTrue(harness.composition.internalFailure is LiveInternalFailure.LiveInferenceStalled)
+            harness.scheduler.fireNext() // ordinary SessionRunner drain deadline
 
-        val completion = assertNotNull(harness.composition.completion())
-        assertTrue(completion.internalFailure is LiveInternalFailure.LiveInferenceStalled)
-        val failure = completion.snapshot.failures.single()
-        assertEquals("session_teardown_timeout", failure.classification)
-        assertFalse(completion.snapshot.failures.any { it.classification == "backend_call_failed" })
+            val completion = assertNotNull(harness.composition.completion())
+            assertTrue(completion.internalFailure is LiveInternalFailure.LiveInferenceStalled)
+            val failure = completion.snapshot.failures.single()
+            assertEquals("session_teardown_timeout", failure.classification)
+            assertFalse(completion.snapshot.failures.any { it.classification == "backend_call_failed" })
+        }
     }
 
     @Test
     fun stopDrainsAndFinalizesOnce() {
-        val harness = Harness()
-        assertIs<LiveCameraStartResult.Started>(harness.composition.start(10))
-        harness.source.emit(frame(timestampNs = 1_000_002_000L))
-        harness.inference.completeSuccess()
+        withHarness(Harness()) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            harness.source.emit(frame(timestampNs = 1_000_002_000L))
+            harness.inference.completeSuccess()
 
-        val completion = harness.composition.stop()
+            val completion = harness.composition.stop()
 
-        assertNotNull(completion)
-        assertIs<FinalizationResult.Published>(completion.finalization)
-        assertEquals(1, harness.finalizerCalls)
-        assertEquals(completion, harness.composition.stop())
-        assertEquals(1, harness.finalizerCalls)
+            assertNotNull(completion)
+            assertIs<FinalizationResult.Published>(completion.finalization)
+            assertEquals(1, harness.finalizerCalls)
+            assertEquals(completion, harness.composition.stop())
+            assertEquals(1, harness.finalizerCalls)
+        }
     }
 
     @Test
     fun callbackAfterStopCompletesTheDrainWithoutWaitingForDeadline() {
-        val harness = Harness()
-        assertIs<LiveCameraStartResult.Started>(harness.composition.start(10))
-        harness.source.emit(frame(timestampNs = 1_000_002_000L))
+        withHarness(Harness()) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            harness.source.emit(frame(timestampNs = 1_000_002_000L))
 
-        val completion = AtomicReference<LiveCameraCompletion?>(null)
-        val stopError = AtomicReference<Throwable?>(null)
-        val stopReturned = CountDownLatch(1)
-        val stopThread = Thread {
-            runCatching { harness.composition.stop() }
-                .onSuccess(completion::set)
-                .onFailure(stopError::set)
-            stopReturned.countDown()
-        }.apply { start() }
+            val completion = AtomicReference<LiveCameraCompletion?>(null)
+            val stopError = AtomicReference<Throwable?>(null)
+            val stopReturned = CountDownLatch(1)
+            val stopThread = Thread {
+                runCatching { harness.composition.stop() }
+                    .onSuccess(completion::set)
+                    .onFailure(stopError::set)
+                stopReturned.countDown()
+            }.apply { start() }
 
-        assertTrue(stopReturned.await(100, TimeUnit.MILLISECONDS).not(), "stop returned before callback")
-        harness.inference.completeSuccess()
-        assertTrue(stopReturned.await(1, TimeUnit.SECONDS), "callback did not complete the drain")
-        stopThread.join(1_000)
-        assertNull(stopError.get())
-        assertIs<FinalizationResult.Published>(assertNotNull(completion.get()).finalization)
+            assertTrue(stopReturned.await(100, TimeUnit.MILLISECONDS).not(), "stop returned before callback")
+            harness.inference.completeSuccess()
+            assertTrue(stopReturned.await(1, TimeUnit.SECONDS), "callback did not complete the drain")
+            stopThread.join(1_000)
+            assertNull(stopError.get())
+            assertIs<FinalizationResult.Published>(assertNotNull(completion.get()).finalization)
+        }
     }
+
+    private inline fun <T> withHarness(harness: Harness, block: (Harness) -> T): T =
+        try {
+            block(harness)
+        } finally {
+            harness.close()
+        }
 
     private class Harness(
         capability: CameraCapabilityObservation = admittedCapability,
@@ -187,6 +212,7 @@ class LiveCameraCompositionTest {
         var finalizerCreated = false
         var finalizerCalls = 0
         lateinit var manifest: com.calisthenics.diagnostic.contract.SessionManifest
+        private var started = false
 
         val composition = LiveCameraComposition(
             LiveCameraComposition.Dependencies(
@@ -213,6 +239,19 @@ class LiveCameraCompositionTest {
                 },
             ),
         )
+
+        fun start(fps: Int): LiveCameraStartResult = composition.start(fps).also { result ->
+            if (result is LiveCameraStartResult.Started) started = true
+        }
+
+        fun close() {
+            if (!started) return
+            if (composition.completion() == null) {
+                if (inference.hasPendingSubmission) inference.completeSuccess()
+                composition.stop()
+            }
+            started = false
+        }
     }
 
     private class FakeClock(var value: Long) : LiveClock {
@@ -244,6 +283,8 @@ class LiveCameraCompositionTest {
         var lastInput: ByteArray? = null
         private var callback: ((InferenceResult) -> Unit)? = null
         var callbackNowNs = 1_000_005_000L
+        val hasPendingSubmission: Boolean
+            get() = callback != null
 
         override fun submit(
             submissionIndex: Long,
