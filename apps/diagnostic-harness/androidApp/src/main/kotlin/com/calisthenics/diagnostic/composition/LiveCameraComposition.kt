@@ -204,33 +204,43 @@ class LiveCameraComposition internal constructor(
     private var completion: LiveCameraCompletion? = null
     private var finalizationStarted = false
     private var sessionDispatcher: SingleThreadSessionDispatcher? = null
+    private var sourceStopped = false
+    private var resourcesReleased = false
+    private var abandonRequested = false
 
     fun start(configuredInferenceFps: Int, onProgress: (SessionRunnerSnapshot) -> Unit = {}): LiveCameraStartResult {
-        if (configuredInferenceFps !in setOf(10, 15, 30)) {
-            return LiveCameraStartResult.Unavailable(LiveUnavailableReason.Initialization("unsupported_inference_fps"))
-        }
         synchronized(monitor) {
+            if (resourcesReleased) {
+                return LiveCameraStartResult.Unavailable(LiveUnavailableReason.Initialization("live_session_closed"))
+            }
+            if (configuredInferenceFps !in setOf(10, 15, 30)) {
+                return unavailableAfterStartupFailure(LiveUnavailableReason.Initialization("unsupported_inference_fps"))
+            }
             if (sessionId != null) {
                 return LiveCameraStartResult.Unavailable(LiveUnavailableReason.Initialization("live_session_already_started"))
             }
             if (!dependencies.permissionGranted) {
-                return LiveCameraStartResult.Unavailable(LiveUnavailableReason.CameraPermissionDenied)
+                return unavailableAfterStartupFailure(LiveUnavailableReason.CameraPermissionDenied)
             }
             val blockingReasons = exactCameraCapabilityBlockingReasons(dependencies.cameraCapability)
             if (blockingReasons.isNotEmpty()) {
-                return LiveCameraStartResult.Unavailable(LiveUnavailableReason.CameraCapability(blockingReasons))
+                return unavailableAfterStartupFailure(LiveUnavailableReason.CameraCapability(blockingReasons))
             }
             sessionStartNs = dependencies.clock.nowNs()
             val id = dependencies.sessionIdProvider()
-            val created = try {
+            sessionId = id
+            try {
                 val liveInference = dependencies.inferenceFactory(::relativeNowNs)
+                inference = liveInference
                 val template = buildManifest(id, configuredInferenceFps, liveInference.constructionEvidence)
+                manifest = template
                 val trackedInference = TerminalTrackingInferencePort(
                     delegate = liveInference.port,
                     onTerminal = { submissionIndex -> onInferenceTerminal(submissionIndex) },
                 )
                 val liveDeadlineScheduler = LiveDeadlineScheduler(dependencies.scheduler, dependencies.clock)
                 val runnerDispatcher = SingleThreadSessionDispatcher()
+                sessionDispatcher = runnerDispatcher
                 val sessionRunner = SessionRunner(
                     configuration = SessionConfiguration(
                         sessionId = id,
@@ -253,39 +263,64 @@ class LiveCameraComposition internal constructor(
                     },
                     dispatcher = runnerDispatcher,
                 )
-                sessionDispatcher = runnerDispatcher
+                runner = sessionRunner
                 liveDeadlineScheduler.afterDeadline = {
                     synchronized(monitor) { this@LiveCameraComposition.runner?.let(::finishIfSealed) }
                 }
                 if (dependencies.registerRunner(sessionRunner) != SessionRunnerRegistrationResult.ACCEPTED) {
-                    sessionRunner.abandon()
-                    liveInference.disposable.dispose()
-                    runnerDispatcher.shutdown()
-                    return LiveCameraStartResult.Unavailable(
+                    return unavailableAfterStartupFailure(
                         LiveUnavailableReason.Initialization("session_registration_rejected"),
                     )
                 }
                 val liveSource = dependencies.sourceFactory()
-                Triple(liveInference, sessionRunner, liveSource)
+                source = liveSource
             } catch (error: Throwable) {
+                releaseResourcesLocked(abandonRunner = true)
                 return LiveCameraStartResult.Unavailable(
                     LiveUnavailableReason.Initialization(error.message ?: "live_initialization_failed"),
                 )
             }
-            val liveInference = created.first
-            val sessionRunner = created.second
-            val liveSource = created.third
-            sessionId = id
-            inference = liveInference
-            runner = sessionRunner
-            source = liveSource
-            manifest = buildManifest(id, configuredInferenceFps, liveInference.constructionEvidence)
+            val liveSource = checkNotNull(source)
             admission = LiveFrameAdmission(configuredInferenceFps)
-            liveSource.start(
-                onFrame = { frame -> handleFrame(frame, onProgress) },
-                onFailure = { failure -> handleSourceFailure(failure, onProgress) },
-            )
+            try {
+                liveSource.start(
+                    onFrame = { frame -> handleFrame(frame, onProgress) },
+                    onFailure = { failure -> handleSourceFailure(failure, onProgress) },
+                )
+            } catch (error: Throwable) {
+                releaseResourcesLocked(abandonRunner = true)
+                return LiveCameraStartResult.Unavailable(
+                    LiveUnavailableReason.Initialization(error.message ?: "live_source_start_failed"),
+                )
+            }
             return LiveCameraStartResult.Started(id)
+        }
+    }
+
+    /** Releases live-owned resources without entering the five-second drain path. */
+    fun abandon() {
+        synchronized(monitor) {
+            if (resourcesReleased || abandonRequested) return
+            abandonRequested = true
+            stopping = true
+            admission?.stop()
+            disposeStallHandleLocked()
+            stopSourceLocked()
+            if (runner == null) {
+                releaseResourcesLocked(abandonRunner = true)
+                monitor.notifyAll()
+                return
+            }
+            val runnerToAbandon = runner
+            Thread {
+                runCatching { runnerToAbandon?.abandon() }
+                synchronized(monitor) {
+                    if (!resourcesReleased) {
+                        releaseResourcesLocked(abandonRunner = false)
+                        monitor.notifyAll()
+                    }
+                }
+            }.start()
         }
     }
 
@@ -457,15 +492,14 @@ class LiveCameraComposition internal constructor(
         if (stopping) return
         stopping = true
         admission?.stop()
-        stallHandle?.dispose()
-        stallHandle = null
-        source?.stop()
+        disposeStallHandleLocked()
+        stopSourceLocked()
         runner?.stop(relativeNowNs())
         runner?.let(::finishIfSealed)
     }
 
     private fun finishIfSealed(currentRunner: SessionRunner) {
-        if (finalizationStarted || completion != null) return
+        if (finalizationStarted || completion != null || abandonRequested) return
         val state = currentRunner.snapshot()
         if (state.lifecycle != com.calisthenics.diagnostic.session.SessionLifecycle.SEALED) return
         finalizationStarted = true
@@ -477,11 +511,40 @@ class LiveCameraComposition internal constructor(
             internalFailure = if (stalled) LiveInternalFailure.LiveInferenceStalled else null,
         )
         completion = finished
-        inference?.disposable?.dispose()
-        sessionDispatcher?.shutdown()
-        dependencies.scheduler.shutdown()
-        dependencies.onCompletion(finished)
+        releaseResourcesLocked(abandonRunner = false)
+        runCatching { dependencies.onCompletion(finished) }
         monitor.notifyAll()
+    }
+
+    private fun unavailableAfterStartupFailure(reason: LiveUnavailableReason): LiveCameraStartResult.Unavailable {
+        releaseResourcesLocked(abandonRunner = true)
+        return LiveCameraStartResult.Unavailable(reason)
+    }
+
+    private fun stopSourceLocked() {
+        if (sourceStopped) return
+        sourceStopped = true
+        runCatching { source?.stop() }
+    }
+
+    private fun releaseResourcesLocked(abandonRunner: Boolean) {
+        if (resourcesReleased) return
+        resourcesReleased = true
+        stopSourceLocked()
+        disposeStallHandleLocked()
+        if (abandonRunner) {
+            runner?.let { runnerToAbandon ->
+                runCatching { runnerToAbandon.abandon() }
+            }
+        }
+        runCatching { inference?.disposable?.dispose() }
+        runCatching { sessionDispatcher?.shutdown() }
+        runCatching { dependencies.scheduler.shutdown() }
+    }
+
+    private fun disposeStallHandleLocked() {
+        runCatching { stallHandle?.dispose() }
+        stallHandle = null
     }
 
     private fun runnerHasPending(submissionIndex: Long): Boolean = runner?.hasPendingInference() == true

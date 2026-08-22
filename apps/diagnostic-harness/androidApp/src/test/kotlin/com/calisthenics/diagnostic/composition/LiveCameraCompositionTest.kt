@@ -18,12 +18,107 @@ import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.test.fail
 import org.junit.Test
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
 class LiveCameraCompositionTest {
+    @Test
+    fun unsupportedFpsReleasesOwnedSchedulerBeforeAnySessionResourceIsCreated() {
+        val harness = Harness()
+
+        val result = harness.composition.start(5)
+
+        assertIs<LiveCameraStartResult.Unavailable>(result)
+        assertEquals(1, harness.scheduler.shutdownCount)
+        assertEquals(0, harness.inferenceCreations)
+        assertEquals(0, harness.sourceCreations)
+    }
+
+    @Test
+    fun partialConstructionFailureReleasesInferenceAndSchedulerExactlyOnce() {
+        val harness = Harness(finalizerFailure = IllegalStateException("finalizer construction failed"))
+
+        val result = harness.composition.start(10)
+
+        assertIs<LiveCameraStartResult.Unavailable>(result)
+        assertEquals(1, harness.inference.disposeCount)
+        assertEquals(1, harness.scheduler.shutdownCount)
+        assertEquals(0, harness.sourceCreations)
+        assertNoLiveSessionDispatcher()
+    }
+
+    @Test
+    fun registrationRejectionReleasesInferenceAndSchedulerExactlyOnce() {
+        val harness = Harness(registrationResult = SessionRunnerRegistrationResult.REJECTED)
+
+        val result = harness.composition.start(10)
+
+        assertIs<LiveCameraStartResult.Unavailable>(result)
+        assertEquals(1, harness.inference.disposeCount)
+        assertEquals(1, harness.scheduler.shutdownCount)
+        assertEquals(0, harness.sourceCreations)
+        assertNoLiveSessionDispatcher()
+    }
+
+    @Test
+    fun sourceFactoryFailureReleasesPartiallyConstructedResourcesExactlyOnce() {
+        val harness = Harness(sourceFactoryFailure = IllegalStateException("source construction failed"))
+
+        val result = harness.composition.start(10)
+
+        assertIs<LiveCameraStartResult.Unavailable>(result)
+        assertEquals(1, harness.inference.disposeCount)
+        assertEquals(1, harness.scheduler.shutdownCount)
+        assertEquals(0, harness.sourceCreations)
+        assertNoLiveSessionDispatcher()
+    }
+
+    @Test
+    fun sourceStartFailureStopsSourceAndReleasesEveryOwnedResourceExactlyOnce() {
+        val harness = Harness(sourceStartFailure = IllegalStateException("source start failed"))
+
+        val result = runCatching { harness.composition.start(10) }
+            .getOrElse { fail("source-start failure must become typed unavailability", it) }
+
+        assertIs<LiveCameraStartResult.Unavailable>(result)
+        assertEquals(1, harness.source.stopCount)
+        assertEquals(1, harness.inference.disposeCount)
+        assertEquals(1, harness.scheduler.shutdownCount)
+        assertEquals("source.stop", harness.events.first())
+        assertNoLiveSessionDispatcher()
+    }
+
+    @Test
+    fun abandonFencesSourceAndReleasesPendingSessionWithoutWaitingForDrain() {
+        val harness = Harness(drainTimeoutNs = 5_000_000_000L)
+        try {
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            harness.source.emit(frame(timestampNs = 1_000_002_000L))
+
+            val before = System.nanoTime()
+            harness.composition.abandon()
+            val elapsedNs = System.nanoTime() - before
+
+            assertTrue(elapsedNs < 1_000_000_000L, "abandon must not wait for the five-second drain")
+            assertEquals(1, harness.source.stopCount)
+            assertTrue(harness.inference.awaitDisposed(), "abandon did not release inference")
+            assertTrue(harness.scheduler.awaitShutdown(), "abandon did not release scheduler")
+            assertEquals(1, harness.inference.disposeCount)
+            assertEquals(1, harness.scheduler.shutdownCount)
+            assertEquals("source.stop", harness.events.first())
+
+            harness.composition.abandon()
+            assertEquals(1, harness.source.stopCount)
+            assertEquals(1, harness.inference.disposeCount)
+            assertEquals(1, harness.scheduler.shutdownCount)
+        } finally {
+            harness.composition.abandon()
+        }
+    }
+
     @Test
     fun testHarnessCleanupCompletesAStartedSessionWithPendingInference() {
         withHarness(Harness()) { harness ->
@@ -43,6 +138,7 @@ class LiveCameraCompositionTest {
         val result = assertIs<LiveCameraStartResult.Unavailable>(harness.composition.start(10))
 
         assertEquals("camera_permission_denied", result.reason.code)
+        assertEquals(1, harness.scheduler.shutdownCount)
         assertEquals(0, harness.sourceCreations)
         assertEquals(0, harness.inferenceCreations)
     }
@@ -55,6 +151,7 @@ class LiveCameraCompositionTest {
 
         val unavailable = assertIs<LiveCameraStartResult.Unavailable>(result)
         assertEquals("camera_capability_not_admitted", unavailable.reason.code)
+        assertEquals(1, harness.scheduler.shutdownCount)
         assertEquals(0, harness.sourceCreations)
         assertEquals(0, harness.inferenceCreations)
         assertFalse(harness.finalizerCreated)
@@ -196,17 +293,30 @@ class LiveCameraCompositionTest {
             harness.close()
         }
 
+    private fun assertNoLiveSessionDispatcher() {
+        assertFalse(
+            Thread.getAllStackTraces().keys.any { it.name == "replay-session-dispatcher" && it.isAlive },
+            "live session dispatcher worker leaked",
+        )
+    }
+
     private class Harness(
         capability: CameraCapabilityObservation = admittedCapability,
         permissionGranted: Boolean = true,
         modelInputWidth: Int = 2,
         modelInputHeight: Int = 2,
         clockNowNs: Long = 1_000_001_000L,
+        drainTimeoutNs: Long = 5_000_000_000L,
+        finalizerFailure: Throwable? = null,
+        registrationResult: SessionRunnerRegistrationResult = SessionRunnerRegistrationResult.ACCEPTED,
+        sourceFactoryFailure: Throwable? = null,
+        sourceStartFailure: Throwable? = null,
     ) {
-        val inference = FakeInference()
-        val scheduler = FakeScheduler()
+        val events = mutableListOf<String>()
+        val inference = FakeInference(events)
+        val scheduler = FakeScheduler(events)
         val clock = FakeClock(clockNowNs)
-        val source = FakeSource(clock)
+        val source = FakeSource(clock, events, sourceStartFailure)
         var sourceCreations = 0
         var inferenceCreations = 0
         var finalizerCreated = false
@@ -222,12 +332,17 @@ class LiveCameraCompositionTest {
                 modelInputHeight = modelInputHeight,
                 clock = clock,
                 scheduler = scheduler,
-                sourceFactory = { sourceCreations++; source },
+                sourceFactory = {
+                    sourceFactoryFailure?.let { throw it }
+                    sourceCreations++
+                    source
+                },
                 inferenceFactory = {
                     inferenceCreations++
                     LiveInference(inference, inference, constructionEvidence)
                 },
                 sessionFinalizerFactory = { template, _ ->
+                    finalizerFailure?.let { throw it }
                     finalizerCreated = true
                     manifest = template
                     object : SessionFinalizer {
@@ -237,6 +352,8 @@ class LiveCameraCompositionTest {
                         }
                     }
                 },
+                drainTimeoutNs = drainTimeoutNs,
+                registerRunner = { registrationResult },
             ),
         )
 
@@ -258,16 +375,24 @@ class LiveCameraCompositionTest {
         override fun nowNs(): Long = value
     }
 
-    private class FakeSource(private val clock: FakeClock) : LiveFrameSource {
+    private class FakeSource(
+        private val clock: FakeClock,
+        private val events: MutableList<String>,
+        private val startFailure: Throwable?,
+    ) : LiveFrameSource {
         private var callback: ((OwnedYuvFrame) -> Unit)? = null
         var stopped = false
+        var stopCount = 0
         var onStopFrame: (() -> OwnedYuvFrame)? = null
 
         override fun start(onFrame: (OwnedYuvFrame) -> Unit, onFailure: (Throwable) -> Unit) {
+            startFailure?.let { throw it }
             callback = onFrame
         }
 
         override fun stop() {
+            stopCount++
+            events += "source.stop"
             stopped = true
             onStopFrame?.invoke()?.let { callback?.invoke(it) }
         }
@@ -278,9 +403,11 @@ class LiveCameraCompositionTest {
         }
     }
 
-    private class FakeInference : InferencePort, Disposable {
+    private class FakeInference(private val events: MutableList<String>) : InferencePort, Disposable {
         var submissionCount = 0
         var lastInput: ByteArray? = null
+        var disposeCount = 0
+        private val disposed = CountDownLatch(1)
         private var callback: ((InferenceResult) -> Unit)? = null
         var callbackNowNs = 1_000_005_000L
         val hasPendingSubmission: Boolean
@@ -303,11 +430,19 @@ class LiveCameraCompositionTest {
         }
 
         override fun cancel(submissionIndex: Long) = Unit
-        override fun dispose() = Unit
+        override fun dispose() {
+            disposeCount++
+            events += "inference.dispose"
+            disposed.countDown()
+        }
+
+        fun awaitDisposed(): Boolean = disposed.await(1, TimeUnit.SECONDS)
     }
 
-    private class FakeScheduler : LiveScheduler {
+    private class FakeScheduler(private val events: MutableList<String>) : LiveScheduler {
         private val actions = ArrayDeque<() -> Unit>()
+        var shutdownCount = 0
+        private val shutdown = CountDownLatch(1)
 
         override fun scheduleAt(deadlineNs: Long, action: () -> Unit): Disposable {
             actions += action
@@ -320,6 +455,14 @@ class LiveCameraCompositionTest {
             check(actions.isNotEmpty())
             actions.removeFirst().invoke()
         }
+
+        override fun shutdown() {
+            shutdownCount++
+            events += "scheduler.shutdown"
+            shutdown.countDown()
+        }
+
+        fun awaitShutdown(): Boolean = shutdown.await(1, TimeUnit.SECONDS)
     }
 
     private companion object {

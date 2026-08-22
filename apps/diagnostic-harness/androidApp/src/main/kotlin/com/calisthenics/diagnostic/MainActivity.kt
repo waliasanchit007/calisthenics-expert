@@ -13,6 +13,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import com.calisthenics.diagnostic.capability.Capability
@@ -69,11 +70,20 @@ class MainActivity : ComponentActivity() {
             var cameraObservation by remember { mutableStateOf<CameraCapabilityObservation?>(null) }
             var liveComposition by remember { mutableStateOf<LiveCameraComposition?>(null) }
             val sessionRunnerOwnership = remember { SessionRunnerOwnership() }
+            val latestLiveComposition by rememberUpdatedState(liveComposition)
             val permissionGranted = state.capabilities.any {
                 it.id == CapabilityId.CAMERA_PERMISSION && it.state is CapabilityState.Available
             }
 
-            DisposableEffect(Unit) { onDispose { sessionRunnerOwnership.teardown() } }
+            DisposableEffect(Unit) {
+                onDispose {
+                    if (latestLiveComposition != null) {
+                        latestLiveComposition?.abandon()
+                    } else {
+                        sessionRunnerOwnership.teardown()
+                    }
+                }
+            }
 
             LaunchedEffect(permissionGranted) {
                 if (!permissionGranted) return@LaunchedEffect
@@ -176,6 +186,9 @@ class MainActivity : ComponentActivity() {
                                             sessionActive = false,
                                             liveRunPhase = completion.toLivePhase(),
                                         )
+                                        if (liveComposition?.completion()?.sessionId == completion.sessionId) {
+                                            liveComposition = null
+                                        }
                                         sessionRunnerOwnership.clear()
                                     },
                                 )
@@ -187,7 +200,12 @@ class MainActivity : ComponentActivity() {
                             when (val started = withContext(Dispatchers.IO) {
                                 composition.start(state.selectedLiveFps.value) { snapshot -> state = state.copy(liveRunPhase = snapshot.toLiveRunning(state.selectedLiveFps.value)) }
                             }) {
-                                is LiveCameraStartResult.Unavailable -> state = state.copy(sessionActive = false, liveRunPhase = LiveRunPhase.Failed(started.reason.code))
+                                is LiveCameraStartResult.Unavailable -> {
+                                    composition.abandon()
+                                    if (liveComposition === composition) liveComposition = null
+                                    sessionRunnerOwnership.clear()
+                                    state = state.copy(sessionActive = false, liveRunPhase = LiveRunPhase.Failed(started.reason.code))
+                                }
                                 is LiveCameraStartResult.Started -> Unit
                             }
                         }
