@@ -1,0 +1,13 @@
+{
+  "android_release": "16",
+  "api_level": 36,
+  "device_class": "physical_device",
+  "device_identity": "samsung/SM-S938B/pa3q/pa3qxins",
+  "evidence_file": "docs/evidence/device-probes/s25-ultra-SM-S938B-api36-camera-capability.json",
+  "evidence_sha256": "475bc9592b702f75c7890fb62a520e1ebe2e32e961d8de6cd15c9436ed51fde7",
+  "live_admission": "admitted",
+  "note": "Section 8 camera capability probe recorded on a physical Samsung Galaxy S25 Ultra. Camera 0 reported REALTIME timestamps and raw DataSpace 146931712, decoded as BT601/FULL, through an available CameraX underlying-image bridge. This admits the approved live Android target; it does not claim that the live adapter has been implemented or validated.",
+  "record_kind": "camera_capability_probe_device_gate_observation",
+  "recorded_on_utc_date": "2026-08-22",
+  "status": "recorded"
+}

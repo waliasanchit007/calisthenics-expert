@@ -1,7 +1,22 @@
+import hashlib
 import json
+import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).parents[2]
+
+sys.path.insert(0, str(ROOT / "tools"))
+
+from check_camera_capability_probe import (
+    CameraProbeCheckError,
+    is_authorized_camera_probe_target,
+    satisfies_live_admission,
+    verify_recorded_ledger,
+)
+
+CAMERA_LEDGER = "docs/evidence/device-probes/s25-ultra-camera-capability-ledger.json"
 
 
 def test_s25_process_kill_ledger_reports_pending_or_recorded_status() -> None:
@@ -75,3 +90,139 @@ def test_s25_five_run_replay_ledger_reports_pending_or_recorded_status() -> None
         assert environment.get("model", "").upper().startswith("SM-S938") or (
             "S25 Ultra" in environment.get("marketing_name", "")
         )
+
+
+def test_s25_camera_capability_ledger_reports_pending_or_recorded_status() -> None:
+    # Slice 5 precondition, design section 8. `make verify` runs this in CI, so an absent physical
+    # S25 must always surface as an honest "pending" entry naming what was never observed — never
+    # silently omitted, and never a fabricated "recorded" status a CI run had no device to earn.
+    ledger = json.loads((ROOT / CAMERA_LEDGER).read_text())
+    assert ledger["status"] in {"pending", "recorded"}
+    if ledger["status"] == "pending":
+        assert ledger["missing_precondition"]
+        return
+
+    # A recorded entry is checked all the way through to the record it points at: the digest it
+    # pinned, every required observation, the authorization rule re-applied, and — the reason this
+    # branch exists — the admitted/blocked classification recomputed from the observations rather
+    # than read off the ledger. An honest "blocked" recording is valid; a blocking observation
+    # recorded as admitted is the failure being caught.
+    assert ledger["evidence_file"]
+    recorded = json.loads((ROOT / ledger["evidence_file"]).read_text())
+    payload = (ROOT / ledger["evidence_file"]).read_bytes()
+    assert ledger["evidence_sha256"] == hashlib.sha256(payload).hexdigest()
+
+    observation = recorded["observation"]
+    for field in (
+        "camera_id",
+        "timestamp_source",
+        "source_dataspace_raw",
+        "source_color_standard",
+        "source_color_range",
+        "underlying_image_available",
+        "pixel_format",
+    ):
+        assert field in observation
+
+    assert recorded["sanitized"] is True
+    assert recorded["contains_landmark_coordinates"] is False
+    assert recorded["non_participant_observation"] is True
+    assert is_authorized_camera_probe_target(recorded["environment"])
+    assert ledger["live_admission"] == (
+        "admitted" if satisfies_live_admission(recorded) else "blocked"
+    )
+
+    # The same entry, checked by the shared implementation the Make target's checker uses, so the
+    # ledger and the wrapper can never disagree about what a recorded entry has to satisfy.
+    verify_recorded_ledger(ROOT, CAMERA_LEDGER)
+
+
+def test_the_committed_camera_ledger_passes_the_shared_recorded_ledger_check() -> None:
+    verify_recorded_ledger(ROOT, CAMERA_LEDGER)
+
+
+def test_a_camera_ledger_recording_a_blocking_observation_as_admitted_is_rejected(
+    tmp_path: Path,
+) -> None:
+    """The recorded branch's whole purpose, exercised while the real ledger is still pending.
+
+    `verify_recorded_ledger` is the implementation the branch above delegates to, so mutating a
+    synthetic recorded entry here is what proves that branch is not vacuous — a real S25 has not
+    been attached yet, so nothing else would ever execute it.
+    """
+    record = {
+        "artifact_schema_version": "1.0.0",
+        "record_kind": "camera_capability_probe_device_gate_observation",
+        "sanitized": True,
+        "contains_landmark_coordinates": False,
+        "non_participant_observation": True,
+        "observation_subject": "device_camera_capability",
+        "emitted_by": "com.calisthenics.diagnostic.probe.CameraCapabilityProbeTest",
+        "environment": {
+            "device_class": "physical_device",
+            "device_identity": "samsung/SM-S938B/pa3q/pa3qxins",
+            "device_fingerprint": "samsung/pa3qxins/pa3q:16/BP4A.251205.006/x:user/release-keys",
+            "api_level": 36,
+            "android_release": "16",
+            "abi": "arm64-v8a",
+            "manufacturer": "samsung",
+            "model": "SM-S938B",
+            "marketing_name": "",
+        },
+        "provenance": {
+            "os_build": "BP4A.251205.006",
+            "camerax_version": "1.6.1",
+            "probe_git_sha": "0123456789abcdef0123456789abcdef01234567",
+        },
+        "observation": {
+            "camera_id": "0",
+            "timestamp_source": "UNKNOWN",
+            "source_dataspace_raw": None,
+            "source_color_standard": None,
+            "source_color_range": None,
+            "underlying_image_available": False,
+            "pixel_format": "YUV_420_888",
+        },
+        "authorized_s25_target": True,
+        "live_admission_blocking_reasons": [
+            "timestamp_source_not_realtime",
+            "underlying_image_bridge_unavailable",
+            "raw_dataspace_unknown",
+            "colour_standard_undecoded",
+            "colour_range_undecoded",
+        ],
+        "satisfies_s25_camera_live_admission": False,
+    }
+    evidence_relative = "docs/evidence/device-probes/observed.json"
+    ledger_relative = "docs/evidence/device-probes/ledger.json"
+    (tmp_path / "docs/evidence/device-probes").mkdir(parents=True)
+    payload = json.dumps(record, indent=2, sort_keys=True) + "\n"
+    (tmp_path / evidence_relative).write_text(payload, encoding="utf-8")
+
+    def write_ledger(live_admission: str) -> None:
+        (tmp_path / ledger_relative).write_text(
+            json.dumps(
+                {
+                    "status": "recorded",
+                    "evidence_file": evidence_relative,
+                    "evidence_sha256": hashlib.sha256(payload.encode("utf-8")).hexdigest(),
+                    "live_admission": live_admission,
+                    "device_class": "physical_device",
+                    "device_identity": "samsung/SM-S938B/pa3q/pa3qxins",
+                    "api_level": 36,
+                    "android_release": "16",
+                    "recorded_on_utc_date": "2026-08-21",
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    write_ledger("blocked")
+    assert verify_recorded_ledger(tmp_path, ledger_relative)["live_admission"] == "blocked"
+
+    write_ledger("admitted")
+    with pytest.raises(CameraProbeCheckError):
+        verify_recorded_ledger(tmp_path, ledger_relative)

@@ -63,13 +63,21 @@ class CameraCapabilityProbe(
         var dataSpace: Int? = null
         var matrix: String? = null
         var range: String? = null
+        var underlyingImage = false
         val firstFrame = CountDownLatch(1)
         val acceptedFrame = AtomicBoolean(false)
         try {
             analysis.setAnalyzer(executor) { image ->
                 try {
                     if (!acceptedFrame.compareAndSet(false, true)) return@setAnalyzer
-                    val source = image.image?.dataSpace
+                    // CameraX's underlying-image accessor is the nullable experimental bridge
+                    // design section 8 names. Whether it produced an image at all is a distinct
+                    // observation from what DataSpace that image reported, and collapsing the two
+                    // would record the device as reporting an unknown colour space when it was
+                    // never asked one.
+                    val underlying = image.image
+                    underlyingImage = underlying != null
+                    val source = underlying?.dataSpace
                     dataSpace = source
                     matrix = source?.let(::matrixLabel)
                     range = source?.let(::rangeLabel)
@@ -103,6 +111,7 @@ class CameraCapabilityProbe(
             sourceDataspaceRaw = dataSpace,
             sourceColorMatrix = matrix,
             sourceColorRange = range,
+            underlyingImageAvailable = underlyingImage,
             pixelFormat = "YUV_420_888",
             cameraxVersion = "1.6.1",
             probeGitSha = probeGitSha,
@@ -175,6 +184,8 @@ class CameraCapabilityProbe(
         sourceDataspaceRaw = null,
         sourceColorMatrix = null,
         sourceColorRange = null,
+        // No camera was selected, so the bridge was never reached, let alone consulted.
+        underlyingImageAvailable = false,
         pixelFormat = "YUV_420_888",
         cameraxVersion = "1.6.1",
         probeGitSha = probeGitSha,
