@@ -74,17 +74,52 @@ class CameraXFrameSource(
 
     @OptIn(ExperimentalGetImage::class)
     private fun handleImage(image: ImageProxy, onFrame: (OwnedYuvFrame) -> Unit, onFailure: (Throwable) -> Unit) {
-        runCatching {
-            val underlying = image.image ?: error("CameraX underlying image unavailable")
-            require(image.format == OwnedYuvFrame.ADMITTED_PIXEL_FORMAT) { "unsupported image format" }
-            require(underlying.dataSpace == OwnedYuvFrame.ADMITTED_RAW_DATASPACE) { "unsupported DataSpace" }
-            val source = CameraXOwnedImage(image, underlying)
-            captureOwnedYuvFrame(source, onFrame)
-        }.onFailure(onFailure)
+        var underlying: Image? = null
+        handleImageWithOwnership(
+            proxy = object : ImageProxyOwnership {
+                override fun close() {
+                    image.close()
+                }
+            },
+            validate = {
+                val source = image.image ?: error("CameraX underlying image unavailable")
+                underlying = source
+                require(image.format == OwnedYuvFrame.ADMITTED_PIXEL_FORMAT) { "unsupported image format" }
+                require(source.dataSpace == OwnedYuvFrame.ADMITTED_RAW_DATASPACE) {
+                    "unsupported DataSpace"
+                }
+            },
+            construct = { CameraXOwnedImage(image, checkNotNull(underlying)) },
+            onFrame = onFrame,
+            onFailure = onFailure,
+        )
     }
 
     companion object {
         const val BACKPRESSURE_STRATEGY = ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST
+    }
+}
+
+internal interface ImageProxyOwnership {
+    fun close()
+}
+
+internal fun handleImageWithOwnership(
+    proxy: ImageProxyOwnership,
+    validate: () -> Unit,
+    construct: () -> OwnedImage,
+    onFrame: (OwnedYuvFrame) -> Unit,
+    onFailure: (Throwable) -> Unit,
+) {
+    var transferred = false
+    try {
+        validate()
+        val owned = construct()
+        transferred = true
+        captureOwnedYuvFrame(owned, onFrame)
+    } catch (failure: Throwable) {
+        if (!transferred) proxy.close()
+        onFailure(failure)
     }
 }
 
