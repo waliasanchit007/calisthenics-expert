@@ -341,6 +341,49 @@ def test_admits_committed_nested_preprocessing_vector_layout(tmp_path: Path) -> 
     assert guard_repository(root, mode="staged") == []
 
 
+def test_admits_self_contained_yuv420_preprocessing_vector(tmp_path: Path) -> None:
+    root = _repository(tmp_path)
+    vector_root = "fixtures/synthetic/preprocessing/yuv420_bt601_full"
+    _write(
+        root,
+        f"{vector_root}/vector.json",
+        _json(
+            {
+                "tooling_schema_version": "1.0.0",
+                "synthetic": True,
+                "vector_id": "yuv420_bt601_full_v1",
+                "conversion": {
+                    "color_standard": "BT601",
+                    "color_range": "FULL",
+                    "fixed_point_scale": 1000000,
+                    "rounding": "half_up",
+                    "clamp": "0..255",
+                },
+                "cases": [
+                    {
+                        "case_id": "one_pixel",
+                        "width": 1,
+                        "height": 1,
+                        "y": {"bytes": [16], "row_stride": 1, "pixel_stride": 1},
+                        "u": {"bytes": [128], "row_stride": 1, "pixel_stride": 1},
+                        "v": {"bytes": [128], "row_stride": 1, "pixel_stride": 1},
+                        "color_standard": "BT601",
+                        "color_range": "FULL",
+                        "rotation": "R0",
+                        "mirrored": False,
+                        "expected_rgb24": [16, 16, 16],
+                        "expected_byte_length": 3,
+                        "expected_sha256": _sha256(bytes([16, 16, 16])),
+                    }
+                ],
+            }
+        ),
+    )
+    _stage(root)
+
+    assert guard_repository(root, mode="staged") == []
+
+
 def test_does_not_admit_preprocessing_bytes_from_a_sibling_vector_directory(
     tmp_path: Path,
 ) -> None:

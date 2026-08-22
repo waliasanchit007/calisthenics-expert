@@ -1,0 +1,69 @@
+{
+  "tooling_schema_version": "1.0.0",
+  "synthetic": true,
+  "vector_id": "yuv420_bt601_full_v1",
+  "description": "Independent BT601/FULL YUV420 source-format vectors with padded rows, non-unit chroma pixel stride, odd dimensions, rotation, and mirroring. Expected RGB24 bytes are literal values derived independently from the production converter.",
+  "conversion": {
+    "color_standard": "BT601",
+    "color_range": "FULL",
+    "fixed_point_scale": 1000000,
+    "rounding": "half_up",
+    "clamp": "0..255"
+  },
+  "cases": [
+    {
+      "case_id": "odd_padded_stride_pixel_stride_two_r0",
+      "width": 3,
+      "height": 3,
+      "y": {
+        "bytes": [16, 64, 128, 235, 0, 0, 0, 32, 96, 192, 0, 0, 48, 112, 208, 0],
+        "row_stride": 5,
+        "pixel_stride": 1
+      },
+      "u": {
+        "bytes": [90, 0, 240, 0, 0, 0, 128, 0, 54, 0, 0, 0],
+        "row_stride": 6,
+        "pixel_stride": 2
+      },
+      "v": {
+        "bytes": [240, 0, 110, 0, 0, 0, 128, 0, 180, 0, 0, 0],
+        "row_stride": 6,
+        "pixel_stride": 2
+      },
+      "color_standard": "BT601",
+      "color_range": "FULL",
+      "rotation": "R0",
+      "mirrored": false,
+      "expected_rgb24": [173, 0, 0, 221, 0, 0, 103, 102, 255, 157, 0, 0, 157, 0, 0, 7, 6, 230, 0, 0, 0, 0, 0, 0, 121, 36, 0],
+      "expected_byte_length": 27,
+      "expected_sha256": "63f53ffc9e376ca613c18ef120894757377dbb67bd1ef42166b2509a1d58b0c1"
+    },
+    {
+      "case_id": "rotated_r90_mirrored",
+      "width": 2,
+      "height": 3,
+      "y": {
+        "bytes": [32, 96, 0, 160, 224, 0, 48, 112, 0],
+        "row_stride": 3,
+        "pixel_stride": 1
+      },
+      "u": {
+        "bytes": [90, 240, 128, 54],
+        "row_stride": 2,
+        "pixel_stride": 1
+      },
+      "v": {
+        "bytes": [240, 110, 128, 180],
+        "row_stride": 2,
+        "pixel_stride": 1
+      },
+      "color_standard": "BT601",
+      "color_range": "FULL",
+      "rotation": "R90",
+      "mirrored": true,
+      "expected_rgb24": [189, 0, 0, 255, 93, 93, 48, 48, 48, 253, 29, 29, 255, 157, 157, 112, 112, 112],
+      "expected_byte_length": 18,
+      "expected_sha256": "1f9607eb9967be8cf4baed584006a216dea3822b0922714f9a29bf326e659037"
+    }
+  ]
+}
