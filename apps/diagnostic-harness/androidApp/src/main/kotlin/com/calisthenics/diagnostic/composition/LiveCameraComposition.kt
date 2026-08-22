@@ -1,0 +1,693 @@
+package com.calisthenics.diagnostic.composition
+
+import android.content.Context
+import android.os.Build
+import android.os.SystemClock
+import androidx.lifecycle.LifecycleOwner
+import com.calisthenics.diagnostic.android.BuildConfig
+import com.calisthenics.diagnostic.camera.CameraXFrameSource
+import com.calisthenics.diagnostic.camera.OwnedYuvFrame
+import com.calisthenics.diagnostic.contract.AvailableObservations
+import com.calisthenics.diagnostic.contract.Cadence
+import com.calisthenics.diagnostic.contract.CadenceSample
+import com.calisthenics.diagnostic.contract.Camera
+import com.calisthenics.diagnostic.contract.CaptureQualityObserved
+import com.calisthenics.diagnostic.contract.Clock
+import com.calisthenics.diagnostic.contract.Counts
+import com.calisthenics.diagnostic.contract.Device
+import com.calisthenics.diagnostic.contract.ModelInput
+import com.calisthenics.diagnostic.contract.PosePipeline
+import com.calisthenics.diagnostic.contract.SemanticVersion
+import com.calisthenics.diagnostic.contract.Sha256
+import com.calisthenics.diagnostic.contract.SessionManifest
+import com.calisthenics.diagnostic.contract.Uuid
+import com.calisthenics.diagnostic.export.AndroidStoragePort
+import com.calisthenics.diagnostic.export.AndroidStorageRoots
+import com.calisthenics.diagnostic.export.SessionExporter
+import com.calisthenics.diagnostic.export.StorageRootsResult
+import com.calisthenics.diagnostic.hash.Sha256Digest
+import com.calisthenics.diagnostic.live.LiveFrameAdmission
+import com.calisthenics.diagnostic.mediapipe.PoseLandmarkerConstructionEvidence
+import com.calisthenics.diagnostic.mediapipe.PoseLandmarkerLiveAdapterFactory
+import com.calisthenics.diagnostic.mediapipe.PoseLandmarkerLiveInferencePort
+import com.calisthenics.diagnostic.mediapipe.realLiveDetectorConstructor
+import com.calisthenics.diagnostic.model.ModelProvenance
+import com.calisthenics.diagnostic.model.ModelProvenanceException
+import com.calisthenics.diagnostic.model.parseModelProvenance
+import com.calisthenics.diagnostic.preprocessing.scalePadRgb24
+import com.calisthenics.diagnostic.preprocessing.uprightDimensions
+import com.calisthenics.diagnostic.preprocessing.yuv420ToUprightRgb24
+import com.calisthenics.diagnostic.preprocessing.Yuv420Frame
+import com.calisthenics.diagnostic.preprocessing.YuvPlane
+import com.calisthenics.diagnostic.replay.CameraCapabilityObservation
+import com.calisthenics.diagnostic.session.DeadlineScheduler
+import com.calisthenics.diagnostic.session.Disposable
+import com.calisthenics.diagnostic.session.FinalizationResult
+import com.calisthenics.diagnostic.session.InferencePort
+import com.calisthenics.diagnostic.session.InferenceResult
+import com.calisthenics.diagnostic.session.SessionFinalizer
+import com.calisthenics.diagnostic.session.SessionRunner
+import com.calisthenics.diagnostic.session.SessionRunnerSnapshot
+import com.calisthenics.diagnostic.session.SessionConfiguration
+import com.calisthenics.diagnostic.session.SkipReason
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import java.time.Instant
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
+
+private const val LIVE_SESSION_KIND = "live_conformance"
+private const val LIVE_PREPROCESSING_VERSION = "1.0.0"
+private const val MODEL_INPUT_WIDTH = 256
+private const val MODEL_INPUT_HEIGHT = 256
+private const val REQUESTED_CAMERA_WIDTH = 1280
+private const val REQUESTED_CAMERA_HEIGHT = 720
+private const val STALL_TIMEOUT_NS = 5_000_000_000L
+private const val DRAIN_TIMEOUT_NS = 5_000_000_000L
+
+sealed interface LiveCameraStartResult {
+    data class Started(val sessionId: Uuid) : LiveCameraStartResult
+
+    data class Unavailable(val reason: LiveUnavailableReason) : LiveCameraStartResult
+}
+
+sealed interface LiveUnavailableReason {
+    val code: String
+
+    data class CameraCapability(val blockingReasons: List<String>) : LiveUnavailableReason {
+        override val code: String = "camera_capability_not_admitted"
+    }
+
+    data object CameraPermissionDenied : LiveUnavailableReason {
+        override val code: String = "camera_permission_denied"
+    }
+
+    data class Initialization(val detail: String) : LiveUnavailableReason {
+        override val code: String = "live_initialization_failed"
+    }
+}
+
+sealed interface LiveInternalFailure {
+    val code: String
+
+    data object LiveInferenceStalled : LiveInternalFailure {
+        override val code: String = "live_inference_stalled"
+    }
+}
+
+data class LiveCameraCompletion(
+    val sessionId: Uuid,
+    val finalization: FinalizationResult,
+    val snapshot: SessionRunnerSnapshot,
+    val internalFailure: LiveInternalFailure? = null,
+)
+
+data class LiveInference(
+    val port: InferencePort,
+    val disposable: Disposable,
+    val constructionEvidence: PoseLandmarkerConstructionEvidence,
+)
+
+interface LiveClock {
+    fun nowNs(): Long
+}
+
+interface LiveScheduler {
+    fun scheduleAt(deadlineNs: Long, action: () -> Unit): Disposable
+    fun shutdown() = Unit
+}
+
+interface LiveFrameSource {
+    fun start(onFrame: (OwnedYuvFrame) -> Unit, onFailure: (Throwable) -> Unit)
+    fun stop()
+}
+
+fun interface LiveSessionFinalizerFactory {
+    fun create(
+        manifestTemplate: SessionManifest,
+        manifestAtFinalization: (SessionManifest) -> SessionManifest,
+    ): SessionFinalizer
+}
+
+private class LiveDeadlineScheduler(
+    private val scheduler: LiveScheduler,
+    private val clock: LiveClock,
+) : DeadlineScheduler {
+    var afterDeadline: () -> Unit = {}
+
+    override fun schedule(deadlineNs: Long, action: () -> Unit): Disposable =
+        scheduler.scheduleAt(deadlineNs) {
+            action()
+            afterDeadline()
+        }
+}
+
+/**
+ * The shared live-session controller. Android construction is exposed by [fromAndroid]; the
+ * dependency constructor is deliberately host-testable and keeps the lifecycle invariants out of
+ * CameraX and MediaPipe callback threads.
+ */
+class LiveCameraComposition internal constructor(
+    private val dependencies: Dependencies,
+) {
+    class Dependencies internal constructor(
+        val cameraCapability: CameraCapabilityObservation,
+        val permissionGranted: Boolean,
+        val modelInputWidth: Int,
+        val modelInputHeight: Int,
+        val clock: LiveClock,
+        val scheduler: LiveScheduler,
+        val sourceFactory: () -> LiveFrameSource,
+        val inferenceFactory: (nowNs: () -> Long) -> LiveInference,
+        val sessionFinalizerFactory: LiveSessionFinalizerFactory,
+        val sessionIdProvider: () -> Uuid = { Uuid(randomSessionId()) },
+        val manifestMetadata: LiveManifestMetadata = LiveManifestMetadata(),
+        val drainTimeoutNs: Long = DRAIN_TIMEOUT_NS,
+        val registerRunner: (SessionRunner) -> SessionRunnerRegistrationResult = {
+            SessionRunnerRegistrationResult.ACCEPTED
+        },
+        val onCompletion: (LiveCameraCompletion) -> Unit = {},
+    ) {
+        init {
+            require(modelInputWidth > 0 && modelInputHeight > 0)
+            require(drainTimeoutNs >= 0)
+        }
+    }
+
+    data class LiveManifestMetadata(
+        val participantPseudonymId: String = "device-live",
+        val cameraFacing: String = "back",
+        val orientationDegrees: Int = 0,
+        val mirrored: Boolean = false,
+        val harnessGitSha: String = "0000000000000000000000000000000000000000",
+        val provenance: ModelProvenance? = null,
+        val device: Device = Device("android", "unknown", "unknown", null, false),
+        val startedAtUtc: String = Instant.now().toString(),
+    )
+
+    private val monitor = java.lang.Object()
+    private var sessionId: Uuid? = null
+    private var sessionStartNs = 0L
+    private var admission: LiveFrameAdmission? = null
+    private var source: LiveFrameSource? = null
+    private var runner: SessionRunner? = null
+    private var inference: LiveInference? = null
+    private var manifest: SessionManifest? = null
+    private var frameIndex = 0L
+    private var observedSourceWidth: Int? = null
+    private var observedSourceHeight: Int? = null
+    private var stopping = false
+    private var stallHandle: Disposable? = null
+    private var stalled = false
+    private var completion: LiveCameraCompletion? = null
+    private var finalizationStarted = false
+    private var sessionDispatcher: SingleThreadSessionDispatcher? = null
+
+    fun start(configuredInferenceFps: Int, onProgress: (SessionRunnerSnapshot) -> Unit = {}): LiveCameraStartResult {
+        if (configuredInferenceFps !in setOf(10, 15, 30)) {
+            return LiveCameraStartResult.Unavailable(LiveUnavailableReason.Initialization("unsupported_inference_fps"))
+        }
+        synchronized(monitor) {
+            if (sessionId != null) {
+                return LiveCameraStartResult.Unavailable(LiveUnavailableReason.Initialization("live_session_already_started"))
+            }
+            if (!dependencies.permissionGranted) {
+                return LiveCameraStartResult.Unavailable(LiveUnavailableReason.CameraPermissionDenied)
+            }
+            val blockingReasons = exactCameraCapabilityBlockingReasons(dependencies.cameraCapability)
+            if (blockingReasons.isNotEmpty()) {
+                return LiveCameraStartResult.Unavailable(LiveUnavailableReason.CameraCapability(blockingReasons))
+            }
+            sessionStartNs = dependencies.clock.nowNs()
+            val id = dependencies.sessionIdProvider()
+            val created = try {
+                val liveInference = dependencies.inferenceFactory(::relativeNowNs)
+                val template = buildManifest(id, configuredInferenceFps, liveInference.constructionEvidence)
+                val trackedInference = TerminalTrackingInferencePort(
+                    delegate = liveInference.port,
+                    onTerminal = { submissionIndex -> onInferenceTerminal(submissionIndex) },
+                )
+                val liveDeadlineScheduler = LiveDeadlineScheduler(dependencies.scheduler, dependencies.clock)
+                val runnerDispatcher = SingleThreadSessionDispatcher()
+                val sessionRunner = SessionRunner(
+                    configuration = SessionConfiguration(
+                        sessionId = id,
+                        schemaVersion = SemanticVersion("1.1.0"),
+                        imageWidth = dependencies.modelInputWidth,
+                        imageHeight = dependencies.modelInputHeight,
+                    ),
+                    inference = trackedInference,
+                    deadlineScheduler = liveDeadlineScheduler,
+                    drainTimeoutNs = dependencies.drainTimeoutNs,
+                    finalizer = dependencies.sessionFinalizerFactory.create(template) { finalized ->
+                        synchronized(monitor) {
+                            finalized.copy(
+                                camera = finalized.camera.copy(
+                                    captureWidth = observedSourceWidth ?: finalized.camera.captureWidth,
+                                    captureHeight = observedSourceHeight ?: finalized.camera.captureHeight,
+                                ),
+                            )
+                        }
+                    },
+                    dispatcher = runnerDispatcher,
+                )
+                sessionDispatcher = runnerDispatcher
+                liveDeadlineScheduler.afterDeadline = {
+                    synchronized(monitor) { this@LiveCameraComposition.runner?.let(::finishIfSealed) }
+                }
+                if (dependencies.registerRunner(sessionRunner) != SessionRunnerRegistrationResult.ACCEPTED) {
+                    sessionRunner.abandon()
+                    liveInference.disposable.dispose()
+                    runnerDispatcher.shutdown()
+                    return LiveCameraStartResult.Unavailable(
+                        LiveUnavailableReason.Initialization("session_registration_rejected"),
+                    )
+                }
+                val liveSource = dependencies.sourceFactory()
+                Triple(liveInference, sessionRunner, liveSource)
+            } catch (error: Throwable) {
+                return LiveCameraStartResult.Unavailable(
+                    LiveUnavailableReason.Initialization(error.message ?: "live_initialization_failed"),
+                )
+            }
+            val liveInference = created.first
+            val sessionRunner = created.second
+            val liveSource = created.third
+            sessionId = id
+            inference = liveInference
+            runner = sessionRunner
+            source = liveSource
+            manifest = buildManifest(id, configuredInferenceFps, liveInference.constructionEvidence)
+            admission = LiveFrameAdmission(configuredInferenceFps)
+            liveSource.start(
+                onFrame = { frame -> handleFrame(frame, onProgress) },
+                onFailure = { failure -> handleSourceFailure(failure, onProgress) },
+            )
+            return LiveCameraStartResult.Started(id)
+        }
+    }
+
+    fun stop(): LiveCameraCompletion {
+        requestStop()
+        val deadlineMillis = (dependencies.drainTimeoutNs / 1_000_000L) + 1_000L
+        synchronized(monitor) {
+            if (completion == null) {
+                try {
+                    monitor.wait(deadlineMillis)
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                }
+            }
+            return completion ?: error("live session teardown did not reach completion")
+        }
+    }
+
+    fun completion(): LiveCameraCompletion? = synchronized(monitor) { completion }
+
+    fun snapshot(): SessionRunnerSnapshot? = synchronized(monitor) {
+        completion?.snapshot ?: runner?.snapshot()
+    }
+
+    fun manifest(): SessionManifest? = synchronized(monitor) { manifest }
+
+    internal val internalFailure: LiveInternalFailure?
+        get() = synchronized(monitor) {
+            if (stalled) LiveInternalFailure.LiveInferenceStalled else null
+        }
+
+    private fun handleFrame(frame: OwnedYuvFrame, onProgress: (SessionRunnerSnapshot) -> Unit) {
+        synchronized(monitor) {
+            val currentRunner = runner ?: return
+            val currentAdmission = admission ?: return
+            val rebasedCaptureNs = frame.timestampNs - sessionStartNs
+            val index = frameIndex++
+            if (rebasedCaptureNs < 0L) {
+                currentRunner.skip(index, 0L, SkipReason.PREPROCESSING_FAILED)
+                onProgress(currentRunner.snapshot())
+                return
+            }
+            observedSourceWidth = observedSourceWidth ?: frame.width
+            observedSourceHeight = observedSourceHeight ?: frame.height
+            manifest = manifest?.copy(
+                camera = manifest!!.camera.copy(
+                    captureWidth = observedSourceWidth!!,
+                    captureHeight = observedSourceHeight!!,
+                ),
+            )
+            val canonical = try {
+                val upright = yuv420ToUprightRgb24(
+                    Yuv420Frame(
+                        width = frame.width,
+                        height = frame.height,
+                        y = YuvPlane(frame.y.bytes, frame.y.rowStride, frame.y.pixelStride),
+                        u = YuvPlane(frame.u.bytes, frame.u.rowStride, frame.u.pixelStride),
+                        v = YuvPlane(frame.v.bytes, frame.v.rowStride, frame.v.pixelStride),
+                        colorStandard = frame.colorStandard,
+                        colorRange = frame.colorRange,
+                        rotation = frame.rotation,
+                        mirrored = frame.mirrored,
+                    ),
+                )
+                val (uprightWidth, uprightHeight) = uprightDimensions(frame.width, frame.height, frame.rotation)
+                scalePadRgb24(
+                    source = upright,
+                    sourceWidth = uprightWidth,
+                    sourceHeight = uprightHeight,
+                    targetWidth = dependencies.modelInputWidth,
+                    targetHeight = dependencies.modelInputHeight,
+                )
+            } catch (_: Throwable) {
+                val classification = currentAdmission.classify(rebasedCaptureNs, preprocessingSucceeded = false)
+                recordClassification(currentRunner, index, rebasedCaptureNs, classification)
+                onProgress(currentRunner.snapshot())
+                return
+            }
+
+            when (val classification = currentAdmission.classify(rebasedCaptureNs)) {
+                com.calisthenics.diagnostic.live.LiveFrameClassification.SUBMIT -> {
+                    val inferenceStartNs = relativeNowNs()
+                    val submissionIndex = currentRunner.submit(index, rebasedCaptureNs, inferenceStartNs, canonical)
+                    if (submissionIndex != null && !inferenceTerminal(submissionIndex)) {
+                        stallHandle?.dispose()
+                        stallHandle = dependencies.scheduler.scheduleAt(relativeNowNs() + STALL_TIMEOUT_NS) {
+                            onInferenceStall(submissionIndex, onProgress)
+                        }
+                    }
+                }
+
+                com.calisthenics.diagnostic.live.LiveFrameClassification.CADENCE_SELECTION ->
+                    currentRunner.skip(index, rebasedCaptureNs, SkipReason.CADENCE_SELECTION)
+
+                com.calisthenics.diagnostic.live.LiveFrameClassification.BACKPRESSURE ->
+                    currentRunner.skip(index, rebasedCaptureNs, SkipReason.BACKPRESSURE)
+
+                com.calisthenics.diagnostic.live.LiveFrameClassification.PREPROCESSING_FAILED ->
+                    currentRunner.skip(index, rebasedCaptureNs, SkipReason.PREPROCESSING_FAILED)
+
+                com.calisthenics.diagnostic.live.LiveFrameClassification.SESSION_STOPPING ->
+                    currentRunner.skip(index, rebasedCaptureNs, SkipReason.SESSION_STOPPING)
+            }
+            onProgress(currentRunner.snapshot())
+        }
+    }
+
+    private fun recordClassification(
+        currentRunner: SessionRunner,
+        index: Long,
+        timestampNs: Long,
+        classification: com.calisthenics.diagnostic.live.LiveFrameClassification,
+    ) {
+        val reason = when (classification) {
+            com.calisthenics.diagnostic.live.LiveFrameClassification.CADENCE_SELECTION -> SkipReason.CADENCE_SELECTION
+            com.calisthenics.diagnostic.live.LiveFrameClassification.BACKPRESSURE -> SkipReason.BACKPRESSURE
+            com.calisthenics.diagnostic.live.LiveFrameClassification.PREPROCESSING_FAILED -> SkipReason.PREPROCESSING_FAILED
+            com.calisthenics.diagnostic.live.LiveFrameClassification.SESSION_STOPPING -> SkipReason.SESSION_STOPPING
+            com.calisthenics.diagnostic.live.LiveFrameClassification.SUBMIT -> return
+        }
+        currentRunner.skip(index, timestampNs, reason)
+    }
+
+    private fun onInferenceTerminal(submissionIndex: Long) {
+        synchronized(monitor) {
+            terminalSubmissionIndices += submissionIndex
+            try {
+                admission?.completeSubmission()
+            } catch (_: IllegalStateException) {
+                // A stalled or already-terminal callback is harmless after the admission fence.
+            }
+            if (stallHandle != null) {
+                stallHandle?.dispose()
+                stallHandle = null
+            }
+            runner?.let { finishIfSealed(it) }
+            monitor.notifyAll()
+        }
+    }
+
+    private fun onInferenceStall(submissionIndex: Long, onProgress: (SessionRunnerSnapshot) -> Unit) {
+        synchronized(monitor) {
+            if (stopping || completion != null || !runnerHasPending(submissionIndex)) return
+            stalled = true
+            requestStopLocked()
+            runner?.let {
+                onProgress(it.snapshot())
+                finishIfSealed(it)
+            }
+        }
+    }
+
+    private fun handleSourceFailure(failure: Throwable, onProgress: (SessionRunnerSnapshot) -> Unit) {
+        synchronized(monitor) {
+            if (completion != null) return
+            requestStopLocked()
+            runner?.let {
+                onProgress(it.snapshot())
+                finishIfSealed(it)
+            }
+        }
+    }
+
+    private fun requestStop() {
+        synchronized(monitor) { requestStopLocked() }
+    }
+
+    private fun requestStopLocked() {
+        if (stopping) return
+        stopping = true
+        admission?.stop()
+        stallHandle?.dispose()
+        stallHandle = null
+        source?.stop()
+        runner?.stop(relativeNowNs())
+        runner?.let(::finishIfSealed)
+    }
+
+    private fun finishIfSealed(currentRunner: SessionRunner) {
+        if (finalizationStarted || completion != null) return
+        val state = currentRunner.snapshot()
+        if (state.lifecycle != com.calisthenics.diagnostic.session.SessionLifecycle.SEALED) return
+        finalizationStarted = true
+        val finalization = currentRunner.finalize()
+        val finished = LiveCameraCompletion(
+            sessionId = checkNotNull(sessionId),
+            finalization = finalization,
+            snapshot = currentRunner.snapshot(),
+            internalFailure = if (stalled) LiveInternalFailure.LiveInferenceStalled else null,
+        )
+        completion = finished
+        inference?.disposable?.dispose()
+        sessionDispatcher?.shutdown()
+        dependencies.scheduler.shutdown()
+        dependencies.onCompletion(finished)
+        monitor.notifyAll()
+    }
+
+    private fun runnerHasPending(submissionIndex: Long): Boolean = runner?.hasPendingInference() == true
+
+    private var terminalSubmissionIndices = mutableSetOf<Long>()
+
+    private fun inferenceTerminal(submissionIndex: Long): Boolean = synchronized(monitor) {
+        terminalSubmissionIndices.contains(submissionIndex)
+    }
+
+    private fun relativeNowNs(): Long = (dependencies.clock.nowNs() - sessionStartNs).coerceAtLeast(0L)
+
+    private fun buildManifest(
+        id: Uuid,
+        configuredInferenceFps: Int,
+        evidence: PoseLandmarkerConstructionEvidence,
+    ): SessionManifest {
+        val metadata = dependencies.manifestMetadata
+        val provenance = metadata.provenance
+        val studyContext: Map<String, JsonElement> = mapOf(
+            "mediapipe_construction_evidence" to buildJsonObject {
+                put("model_sha256", evidence.modelSha256)
+                put("tasks_vision_version", evidence.tasksVisionVersion)
+                put("running_mode", evidence.runningMode)
+                put("delegate", evidence.delegate)
+                put("num_poses", evidence.numPoses)
+                put("min_pose_detection_confidence", evidence.minPoseDetectionConfidence)
+                put("min_pose_presence_confidence", evidence.minPosePresenceConfidence)
+                put("min_tracking_confidence", evidence.minTrackingConfidence)
+                put("output_segmentation_masks", evidence.outputSegmentationMasks)
+                put("model_input_width", evidence.modelInputWidth)
+                put("model_input_height", evidence.modelInputHeight)
+            },
+        )
+        return SessionManifest(
+            schemaVersion = SemanticVersion("1.1.0"),
+            sessionId = id,
+            sessionKind = LIVE_SESSION_KIND,
+            participantPseudonymId = metadata.participantPseudonymId,
+            captureProtocolVersion = SemanticVersion("1.0.0"),
+            harnessGitSha = metadata.harnessGitSha,
+            device = metadata.device,
+            posePipeline = PosePipeline(
+                backendName = "mediapipe_pose_landmarker",
+                backendVersion = evidence.tasksVisionVersion,
+                modelAssetName = provenance?.assetName ?: "unknown",
+                modelAssetSha256 = Sha256(provenance?.sha256 ?: evidence.modelSha256),
+                delegate = evidence.delegate.lowercase(),
+                runningMode = evidence.runningMode.lowercase(),
+                numPoses = evidence.numPoses,
+                minPoseDetectionConfidence = evidence.minPoseDetectionConfidence.toDouble(),
+                minPosePresenceConfidence = evidence.minPosePresenceConfidence.toDouble(),
+                minTrackingConfidence = evidence.minTrackingConfidence.toDouble(),
+                landmarkTopology = "mediapipe_pose_33_v1",
+            ),
+            camera = Camera(
+                facing = metadata.cameraFacing,
+                captureWidth = REQUESTED_CAMERA_WIDTH,
+                captureHeight = REQUESTED_CAMERA_HEIGHT,
+                orientationDegrees = metadata.orientationDegrees,
+                mirrored = metadata.mirrored,
+                requestedCameraFps = 30.0,
+                sourcePixelFormat = "YUV_420_888",
+                sourceColorMatrix = dependencies.cameraCapability.sourceColorStandard,
+                sourceColorRange = dependencies.cameraCapability.sourceColorRange,
+                sourceDataspaceRaw = dependencies.cameraCapability.sourceDataspaceRaw?.toLong(),
+                timestampSource = "session_relative_monotonic_ns",
+                deliverySemantics = "keep_only_latest_observable_deliveries",
+            ),
+            modelInput = ModelInput(
+                modelInputWidth = dependencies.modelInputWidth,
+                modelInputHeight = dependencies.modelInputHeight,
+                livePreprocessingContractVersion = SemanticVersion(LIVE_PREPROCESSING_VERSION),
+                fixturePreprocessingContractVersion = null,
+            ),
+            inferenceDrainTimeoutMs = dependencies.drainTimeoutNs / 1_000_000L,
+            cadence = Cadence(
+                configuredInferenceFps = configuredInferenceFps.toDouble(),
+                achievedInferenceFpsTimeseries = listOf(CadenceSample(0L, 0.0)),
+                trackerUpdateCadenceHz = null,
+            ),
+            clock = Clock(
+                monotonicTimeBase = "session_relative_monotonic_ns",
+                t0MonotonicNs = 0L,
+                startedAtUtc = metadata.startedAtUtc,
+                endedAtUtc = metadata.startedAtUtc,
+            ),
+            availableObservations = AvailableObservations(false, false),
+            mediaReferences = emptyList(),
+            counts = Counts(0, 0, 0, 0, 0, emptyMap(), 0, 0),
+            machineInferenceFailures = emptyList(),
+            captureQualityObserved = CaptureQualityObserved(false, false, false, "unobserved", false, null),
+            studyContext = studyContext,
+        )
+    }
+
+    companion object {
+        fun fromAndroid(
+            context: Context,
+            lifecycleOwner: LifecycleOwner,
+            cameraCapability: CameraCapabilityObservation,
+            permissionGranted: Boolean,
+            onSessionRunnerCreated: (SessionRunner) -> SessionRunnerRegistrationResult = {
+                SessionRunnerRegistrationResult.ACCEPTED
+            },
+            onCompletion: (LiveCameraCompletion) -> Unit = {},
+        ): LiveCameraComposition {
+            val roots = when (val result = AndroidStorageRoots.from(context)) {
+                is StorageRootsResult.Ready -> result.roots
+                is StorageRootsResult.Unavailable -> error(result.reason)
+            }
+            val provenance = parseModelProvenance(
+                context.assets.open("replay/model_provenance.json").use { it.readBytes().decodeToString() },
+            )
+            val clock = AndroidLiveClock()
+            return LiveCameraComposition(
+                Dependencies(
+                    cameraCapability = cameraCapability,
+                    permissionGranted = permissionGranted,
+                    modelInputWidth = MODEL_INPUT_WIDTH,
+                    modelInputHeight = MODEL_INPUT_HEIGHT,
+                    clock = clock,
+                    scheduler = ExecutorLiveScheduler(clock),
+                    sourceFactory = { AndroidLiveFrameSource(CameraXFrameSource(context, lifecycleOwner)) },
+                    inferenceFactory = { nowNs ->
+                        val factory = PoseLandmarkerLiveAdapterFactory(
+                            provenance = provenance,
+                            modelInputWidth = MODEL_INPUT_WIDTH,
+                            modelInputHeight = MODEL_INPUT_HEIGHT,
+                            readModelBytes = { context.assets.open("replay/${provenance.assetName}").use { it.readBytes() } },
+                            nowNs = nowNs,
+                            constructDetector = realLiveDetectorConstructor(context),
+                        )
+                        val port = factory.create()
+                        LiveInference(port, port, checkNotNull(factory.lastConstructionEvidence))
+                    },
+                    sessionFinalizerFactory = LiveSessionFinalizerFactory { template, atFinalization ->
+                        SessionExporter(AndroidStoragePort(roots), template, atFinalization)
+                    },
+                    manifestMetadata = LiveManifestMetadata(
+                        harnessGitSha = BuildConfig.PROBE_GIT_SHA,
+                        provenance = provenance,
+                    ),
+                    registerRunner = onSessionRunnerCreated,
+                    onCompletion = onCompletion,
+                ),
+            )
+        }
+
+        private val sessionSequence = AtomicLong(0)
+
+        private fun randomSessionId(): String {
+            val n = sessionSequence.incrementAndGet()
+            return "00000000-0000-4000-8000-${(n xor System.nanoTime()).toULong().toString(16).takeLast(12).padStart(12, '0')}"
+        }
+    }
+
+    private class AndroidLiveClock : LiveClock {
+        private val start = SystemClock.elapsedRealtimeNanos()
+        override fun nowNs(): Long = SystemClock.elapsedRealtimeNanos() - start
+    }
+
+    private class ExecutorLiveScheduler(private val clock: LiveClock) : LiveScheduler {
+        private val executor = Executors.newSingleThreadScheduledExecutor()
+
+        override fun scheduleAt(deadlineNs: Long, action: () -> Unit): Disposable {
+            val future = executor.schedule({ action() }, (deadlineNs - clock.nowNs()).coerceAtLeast(0L), TimeUnit.NANOSECONDS)
+            return object : Disposable {
+                override fun dispose() { future.cancel(false) }
+            }
+        }
+
+        override fun shutdown() {
+            executor.shutdownNow()
+        }
+    }
+
+    private class AndroidLiveFrameSource(private val delegate: CameraXFrameSource) : LiveFrameSource {
+        override fun start(onFrame: (OwnedYuvFrame) -> Unit, onFailure: (Throwable) -> Unit) = delegate.start(onFrame, onFailure)
+        override fun stop() = delegate.stop()
+    }
+}
+
+private class TerminalTrackingInferencePort(
+    private val delegate: InferencePort,
+    private val onTerminal: (Long) -> Unit,
+) : InferencePort {
+    override fun submit(
+        submissionIndex: Long,
+        canonicalInput: ByteArray,
+        backendTimestampMs: Long,
+        callback: (InferenceResult) -> Unit,
+    ) = delegate.submit(submissionIndex, canonicalInput, backendTimestampMs) { result ->
+        callback(result)
+        onTerminal(submissionIndex)
+    }
+
+    override fun cancel(submissionIndex: Long) = delegate.cancel(submissionIndex)
+}
+
+private fun exactCameraCapabilityBlockingReasons(observation: CameraCapabilityObservation): List<String> = buildList {
+    if (observation.cameraId != OwnedYuvFrame.CAMERA_ID) add("camera_id_not_0")
+    if (observation.timestampSource != OwnedYuvFrame.ADMITTED_TIMESTAMP_SOURCE) add("timestamp_source_not_realtime")
+    if (observation.sourceDataspaceRaw != OwnedYuvFrame.ADMITTED_RAW_DATASPACE) add("raw_dataspace_not_admitted")
+    if (observation.sourceColorStandard != "BT601") add("colour_standard_not_bt601")
+    if (observation.sourceColorRange != "FULL") add("colour_range_not_full")
+    if (!observation.underlyingImageAvailable) add("underlying_image_bridge_unavailable")
+    if (observation.pixelFormat != "YUV_420_888") add("pixel_format_not_yuv_420_888")
+}

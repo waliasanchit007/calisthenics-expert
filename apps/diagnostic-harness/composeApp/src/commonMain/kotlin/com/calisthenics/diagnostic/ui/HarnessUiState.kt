@@ -12,9 +12,12 @@ data class HarnessUiState(
     val sessionActive: Boolean,
     val selectedFixture: ReplayFixtureOption = ReplayFixtureOption.DETECTION_TIER,
     val runPhase: ReplayRunPhase = ReplayRunPhase.NotStarted,
+    val selectedLiveFps: LiveInferenceFps = LiveInferenceFps.FPS_30,
+    val liveRunPhase: LiveRunPhase = LiveRunPhase.NotStarted,
 )
 val HarnessUiState.canStart: Boolean get() = canStart(selectedMode, capabilities, sessionActive)
 val HarnessUiState.disabledReasons: List<String> get() = unavailableReasons(selectedMode, capabilities, sessionActive)
 
 fun HarnessUiState.selectMode(mode: HarnessMode): HarnessUiState = copy(selectedMode = mode)
 fun HarnessUiState.selectFixture(option: ReplayFixtureOption): HarnessUiState = copy(selectedFixture = option)
+fun HarnessUiState.selectLiveFps(fps: LiveInferenceFps): HarnessUiState = copy(selectedLiveFps = fps)

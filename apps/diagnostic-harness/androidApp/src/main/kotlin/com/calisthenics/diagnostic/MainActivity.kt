@@ -1,8 +1,12 @@
 package com.calisthenics.diagnostic
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -10,25 +14,35 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.core.content.ContextCompat
 import com.calisthenics.diagnostic.capability.Capability
 import com.calisthenics.diagnostic.capability.CapabilityId
 import com.calisthenics.diagnostic.capability.CapabilityState
 import com.calisthenics.diagnostic.capability.HarnessMode
+import com.calisthenics.diagnostic.capability.requiredLiveCapabilities
+import com.calisthenics.diagnostic.composition.LiveCameraCompletion
+import com.calisthenics.diagnostic.composition.LiveCameraComposition
+import com.calisthenics.diagnostic.composition.LiveCameraStartResult
 import com.calisthenics.diagnostic.composition.RealReplayComposition
 import com.calisthenics.diagnostic.composition.RealReplayFixtureSelection
 import com.calisthenics.diagnostic.composition.RealReplayResult
 import com.calisthenics.diagnostic.composition.SessionRunnerOwnership
+import com.calisthenics.diagnostic.probe.CameraCapabilityProbe
 import com.calisthenics.diagnostic.probe.ReplayCapabilityOutcome
 import com.calisthenics.diagnostic.probe.ReplayCapabilityProbe
 import com.calisthenics.diagnostic.probe.StorageCapabilityProbe
 import com.calisthenics.diagnostic.probe.StorageProbeOutcome
+import com.calisthenics.diagnostic.replay.CameraCapabilityObservation
 import com.calisthenics.diagnostic.session.FinalizationResult
+import com.calisthenics.diagnostic.session.SessionRunnerSnapshot
 import com.calisthenics.diagnostic.ui.HarnessApp
 import com.calisthenics.diagnostic.ui.HarnessUiState
+import com.calisthenics.diagnostic.ui.LiveRunPhase
 import com.calisthenics.diagnostic.ui.ReplayFixtureOption
 import com.calisthenics.diagnostic.ui.ReplayRunPhase
 import com.calisthenics.diagnostic.ui.ReplayRunSummary
 import com.calisthenics.diagnostic.ui.selectFixture
+import com.calisthenics.diagnostic.ui.selectLiveFps
 import com.calisthenics.diagnostic.ui.selectMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -38,84 +52,172 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            var state by remember {
-                mutableStateOf(
-                    HarnessUiState("Android", listOf(
-                        Capability(CapabilityId.MODEL_ASSET, CapabilityState.Unknown("model probe pending")),
-                        Capability(CapabilityId.STORAGE_DURABILITY, CapabilityState.Unknown("storage probe pending")),
-                        Capability(CapabilityId.POSE_BACKEND, CapabilityState.Unknown("pose backend pending")),
-                    ), HarnessMode.REPLAY, sessionActive = false),
+            var state by remember { mutableStateOf(initialState()) }
+            val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+                state = state.copy(
+                    capabilities = state.capabilities.map { capability ->
+                        if (capability.id == CapabilityId.CAMERA_PERMISSION) {
+                            capability.copy(
+                                state = if (granted) CapabilityState.Available
+                                else CapabilityState.Unavailable("camera_permission_denied"),
+                            )
+                        } else capability
+                    },
                 )
             }
             val coroutineScope = rememberCoroutineScope()
-            // Bound to teardown so a run left non-terminal when this composable leaves composition
-            // (activity finishing mid-run) is abandoned exactly once, per the Task 5 brief. Normal
-            // completion already reaches a terminal state through SessionRunner.finalize() itself,
-            // so abandon() here is a no-op in that case.
+            var cameraObservation by remember { mutableStateOf<CameraCapabilityObservation?>(null) }
+            var liveComposition by remember { mutableStateOf<LiveCameraComposition?>(null) }
             val sessionRunnerOwnership = remember { SessionRunnerOwnership() }
-            DisposableEffect(Unit) {
-                onDispose { sessionRunnerOwnership.teardown() }
+            val permissionGranted = state.capabilities.any {
+                it.id == CapabilityId.CAMERA_PERMISSION && it.state is CapabilityState.Available
+            }
+
+            DisposableEffect(Unit) { onDispose { sessionRunnerOwnership.teardown() } }
+
+            LaunchedEffect(permissionGranted) {
+                if (!permissionGranted) return@LaunchedEffect
+                val cameraProbe = withContext(Dispatchers.IO) {
+                    runCatching {
+                        CameraCapabilityProbe(
+                            context = applicationContext,
+                            lifecycleOwner = this@MainActivity,
+                            probeGitSha = com.calisthenics.diagnostic.android.BuildConfig.PROBE_GIT_SHA,
+                        ).run()
+                    }
+                }
+                cameraProbe.onSuccess { result ->
+                    cameraObservation = result.toCameraObservation()
+                    val exact = result.cameraId == "0" && result.pixelFormat == "YUV_420_888" && result.isLiveAdmissible()
+                    state = state.copy(capabilities = state.capabilities.map { capability ->
+                        when (capability.id) {
+                            CapabilityId.CAMERA_SOURCE -> capability.copy(state = if (exact) CapabilityState.Available else CapabilityState.Unavailable("camera_capability_not_admitted"))
+                            CapabilityId.TIMESTAMP_COMPARABILITY -> capability.copy(state = if (result.timestampSource == "REALTIME") CapabilityState.Available else CapabilityState.Unavailable("timestamp_source_not_realtime"))
+                            CapabilityId.COLOR_METADATA -> capability.copy(state = if (result.isLiveAdmissible()) CapabilityState.Available else CapabilityState.Unavailable("colour_metadata_not_admitted"))
+                            else -> capability
+                        }
+                    })
+                }.onFailure { error ->
+                    state = state.copy(capabilities = state.capabilities.map { capability ->
+                        if (capability.id in setOf(CapabilityId.CAMERA_SOURCE, CapabilityId.TIMESTAMP_COMPARABILITY, CapabilityId.COLOR_METADATA)) {
+                            capability.copy(state = CapabilityState.Unavailable(error.message ?: "camera_capability_probe_failed"))
+                        } else capability
+                    })
+                }
             }
 
             LaunchedEffect(Unit) {
-                val probeOutcome = withContext(Dispatchers.IO) {
+                val storage = withContext(Dispatchers.IO) {
                     StorageCapabilityProbe(applicationContext, com.calisthenics.diagnostic.android.BuildConfig.PROBE_GIT_SHA).run()
                 }
-                val durabilityState = when (probeOutcome) {
-                    is StorageProbeOutcome.Completed -> if (probeOutcome.result.isDurabilityAdmissible()) {
-                        CapabilityState.Available
-                    } else {
-                        CapabilityState.Unavailable("storage_capability_probe_failed")
-                    }
-                    is StorageProbeOutcome.Unavailable -> CapabilityState.Unavailable(probeOutcome.reason)
+                val durabilityState = when (storage) {
+                    is StorageProbeOutcome.Completed -> if (storage.result.isDurabilityAdmissible()) CapabilityState.Available else CapabilityState.Unavailable("storage_capability_probe_failed")
+                    is StorageProbeOutcome.Unavailable -> CapabilityState.Unavailable(storage.reason)
                 }
-                val replayCapabilityState = when (val outcome = withContext(Dispatchers.IO) { ReplayCapabilityProbe(applicationContext).run() }) {
+                val replay = withContext(Dispatchers.IO) { ReplayCapabilityProbe(applicationContext).run() }
+                val replayState = when (replay) {
                     is ReplayCapabilityOutcome.Available -> CapabilityState.Available
-                    is ReplayCapabilityOutcome.Unavailable -> CapabilityState.Unavailable(outcome.reason)
+                    is ReplayCapabilityOutcome.Unavailable -> CapabilityState.Unavailable(replay.reason)
                 }
-                state = state.copy(
-                    capabilities = state.capabilities.map { capability ->
-                        when (capability.id) {
-                            CapabilityId.STORAGE_DURABILITY -> capability.copy(state = durabilityState)
-                            CapabilityId.MODEL_ASSET, CapabilityId.POSE_BACKEND -> capability.copy(state = replayCapabilityState)
-                            else -> capability
-                        }
-                    },
-                )
+                state = state.copy(capabilities = state.capabilities.map { capability ->
+                    when (capability.id) {
+                        CapabilityId.STORAGE_DURABILITY -> capability.copy(state = durabilityState)
+                        CapabilityId.MODEL_ASSET, CapabilityId.POSE_BACKEND -> capability.copy(state = replayState)
+                        else -> capability
+                    }
+                })
             }
 
             HarnessApp(
                 state = state,
                 onModeSelected = { state = state.selectMode(it) },
                 onFixtureSelected = { state = state.selectFixture(it) },
+                onLiveFpsSelected = { state = state.selectLiveFps(it) },
+                onRequestCameraPermission = { permissionLauncher.launch(Manifest.permission.CAMERA) },
+                onStop = {
+                    val composition = liveComposition
+                    coroutineScope.launch(Dispatchers.IO) {
+                        composition?.stop()
+                    }
+                },
                 onStart = {
-                    state = state.copy(sessionActive = true, runPhase = ReplayRunPhase.Running(0, 0, 0))
+                    state = state.copy(sessionActive = true)
                     coroutineScope.launch {
-                        val selection = when (state.selectedFixture) {
-                            ReplayFixtureOption.DETECTION_TIER -> RealReplayFixtureSelection.DETECTION_TIER
+                        if (state.selectedMode == HarnessMode.REPLAY) {
+                            state = state.copy(runPhase = ReplayRunPhase.Running(0, 0, 0))
+                            val selection = when (state.selectedFixture) {
+                                ReplayFixtureOption.DETECTION_TIER -> RealReplayFixtureSelection.DETECTION_TIER
+                            }
+                            val result = withContext(Dispatchers.IO) {
+                                RealReplayComposition(applicationContext).run(
+                                    fixture = selection,
+                                    onSessionRunnerCreated = { runner -> sessionRunnerOwnership.register(runner) },
+                                    onProgress = { snapshot -> state = state.copy(runPhase = snapshot.toReplayRunning()) },
+                                )
+                            }
+                            sessionRunnerOwnership.clear()
+                            state = state.copy(sessionActive = false, runPhase = state.runPhase.toCompletionPhase(result))
+                        } else {
+                            state = state.copy(liveRunPhase = LiveRunPhase.Running(state.selectedLiveFps.value, 0, 0, 0, 0, 0))
+                            val observation = cameraObservation
+                            if (observation == null) {
+                                state = state.copy(sessionActive = false, liveRunPhase = LiveRunPhase.Failed("camera_capability_not_admitted"))
+                                return@launch
+                            }
+                            val composition = runCatching {
+                                LiveCameraComposition.fromAndroid(
+                                    context = applicationContext,
+                                    lifecycleOwner = this@MainActivity,
+                                    cameraCapability = observation,
+                                    permissionGranted = permissionGranted,
+                                    onSessionRunnerCreated = { runner -> sessionRunnerOwnership.register(runner) },
+                                    onCompletion = { completion ->
+                                        state = state.copy(
+                                            sessionActive = false,
+                                            liveRunPhase = completion.toLivePhase(),
+                                        )
+                                        sessionRunnerOwnership.clear()
+                                    },
+                                )
+                            }.getOrElse { error ->
+                                state = state.copy(sessionActive = false, liveRunPhase = LiveRunPhase.Failed(error.message ?: "live_initialization_failed"))
+                                return@launch
+                            }
+                            liveComposition = composition
+                            when (val started = withContext(Dispatchers.IO) {
+                                composition.start(state.selectedLiveFps.value) { snapshot -> state = state.copy(liveRunPhase = snapshot.toLiveRunning(state.selectedLiveFps.value)) }
+                            }) {
+                                is LiveCameraStartResult.Unavailable -> state = state.copy(sessionActive = false, liveRunPhase = LiveRunPhase.Failed(started.reason.code))
+                                is LiveCameraStartResult.Started -> Unit
+                            }
                         }
-                        val result = withContext(Dispatchers.IO) {
-                            RealReplayComposition(applicationContext).run(
-                                fixture = selection,
-                                onSessionRunnerCreated = { runner -> sessionRunnerOwnership.register(runner) },
-                                onProgress = { snapshot ->
-                                    state = state.copy(
-                                        runPhase = ReplayRunPhase.Running(
-                                            framesSubmitted = snapshot.counts.inferenceFramesSubmitted,
-                                            framesEmitted = snapshot.counts.inferenceRecordsEmitted,
-                                            poseDetectedRecords = snapshot.counts.poseDetectedRecords,
-                                        ),
-                                    )
-                                },
-                            )
-                        }
-                        sessionRunnerOwnership.clear()
-                        state = state.copy(sessionActive = false, runPhase = state.runPhase.toCompletionPhase(result))
                     }
                 },
             )
         }
     }
+
+    private fun initialState(): HarnessUiState {
+        val permissionGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        return HarnessUiState(
+            platform = "Android",
+            capabilities = requiredLiveCapabilities().map { id ->
+                Capability(id, if (id == CapabilityId.CAMERA_PERMISSION && permissionGranted) CapabilityState.Available else if (id == CapabilityId.CAMERA_PERMISSION) CapabilityState.Unavailable("camera_permission_denied") else CapabilityState.Unknown("capability probe pending"))
+            },
+            selectedMode = HarnessMode.REPLAY,
+            sessionActive = false,
+        )
+    }
+}
+
+private fun SessionRunnerSnapshot.toReplayRunning() = ReplayRunPhase.Running(counts.inferenceFramesSubmitted, counts.inferenceRecordsEmitted, counts.poseDetectedRecords)
+
+private fun SessionRunnerSnapshot.toLiveRunning(fps: Int) = LiveRunPhase.Running(fps, counts.cameraFramesReceived, counts.inferenceFramesSubmitted, counts.inferenceRecordsEmitted, counts.framesSkippedBeforeInference, counts.inferenceFailures)
+
+private fun LiveCameraCompletion.toLivePhase(): LiveRunPhase = when (val result = finalization) {
+    is FinalizationResult.Published -> LiveRunPhase.Completed(sessionId.value, true, snapshot.counts.inferenceRecordsEmitted, snapshot.counts.framesSkippedBeforeInference, snapshot.counts.inferenceFailures)
+    is FinalizationResult.Failed -> LiveRunPhase.Failed(internalFailure?.code ?: result.failureCode)
+    is FinalizationResult.Cancelled -> LiveRunPhase.Failed(result.reason)
 }
 
 private fun ReplayRunPhase.toCompletionPhase(result: RealReplayResult): ReplayRunPhase = when (result) {
@@ -123,14 +225,6 @@ private fun ReplayRunPhase.toCompletionPhase(result: RealReplayResult): ReplayRu
     is RealReplayResult.Cancelled -> ReplayRunPhase.Failed(result.reason)
     is RealReplayResult.Completed -> {
         val counts = result.snapshot.counts
-        ReplayRunPhase.Completed(
-            ReplayRunSummary(
-                sessionId = result.sessionId.value,
-                published = result.finalization is FinalizationResult.Published,
-                inferenceRecordsEmitted = counts.inferenceRecordsEmitted,
-                poseDetectedRecords = counts.poseDetectedRecords,
-                inferenceFailures = counts.inferenceFailures,
-            ),
-        )
+        ReplayRunPhase.Completed(ReplayRunSummary(result.sessionId.value, result.finalization is FinalizationResult.Published, counts.inferenceRecordsEmitted, counts.poseDetectedRecords, counts.inferenceFailures))
     }
 }
