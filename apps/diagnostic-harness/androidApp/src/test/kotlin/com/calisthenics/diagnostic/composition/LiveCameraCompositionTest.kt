@@ -207,6 +207,42 @@ class LiveCameraCompositionTest {
     }
 
     @Test
+    fun finalizationRecordsObservedSubmissionCadenceInsteadOfPlaceholderZero() {
+        withHarness(Harness(invokeManifestAtFinalization = true)) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            harness.source.emit(frame(timestampNs = 1_000_002_000L))
+            harness.inference.completeSuccess()
+            harness.source.emit(frame(timestampNs = 4_100_002_000L))
+            harness.inference.callbackNowNs = 4_100_005_000L
+            harness.inference.completeSuccess()
+            harness.composition.stop()
+
+            val cadence = assertNotNull(harness.finalizedManifest).cadence.achievedInferenceFpsTimeseries
+            assertEquals(3, cadence.size)
+            assertEquals(listOf(1.0, 0.0, 0.0), cadence.map { it.achievedInferenceFps })
+            assertEquals(listOf(1_000_000_000L, 2_000_000_000L, 3_000_000_000L), cadence.map { it.tMonotonicNs })
+        }
+    }
+
+    @Test
+    fun manifestPinsWallClockStartAndFinalizationTimes() {
+        val wallTimes = ArrayDeque(listOf("session-start", "session-end"))
+        withHarness(
+            Harness(
+                invokeManifestAtFinalization = true,
+                wallClockUtc = { wallTimes.removeFirst() },
+            ),
+        ) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            harness.composition.stop()
+
+            val finalized = assertNotNull(harness.finalizedManifest)
+            assertEquals("session-start", finalized.clock.startedAtUtc)
+            assertEquals("session-end", finalized.clock.endedAtUtc)
+        }
+    }
+
+    @Test
     fun rotationMirroringAndScalePadAreAppliedAndManifestSeparatesDimensions() {
         withHarness(Harness(modelInputWidth = 2, modelInputHeight = 2)) { harness ->
             assertIs<LiveCameraStartResult.Started>(harness.start(10))
@@ -412,6 +448,7 @@ class LiveCameraCompositionTest {
         sourceFactoryFailure: Throwable? = null,
         sourceStartFailure: Throwable? = null,
         invokeManifestAtFinalization: Boolean = false,
+        wallClockUtc: () -> String = { "test-time" },
         beforeSourceStart: () -> Unit = {},
         blockSourceStart: Boolean = false,
     ) {
@@ -427,6 +464,7 @@ class LiveCameraCompositionTest {
         var manifestCallbackInvoked = false
         val manifestCallbackInvokedLatch = CountDownLatch(1)
         lateinit var manifest: com.calisthenics.diagnostic.contract.SessionManifest
+        var finalizedManifest: com.calisthenics.diagnostic.contract.SessionManifest? = null
         private var started = false
 
         val composition = LiveCameraComposition(
@@ -454,7 +492,8 @@ class LiveCameraCompositionTest {
                         override fun finalize(snapshot: com.calisthenics.diagnostic.session.SealedSessionSnapshot): FinalizationResult {
                             finalizerCalls++
                             if (invokeManifestAtFinalization) {
-                                manifestAtFinalization(template)
+                                finalizedManifest = manifestAtFinalization(template, snapshot)
+                                manifest = finalizedManifest!!
                                 manifestCallbackInvoked = true
                                 manifestCallbackInvokedLatch.countDown()
                             }
@@ -463,6 +502,7 @@ class LiveCameraCompositionTest {
                     }
                 },
                 drainTimeoutNs = drainTimeoutNs,
+                wallClockUtc = wallClockUtc,
                 registerRunner = { registrationResult },
                 beforeSourceStart = beforeSourceStart,
             ),

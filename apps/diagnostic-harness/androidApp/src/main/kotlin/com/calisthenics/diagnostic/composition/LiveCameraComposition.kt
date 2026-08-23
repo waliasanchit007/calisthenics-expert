@@ -9,7 +9,6 @@ import com.calisthenics.diagnostic.camera.CameraXFrameSource
 import com.calisthenics.diagnostic.camera.OwnedYuvFrame
 import com.calisthenics.diagnostic.contract.AvailableObservations
 import com.calisthenics.diagnostic.contract.Cadence
-import com.calisthenics.diagnostic.contract.CadenceSample
 import com.calisthenics.diagnostic.contract.Camera
 import com.calisthenics.diagnostic.contract.CaptureQualityObserved
 import com.calisthenics.diagnostic.contract.Clock
@@ -27,6 +26,7 @@ import com.calisthenics.diagnostic.export.SessionExporter
 import com.calisthenics.diagnostic.export.StorageRootsResult
 import com.calisthenics.diagnostic.hash.Sha256Digest
 import com.calisthenics.diagnostic.live.LiveFrameAdmission
+import com.calisthenics.diagnostic.live.achievedInferenceFpsTimeseriesOf
 import com.calisthenics.diagnostic.mediapipe.PoseLandmarkerConstructionEvidence
 import com.calisthenics.diagnostic.mediapipe.PoseLandmarkerLiveAdapterFactory
 import com.calisthenics.diagnostic.mediapipe.PoseLandmarkerLiveInferencePort
@@ -129,7 +129,7 @@ interface LiveFrameSource {
 fun interface LiveSessionFinalizerFactory {
     fun create(
         manifestTemplate: SessionManifest,
-        manifestAtFinalization: (SessionManifest) -> SessionManifest,
+        manifestAtFinalization: (SessionManifest, com.calisthenics.diagnostic.session.SealedSessionSnapshot) -> SessionManifest,
     ): SessionFinalizer
 }
 
@@ -172,6 +172,7 @@ class LiveCameraComposition internal constructor(
         },
         val beforeSourceStart: () -> Unit = {},
         val onCompletion: (LiveCameraCompletion) -> Unit = {},
+        val wallClockUtc: () -> String = { Instant.now().toString() },
     ) {
         init {
             require(modelInputWidth > 0 && modelInputHeight > 0)
@@ -257,7 +258,12 @@ class LiveCameraComposition internal constructor(
             try {
                 val liveInference = dependencies.inferenceFactory(::relativeNowNs)
                 inference = liveInference
-                val template = buildManifest(id, configuredInferenceFps, liveInference.constructionEvidence)
+                val template = buildManifest(
+                    id,
+                    configuredInferenceFps,
+                    liveInference.constructionEvidence,
+                    dependencies.wallClockUtc(),
+                )
                 manifest = template
                 val trackedInference = TerminalTrackingInferencePort(
                     delegate = liveInference.port,
@@ -276,14 +282,20 @@ class LiveCameraComposition internal constructor(
                     inference = trackedInference,
                     deadlineScheduler = liveDeadlineScheduler,
                     drainTimeoutNs = dependencies.drainTimeoutNs,
-                    finalizer = dependencies.sessionFinalizerFactory.create(template) { finalized ->
+                    finalizer = dependencies.sessionFinalizerFactory.create(template) { finalized, sealed ->
                         synchronized(monitor) {
-                            finalized.copy(
+                            val completed = finalized.copy(
                                 camera = finalized.camera.copy(
                                     captureWidth = observedSourceWidth ?: finalized.camera.captureWidth,
                                     captureHeight = observedSourceHeight ?: finalized.camera.captureHeight,
                                 ),
+                                cadence = finalized.cadence.copy(
+                                    achievedInferenceFpsTimeseries = achievedInferenceFpsTimeseriesOf(sealed.records),
+                                ),
+                                clock = finalized.clock.copy(endedAtUtc = dependencies.wallClockUtc()),
                             )
+                            manifest = completed
+                            completed
                         }
                     },
                     dispatcher = runnerDispatcher,
@@ -731,6 +743,7 @@ class LiveCameraComposition internal constructor(
         id: Uuid,
         configuredInferenceFps: Int,
         evidence: PoseLandmarkerConstructionEvidence,
+        startedAtUtc: String,
     ): SessionManifest {
         val metadata = dependencies.manifestMetadata
         val provenance = metadata.provenance
@@ -776,7 +789,7 @@ class LiveCameraComposition internal constructor(
                 captureHeight = REQUESTED_CAMERA_HEIGHT,
                 orientationDegrees = metadata.orientationDegrees,
                 mirrored = metadata.mirrored,
-                requestedCameraFps = 30.0,
+                requestedCameraFps = CameraXFrameSource.TARGET_CAMERA_FPS.toDouble(),
                 sourcePixelFormat = "YUV_420_888",
                 sourceColorMatrix = dependencies.cameraCapability.sourceColorStandard,
                 sourceColorRange = dependencies.cameraCapability.sourceColorRange,
@@ -793,14 +806,14 @@ class LiveCameraComposition internal constructor(
             inferenceDrainTimeoutMs = dependencies.drainTimeoutNs / 1_000_000L,
             cadence = Cadence(
                 configuredInferenceFps = configuredInferenceFps.toDouble(),
-                achievedInferenceFpsTimeseries = listOf(CadenceSample(0L, 0.0)),
+                achievedInferenceFpsTimeseries = emptyList(),
                 trackerUpdateCadenceHz = null,
             ),
             clock = Clock(
                 monotonicTimeBase = "session_relative_monotonic_ns",
                 t0MonotonicNs = 0L,
-                startedAtUtc = metadata.startedAtUtc,
-                endedAtUtc = metadata.startedAtUtc,
+                startedAtUtc = startedAtUtc,
+                endedAtUtc = startedAtUtc,
             ),
             availableObservations = AvailableObservations(false, false),
             mediaReferences = emptyList(),
@@ -857,6 +870,13 @@ class LiveCameraComposition internal constructor(
                     manifestMetadata = LiveManifestMetadata(
                         harnessGitSha = BuildConfig.PROBE_GIT_SHA,
                         provenance = provenance,
+                        device = Device(
+                            platform = "android",
+                            osVersion = Build.VERSION.RELEASE,
+                            deviceModel = Build.MODEL,
+                            chipset = runtimeChipset(),
+                            thermalApiAvailable = false,
+                        ),
                     ),
                     registerRunner = onSessionRunnerCreated,
                     onCompletion = onCompletion,
@@ -870,6 +890,11 @@ class LiveCameraComposition internal constructor(
             val n = sessionSequence.incrementAndGet()
             return "00000000-0000-4000-8000-${(n xor System.nanoTime()).toULong().toString(16).takeLast(12).padStart(12, '0')}"
         }
+
+        /** SOC_MODEL is preferred when populated; older/vendor builds fall back to HARDWARE. */
+        private fun runtimeChipset(): String? =
+            Build.SOC_MODEL.takeIf { it.isNotBlank() && !it.equals("unknown", ignoreCase = true) }
+                ?: Build.HARDWARE.takeIf { it.isNotBlank() && !it.equals("unknown", ignoreCase = true) }
     }
 
     private class AndroidLiveClock : LiveClock {

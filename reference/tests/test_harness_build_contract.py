@@ -208,6 +208,52 @@ def test_android_probe_has_executable_instrumentation_wiring() -> None:
     assert "satisfies_s25_camera_live_admission" not in probe_test
 
 
+def test_live_capture_gate_binds_runtime_manifest_and_runs_instrumentation_contract() -> None:
+    composition = (
+        HARNESS
+        / "androidApp/src/main/kotlin/com/calisthenics/diagnostic/composition/LiveCameraComposition.kt"
+    ).read_text()
+    live_test = (
+        HARNESS
+        / "androidApp/src/androidTest/kotlin/com/calisthenics/diagnostic/composition/LiveCaptureDeviceGateTest.kt"
+    ).read_text()
+    makefile = (ROOT / "Makefile").read_text()
+    target = makefile.split("verify-harness-s25-live-capture:", 1)[1].split("\nverify:\n", 1)[0]
+
+    assert "device = Device(" in composition
+    assert "osVersion = Build.VERSION.RELEASE" in composition
+    assert "deviceModel = Build.MODEL" in composition
+    assert "Build.SOC_MODEL" in composition and "Build.HARDWARE" in composition
+    assert (
+        "setCaptureRequestOption("
+        in (
+            HARNESS
+            / "androidApp/src/main/kotlin/com/calisthenics/diagnostic/camera/CameraXFrameSource.kt"
+        ).read_text()
+    )
+    assert "achievedInferenceFpsTimeseriesOf" in composition
+    assert "achievedInferenceFpsTimeseries = listOf(CadenceSample(0L, 0.0))" not in composition
+    assert "grantRuntimePermission" in live_test
+    assert "LiveCameraComposition.fromAndroid" in live_test
+    assert "sendStatus(" in live_test and live_test.count("sendStatus(") == 1
+    assert "LiveCaptureEvidence" in live_test
+    assert "timeout" in live_test.lower() and "live_inference_stalled" in live_test
+    assert "awk '$$2 == \"device\"'" in target
+    assert "emulator-*)" in target
+    assert "fetch-model-asset" in target
+    assert (
+        ":androidApp:assembleDebug" in target and ":androidApp:assembleDebugAndroidTest" in target
+    )
+    assert target.count('adb -s "$$serial" install') == 2
+    assert "am instrument -w -r" in target
+    assert "tools/check_live_capture_run.py" in target
+    checker = (ROOT / "tools/check_live_capture_run.py").read_text()
+    assert "observation_contracts" in checker and "validate-session" in checker
+    assert checker.index("_pull(serial") < checker.index("_validate_export")
+    assert "s25-ultra-live-capture-ledger.json" not in target
+    assert "grep -q '^OK ('" not in target
+
+
 def test_camera_probe_admission_rule_has_exactly_one_home() -> None:
     """The device-authorization rule existed as four divergent copies once. Not a fifth, and not a
     second copy of the camera admission rule beside it."""
@@ -257,7 +303,9 @@ def test_s25_camera_probe_target_delegates_its_verdict_to_the_checker() -> None:
         HARNESS
         / "androidApp/src/androidTest/kotlin/com/calisthenics/diagnostic/probe/CameraCapabilityProbeTest.kt"
     )
-    target = makefile.split("verify-harness-s25-camera-probe:", 1)[1].split("\nverify:", 1)[0]
+    target = makefile.split("verify-harness-s25-camera-probe:", 1)[1].split(
+        "\n# Task 5's bounded physical live-capture evidence gate.", 1
+    )[0]
 
     assert probe_test.is_file()
     phony_line = makefile.split("\n.PHONY", 1)[1].split("\n", 1)[0]

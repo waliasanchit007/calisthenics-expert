@@ -3,8 +3,10 @@ package com.calisthenics.diagnostic.camera
 import android.hardware.DataSpace
 import android.hardware.camera2.CameraCharacteristics
 import android.media.Image
+import android.util.Range
 import androidx.annotation.OptIn
 import androidx.camera.camera2.interop.Camera2CameraInfo
+import androidx.camera.camera2.interop.Camera2Interop
 import androidx.camera.core.ExperimentalGetImage
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
@@ -16,6 +18,7 @@ import com.calisthenics.diagnostic.preprocessing.YuvColorRange
 import com.calisthenics.diagnostic.preprocessing.YuvColorStandard
 import com.calisthenics.diagnostic.probe.AndroidCameraLifecycleDispatcher
 import java.util.concurrent.Executors
+import android.hardware.camera2.CaptureRequest
 
 class CameraXFrameSource(
     private val context: android.content.Context,
@@ -49,10 +52,14 @@ class CameraXFrameSource(
                         infos.filter { Camera2CameraInfo.from(it).cameraId == OwnedYuvFrame.CAMERA_ID }
                     }
                     .build()
-                val useCase = ImageAnalysis.Builder()
+                val useCaseBuilder = ImageAnalysis.Builder()
                     .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
                     .setBackpressureStrategy(BACKPRESSURE_STRATEGY)
-                    .build()
+                Camera2Interop.Extender(useCaseBuilder).setCaptureRequestOption(
+                    CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,
+                    Range(TARGET_CAMERA_FPS, TARGET_CAMERA_FPS),
+                )
+                val useCase = useCaseBuilder.build()
                 useCase.setAnalyzer(analyzerExecutor) { image ->
                     handleImage(image, onFrame, onFailure)
                 }
@@ -97,6 +104,7 @@ class CameraXFrameSource(
 
     companion object {
         const val BACKPRESSURE_STRATEGY = ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST
+        const val TARGET_CAMERA_FPS = 30
     }
 }
 

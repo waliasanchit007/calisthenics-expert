@@ -1,0 +1,6 @@
+{
+  "status": "pending",
+  "missing_precondition": "No authorized physical Samsung Galaxy S25 was attached; adb devices reported no usable device during Task 5 host verification.",
+  "note": "The live-capture target emits evidence through InstrumentationRegistry.sendStatus and never writes this ledger. A human may record only a checker-verified sanitized evidence file with its SHA-256.",
+  "record_kind": "live_capture_device_gate_observation"
+}
