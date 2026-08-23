@@ -118,7 +118,8 @@ interface LiveClock {
 }
 
 interface LiveScheduler {
-    fun scheduleAt(deadlineNs: Long, action: () -> Unit): Disposable
+    /** Schedules [action] after an epoch-free duration; this scheduler owns no clock domain. */
+    fun scheduleAfter(delayNs: Long, action: () -> Unit): Disposable
     fun shutdown() = Unit
 }
 
@@ -136,12 +137,12 @@ fun interface LiveSessionFinalizerFactory {
 
 private class LiveDeadlineScheduler(
     private val scheduler: LiveScheduler,
-    private val clock: LiveClock,
+    private val relativeNowNs: () -> Long,
 ) : DeadlineScheduler {
     var afterDeadline: () -> Unit = {}
 
     override fun schedule(deadlineNs: Long, action: () -> Unit): Disposable =
-        scheduler.scheduleAt(deadlineNs) {
+        scheduler.scheduleAfter((deadlineNs - relativeNowNs()).coerceAtLeast(0L)) {
             action()
             afterDeadline()
         }
@@ -270,7 +271,7 @@ class LiveCameraComposition internal constructor(
                     delegate = liveInference.port,
                     onTerminal = { submissionIndex -> onInferenceTerminal(submissionIndex) },
                 )
-                val liveDeadlineScheduler = LiveDeadlineScheduler(dependencies.scheduler, dependencies.clock)
+                val liveDeadlineScheduler = LiveDeadlineScheduler(dependencies.scheduler, ::relativeNowNs)
                 val runnerDispatcher = SingleThreadSessionDispatcher()
                 sessionDispatcher = runnerDispatcher
                 val sessionRunner = SessionRunner(
@@ -538,7 +539,7 @@ class LiveCameraComposition internal constructor(
                 if (submissionIndex != null) {
                     val terminal = synchronized(monitor) { inferenceTerminal(submissionIndex) }
                     if (!terminal) {
-                        val newStallHandle = dependencies.scheduler.scheduleAt(relativeNowNs() + STALL_TIMEOUT_NS) {
+                        val newStallHandle = dependencies.scheduler.scheduleAfter(STALL_TIMEOUT_NS) {
                             onInferenceStall(submissionIndex, onProgress)
                         }
                         val keepHandle = synchronized(monitor) {
@@ -856,7 +857,7 @@ class LiveCameraComposition internal constructor(
                     modelInputWidth = MODEL_INPUT_WIDTH,
                     modelInputHeight = MODEL_INPUT_HEIGHT,
                     clock = clock,
-                    scheduler = ExecutorLiveScheduler(clock),
+                    scheduler = ExecutorLiveScheduler(),
                     sourceFactory = { AndroidLiveFrameSource(CameraXFrameSource(context, lifecycleOwner)) },
                     inferenceFactory = { nowNs ->
                         val factory = PoseLandmarkerLiveAdapterFactory(
@@ -909,11 +910,12 @@ class LiveCameraComposition internal constructor(
         override fun nowNs(): Long = elapsedRealtimeNanos()
     }
 
-    private class ExecutorLiveScheduler(private val clock: LiveClock) : LiveScheduler {
+    private class ExecutorLiveScheduler : LiveScheduler {
         private val executor = Executors.newSingleThreadScheduledExecutor()
 
-        override fun scheduleAt(deadlineNs: Long, action: () -> Unit): Disposable {
-            val future = executor.schedule({ action() }, (deadlineNs - clock.nowNs()).coerceAtLeast(0L), TimeUnit.NANOSECONDS)
+        override fun scheduleAfter(delayNs: Long, action: () -> Unit): Disposable {
+            require(delayNs >= 0L) { "delayNs must be non-negative" }
+            val future = executor.schedule({ action() }, delayNs, TimeUnit.NANOSECONDS)
             return object : Disposable {
                 override fun dispose() { future.cancel(false) }
             }

@@ -186,7 +186,7 @@ Generated Kotlin observation artifacts stay in untracked build output and are va
 
 Replay is implemented and accepted before live capture. It consumes a synthetic RGB24 fixture through the released decoded-frame and scale/pad contracts and invokes MediaPipe in VIDEO mode synchronously.
 
-Replay sessions use a **session-relative monotonic time base with `t0 = 0`**. Every session timestamp is expressed against that base: fixture capture timestamps are rebased so the first frame lands on `0`, and every inference clock reading is recorded as `realNow - realSessionStart`. The manifest declares the base honestly (`t0_monotonic_ns: 0`). Live sessions keep the real device base; this definition is replay-only.
+Replay sessions use a **session-relative monotonic time base with `t0 = 0`**. Every session timestamp is expressed against that base: fixture capture timestamps are rebased so the first frame lands on `0`, and every inference clock reading is recorded as `realNow - realSessionStart`. The manifest declares the base honestly (`t0_monotonic_ns: 0`). Live sessions record the same session-relative base, while sourcing pre-rebase capture and inference readings from the device's shared `elapsedRealtimeNanos` domain.
 
 Pinning the base is required, not cosmetic. `FRAME.BACKEND_TIMESTAMP_ORDER` enforces `backend_timestamp_ms >= floor(capture_timestamp_ns / 1_000_000)` per record, while this section requires backend timestamps to be identical across runs. Under an arbitrary session start those two requirements are jointly unsatisfiable, because `floor(capture / 10^6)` moves every run while the backend sequence may not. Pinning `t0` resolves it and makes rebased capture reproducible.
 

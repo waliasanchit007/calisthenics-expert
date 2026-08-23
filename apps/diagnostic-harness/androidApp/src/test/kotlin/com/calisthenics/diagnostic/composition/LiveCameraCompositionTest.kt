@@ -230,6 +230,72 @@ class LiveCameraCompositionTest {
     }
 
     @Test
+    fun hoursScaleAndroidClockSchedulesFullStallDurationWithoutFiring() {
+        var elapsedRealtimeNs = HOURS_SCALE_START_NS
+        val harness = Harness(
+            clockOverride = LiveCameraComposition.AndroidLiveClock { elapsedRealtimeNs },
+            onFrameTimestamp = { timestampNs -> elapsedRealtimeNs = timestampNs + 1_000L },
+        )
+        try {
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+
+            harness.source.emit(frame(timestampNs = HOURS_SCALE_START_NS + 2_000L))
+
+            val nonPositiveActionRan = harness.scheduler.awaitNonPositiveExecution(250L)
+            assertNull(harness.composition.internalFailure)
+            assertFalse(nonPositiveActionRan, "five-second stall duration fired immediately")
+            assertEquals(listOf(FIVE_SECONDS_NS), harness.scheduler.scheduledDelays)
+            assertEquals(1, harness.inference.submissionCount)
+        } finally {
+            harness.composition.abandon()
+        }
+    }
+
+    @Test
+    fun pendingInferenceDrainKeepsConfiguredDurationUntilExplicitExpiry() {
+        var elapsedRealtimeNs = HOURS_SCALE_START_NS
+        val harness = Harness(
+            clockOverride = LiveCameraComposition.AndroidLiveClock { elapsedRealtimeNs },
+            onFrameTimestamp = { timestampNs -> elapsedRealtimeNs = timestampNs + 1_000L },
+            runNonPositiveSchedulerActions = false,
+        )
+        val completion = AtomicReference<LiveCameraCompletion?>(null)
+        val stopError = AtomicReference<Throwable?>(null)
+        val stopReturned = CountDownLatch(1)
+        val stopThread = Thread {
+            runCatching { harness.composition.stop() }
+                .onSuccess(completion::set)
+                .onFailure(stopError::set)
+            stopReturned.countDown()
+        }
+        try {
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            harness.source.emit(frame(timestampNs = HOURS_SCALE_START_NS + 2_000L))
+
+            stopThread.start()
+            assertTrue(harness.scheduler.awaitScheduledCount(2, 1_000L), "drain duration was not scheduled")
+
+            assertEquals(listOf(FIVE_SECONDS_NS, FIVE_SECONDS_NS), harness.scheduler.scheduledDelays)
+            assertFalse(stopReturned.await(100L, TimeUnit.MILLISECONDS), "stop returned before drain expiry")
+            assertNull(harness.composition.completion())
+            assertNull(harness.composition.internalFailure)
+            assertTrue(assertNotNull(harness.composition.snapshot()).failures.isEmpty())
+
+            harness.scheduler.fireNext()
+            assertTrue(stopReturned.await(1L, TimeUnit.SECONDS), "explicit drain expiry did not complete stop")
+            stopThread.join(1_000L)
+            assertNull(stopError.get())
+            val finished = assertNotNull(completion.get())
+            assertNull(finished.internalFailure)
+            assertEquals("session_teardown_timeout", finished.snapshot.failures.single().classification)
+        } finally {
+            while (harness.scheduler.hasRunnableAction) harness.scheduler.fireNext()
+            stopThread.join(1_000L)
+            harness.composition.abandon()
+        }
+    }
+
+    @Test
     fun finalizationRecordsObservedSubmissionCadenceInsteadOfPlaceholderZero() {
         withHarness(Harness(invokeManifestAtFinalization = true)) { harness ->
             assertIs<LiveCameraStartResult.Started>(harness.start(10))
@@ -476,12 +542,13 @@ class LiveCameraCompositionTest {
         wallClockUtc: () -> String = { "test-time" },
         beforeSourceStart: () -> Unit = {},
         blockSourceStart: Boolean = false,
+        runNonPositiveSchedulerActions: Boolean = true,
     ) {
         val events = mutableListOf<String>()
         val inference = FakeInference(events)
-        val scheduler = FakeScheduler(events)
         private val fallbackClock = FakeClock(clockNowNs)
         val clock = clockOverride ?: fallbackClock
+        val scheduler = FakeScheduler(events, runNonPositiveSchedulerActions)
         val source = FakeSource(
             advanceClock = onFrameTimestamp ?: { timestampNs ->
                 fallbackClock.value = maxOf(fallbackClock.value, timestampNs + 1_000L)
@@ -635,21 +702,91 @@ class LiveCameraCompositionTest {
         fun awaitDisposed(): Boolean = disposed.await(1, TimeUnit.SECONDS)
     }
 
-    private class FakeScheduler(private val events: MutableList<String>) : LiveScheduler {
-        private val actions = ArrayDeque<() -> Unit>()
+    private class FakeScheduler(
+        private val events: MutableList<String>,
+        private val runNonPositiveActions: Boolean,
+    ) : LiveScheduler {
+        private data class Entry(
+            val delayNs: Long,
+            val action: () -> Unit,
+            var disposed: Boolean = false,
+            var claimed: Boolean = false,
+        )
+
+        private val monitor = java.lang.Object()
+        private val entries = mutableListOf<Entry>()
+        private var completedNonPositiveActions = 0
         var shutdownCount = 0
         private val shutdown = CountDownLatch(1)
 
-        override fun scheduleAt(deadlineNs: Long, action: () -> Unit): Disposable {
-            actions += action
+        override fun scheduleAfter(delayNs: Long, action: () -> Unit): Disposable {
+            require(delayNs >= 0L) { "delayNs must be non-negative" }
+            val entry = Entry(delayNs, action)
+            synchronized(monitor) {
+                entries += entry
+                monitor.notifyAll()
+            }
+            if (entry.delayNs <= 0L && runNonPositiveActions) {
+                Thread({
+                    if (claim(entry)) {
+                        try {
+                            entry.action()
+                        } finally {
+                            synchronized(monitor) {
+                                completedNonPositiveActions += 1
+                                monitor.notifyAll()
+                            }
+                        }
+                    }
+                }, "test-live-scheduler-immediate").apply {
+                    isDaemon = true
+                    start()
+                }
+            }
             return object : Disposable {
-                override fun dispose() = Unit
+                override fun dispose() {
+                    synchronized(monitor) { entry.disposed = true }
+                }
             }
         }
 
+        val scheduledDelays: List<Long>
+            get() = synchronized(monitor) { entries.map { it.delayNs } }
+
+        val hasRunnableAction: Boolean
+            get() = synchronized(monitor) { entries.any { !it.disposed && !it.claimed } }
+
+        fun awaitScheduledCount(expected: Int, timeoutMillis: Long): Boolean = awaitCondition(timeoutMillis) {
+            entries.size >= expected
+        }
+
+        fun awaitNonPositiveExecution(timeoutMillis: Long): Boolean = awaitCondition(timeoutMillis) {
+            completedNonPositiveActions > 0
+        }
+
         fun fireNext() {
-            check(actions.isNotEmpty())
-            actions.removeFirst().invoke()
+            val entry = synchronized(monitor) {
+                entries.firstOrNull { !it.disposed && !it.claimed }
+                    ?.also { it.claimed = true }
+                    ?: error("no scheduled action")
+            }
+            entry.action()
+        }
+
+        private fun claim(entry: Entry): Boolean = synchronized(monitor) {
+            if (entry.disposed || entry.claimed) false else true.also { entry.claimed = true }
+        }
+
+        private fun awaitCondition(timeoutMillis: Long, condition: () -> Boolean): Boolean {
+            val deadlineNs = System.nanoTime() + timeoutMillis * 1_000_000L
+            synchronized(monitor) {
+                while (!condition()) {
+                    val remainingNs = deadlineNs - System.nanoTime()
+                    if (remainingNs <= 0L) return false
+                    TimeUnit.NANOSECONDS.timedWait(monitor, remainingNs)
+                }
+                return true
+            }
         }
 
         override fun shutdown() {
@@ -662,6 +799,9 @@ class LiveCameraCompositionTest {
     }
 
     private companion object {
+        const val FIVE_SECONDS_NS = 5_000_000_000L
+        const val HOURS_SCALE_START_NS = 43_200_000_000_000L
+
         val admittedCapability = CameraCapabilityObservation(
             cameraId = "0",
             timestampSource = "REALTIME",
