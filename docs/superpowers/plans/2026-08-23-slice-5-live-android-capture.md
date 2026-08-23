@@ -203,7 +203,7 @@ git commit -m "feat: add MediaPipe live-stream inference"
   `live_inference_stalled`, and lets the existing drain deadline record
   `session_teardown_timeout`; it never relabels the drop as `backend_call_failed`.
 
-- [ ] **Step 1: RED — composition admission and timestamp domain**
+- [x] **Step 1: RED — composition admission and timestamp domain**
 
 Write host tests with fake acquisition/inference/storage seams for wrong camera metadata, all four
 skip reasons, a shared `t0 = 0` rebase including callback-time `nowNs`, source-vs-model dimensions,
@@ -212,19 +212,19 @@ manifest source metadata. Prove the stall path stops the session, reports
 `live_inference_stalled` internally, and records only the existing `session_teardown_timeout`
 contract classification.
 
-- [ ] **Step 2: RED — UI reachability and permission behavior**
+- [x] **Step 2: RED — UI reachability and permission behavior**
 
 Write common UI/state tests proving Live selection requires camera/model/backend/storage capabilities, exposes only 10/15/30 FPS, disables start while active or permission-denied, and maps completion/failure without changing Replay behavior.
 
-- [ ] **Step 3: GREEN — compose the live path**
+- [x] **Step 3: GREEN — compose the live path**
 
 Implement the smallest composition and UI wiring. Use the existing `SessionRunnerOwnership`, `AndroidStoragePort`, `SessionExporter`, model-asset staging, and single-thread dispatcher. Do not add preview/overlay unless required to make capture lifecycle correct; section 12 says Android *may* show them.
 
-- [ ] **Step 4: Verify mutations**
+- [x] **Step 4: Verify mutations**
 
 Temporarily record the absolute capture timestamp instead of rebasing it and temporarily admit a BT709 value. Each focused test must fail. Revert and run focused tests, `make verify`, and `make verify-harness-jvm`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/diagnostic-harness/androidApp/src/main/kotlin/com/calisthenics/diagnostic apps/diagnostic-harness/androidApp/src/test/kotlin/com/calisthenics/diagnostic apps/diagnostic-harness/composeApp/src/commonMain/kotlin/com/calisthenics/diagnostic/ui apps/diagnostic-harness/composeApp/src/commonTest/kotlin/com/calisthenics/diagnostic/ui apps/diagnostic-harness/shared/src/commonMain/kotlin/com/calisthenics/diagnostic/capability
