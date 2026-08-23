@@ -20,6 +20,7 @@ import com.calisthenics.diagnostic.live.LiveCaptureEnvironment
 import com.calisthenics.diagnostic.live.LiveCaptureEvidence
 import com.calisthenics.diagnostic.live.LiveCaptureFailureIdentity
 import com.calisthenics.diagnostic.live.LiveCaptureManifestDevice
+import com.calisthenics.diagnostic.live.sanitizeLiveCaptureFailureDetail
 import com.calisthenics.diagnostic.live.renderLiveCaptureEvidence
 import com.calisthenics.diagnostic.session.FinalizationResult
 import org.junit.Test
@@ -47,6 +48,7 @@ class LiveCaptureDeviceGateTest {
             pixelFormat = "UNKNOWN",
         )
         var runFailureCode: String? = null
+        var runFailureDetail: String? = null
         var instrumentationSucceeded = false
 
         try {
@@ -68,7 +70,16 @@ class LiveCaptureDeviceGateTest {
                 permissionGranted = true,
             )
             when (val started = composition!!.start(10)) {
-                is LiveCameraStartResult.Unavailable -> runFailureCode = "live_capture_failed"
+                is LiveCameraStartResult.Unavailable -> {
+                    runFailureCode = started.reason.code
+                    runFailureDetail = when (val reason = started.reason) {
+                        is LiveUnavailableReason.Initialization ->
+                            sanitizeLiveCaptureFailureDetail(reason.detail)
+                        is LiveUnavailableReason.CameraCapability ->
+                            reason.blockingReasons.joinToString(",")
+                        LiveUnavailableReason.CameraPermissionDenied -> null
+                    }
+                }
                 is LiveCameraStartResult.Started -> {
                     val deadline = System.nanoTime() + CAPTURE_TIMEOUT_MILLIS * 1_000_000L
                     while (System.nanoTime() < deadline) {
@@ -152,6 +163,7 @@ class LiveCaptureDeviceGateTest {
                 referenceValidationSucceeded = false,
                 instrumentationSucceeded = instrumentationSucceeded,
                 runFailureCode = runFailureCode,
+                runFailureDetail = runFailureDetail,
                 inferenceFailureIdentities = snapshot?.failures?.map {
                     LiveCaptureFailureIdentity(
                         submissionIndex = it.submissionIndex,

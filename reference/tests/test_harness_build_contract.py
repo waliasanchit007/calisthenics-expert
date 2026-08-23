@@ -1,3 +1,4 @@
+import json
 import tomllib
 from pathlib import Path
 
@@ -262,6 +263,38 @@ def test_live_capture_gate_binds_runtime_manifest_and_runs_instrumentation_contr
         "am instrument"
     )
     assert 'clear_result" != "Success"' in target
+
+
+def test_live_construction_stages_distinct_live_descriptor_for_the_same_model_asset() -> None:
+    replay_descriptor = json.loads((HARNESS / "model-assets/model_provenance.json").read_text())
+    live_descriptor = json.loads((HARNESS / "model-assets/live_model_provenance.json").read_text())
+    immutable_fields = (
+        "asset_name",
+        "sha256",
+        "byte_count",
+        "source_url",
+        "model_family",
+        "model_variant",
+        "quantization",
+        "upstream_revision",
+        "tasks_vision_version",
+        "delegate",
+        "task_options",
+    )
+
+    assert replay_descriptor["running_mode"] == "VIDEO"
+    assert live_descriptor["running_mode"] == "LIVE_STREAM"
+    for field in immutable_fields:
+        assert live_descriptor[field] == replay_descriptor[field], field
+
+    composition = (
+        HARNESS
+        / "androidApp/src/main/kotlin/com/calisthenics/diagnostic/composition/LiveCameraComposition.kt"
+    ).read_text()
+    build = (HARNESS / "androidApp/build.gradle.kts").read_text()
+    assert 'context.assets.open("replay/live_model_provenance.json")' in composition
+    assert "requireLiveModelProvenance(replayProvenance, liveProvenance)" in composition
+    assert 'staged.resolve("live_model_provenance.json")' in build
 
 
 def test_camera_probe_admission_rule_has_exactly_one_home() -> None:

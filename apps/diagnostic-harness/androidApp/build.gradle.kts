@@ -22,6 +22,7 @@ val probeGitSha = providers.exec {
 // suffix, whose own `packageJvmVerification` task is the sole exclusion from this gate.
 val modelAssetsDir = rootDir.resolve("model-assets")
 val modelProvenanceFile = modelAssetsDir.resolve("model_provenance.json")
+val liveModelProvenanceFile = modelAssetsDir.resolve("live_model_provenance.json")
 
 val verifyModelAsset = tasks.register("verifyModelAsset") {
     description = "Requires the pinned model asset present and SHA-256 verified before packaging."
@@ -94,12 +95,14 @@ val stageDeliveryReplayAssets = tasks.register("stageDeliveryReplayAssets") {
     description = "Stages the verified pinned model asset and the detection fixture into this app's main assets."
     val fixtureMetadataFile = detectionFixtureDir.resolve("fixture_metadata.json")
     inputs.file(modelProvenanceFile)
+    inputs.file(liveModelProvenanceFile)
     inputs.file(fixtureMetadataFile)
     inputs.dir(detectionFixtureDir.resolve("decoded"))
     outputs.dir(deliveryReplayAssetsDir)
     outputs.upToDateWhen { false }
     doLast {
         val provenanceText = modelProvenanceFile.readText()
+        val liveProvenanceText = liveModelProvenanceFile.readText()
         val provenance = JsonSlurper().parseText(provenanceText) as Map<*, *>
         val assetName = provenance["asset_name"] as String
         val assetFile = modelAssetsDir.resolve(assetName)
@@ -114,6 +117,7 @@ val stageDeliveryReplayAssets = tasks.register("stageDeliveryReplayAssets") {
         staged.deleteRecursively()
         staged.resolve("detection/decoded").mkdirs()
         staged.resolve("model_provenance.json").writeText(provenanceText)
+        staged.resolve("live_model_provenance.json").writeText(liveProvenanceText)
         staged.resolve(assetName).writeBytes(assetFile.readBytes())
         staged.resolve("detection/fixture_metadata.json").writeText(fixtureMetadataFile.readText())
         detectionFixtureDir.resolve("decoded").listFiles().orEmpty().sorted().forEach { plane ->

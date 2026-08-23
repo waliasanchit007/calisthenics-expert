@@ -126,3 +126,26 @@ fun requireReplayProvenance(provenance: ModelProvenance): ModelProvenance {
     }
     return provenance
 }
+
+/**
+ * Selects the live execution descriptor while proving that it refers to the same immutable model
+ * identity as replay. Replay and live use different MediaPipe execution modes, but never different
+ * model bytes or task configuration.
+ */
+fun requireLiveModelProvenance(
+    replay: ModelProvenance,
+    live: ModelProvenance,
+): ModelProvenance {
+    requireReplayProvenance(replay)
+    if (live.runningMode != "LIVE_STREAM") {
+        throw ModelProvenanceException(
+            "live capture requires running_mode LIVE_STREAM, found ${live.runningMode}",
+        )
+    }
+    if (live.copy(runningMode = replay.runningMode) != replay) {
+        throw ModelProvenanceException(
+            "live and replay descriptors must share the same immutable model identity",
+        )
+    }
+    return live
+}

@@ -65,6 +65,7 @@ def exact_record() -> dict:
         "reference_validation_succeeded": True,
         "instrumentation_succeeded": True,
         "run_failure_code": None,
+        "run_failure_detail": None,
         "blocking_reasons": [],
         "satisfies_s25_live_capture": True,
     }
@@ -215,6 +216,34 @@ def test_typed_run_failure_blocks(failure_code: str) -> None:
         transcript(record), manifest(), validation_succeeded=True, instrumentation_exit_code=0
     )
     assert failure_code in checked["blocking_reasons"]
+    assert checked["satisfies_s25_live_capture"] is False
+
+
+def test_initialization_failure_preserves_typed_identity_and_detail() -> None:
+    record = exact_record()
+    record["run_failure_code"] = "live_initialization_failed"
+    record["run_failure_detail"] = "live capture requires running_mode LIVE_STREAM, found VIDEO"
+
+    checked = check_transcript(
+        transcript(record), manifest(), validation_succeeded=True, instrumentation_exit_code=0
+    )
+
+    assert checked["run_failure_code"] == "live_initialization_failed"
+    assert checked["run_failure_detail"] == record["run_failure_detail"]
+    assert "live_initialization_failed" in checked["blocking_reasons"]
+    assert checked["satisfies_s25_live_capture"] is False
+
+
+def test_unsanitized_initialization_failure_detail_blocks_closed() -> None:
+    record = exact_record()
+    record["run_failure_code"] = "live_initialization_failed"
+    record["run_failure_detail"] = "failure at /Users/private/app\nstack trace"
+
+    checked = check_transcript(
+        transcript(record), manifest(), validation_succeeded=True, instrumentation_exit_code=0
+    )
+
+    assert "run_failure_detail_not_sanitized" in checked["blocking_reasons"]
     assert checked["satisfies_s25_live_capture"] is False
 
 

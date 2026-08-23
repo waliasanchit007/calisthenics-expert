@@ -34,6 +34,7 @@ import com.calisthenics.diagnostic.mediapipe.realLiveDetectorConstructor
 import com.calisthenics.diagnostic.model.ModelProvenance
 import com.calisthenics.diagnostic.model.ModelProvenanceException
 import com.calisthenics.diagnostic.model.parseModelProvenance
+import com.calisthenics.diagnostic.model.requireLiveModelProvenance
 import com.calisthenics.diagnostic.preprocessing.scalePadRgb24
 import com.calisthenics.diagnostic.preprocessing.uprightDimensions
 import com.calisthenics.diagnostic.preprocessing.yuv420ToUprightRgb24
@@ -839,9 +840,14 @@ class LiveCameraComposition internal constructor(
                 is StorageRootsResult.Ready -> result.roots
                 is StorageRootsResult.Unavailable -> error(result.reason)
             }
-            val provenance = parseModelProvenance(
+            val replayProvenance = parseModelProvenance(
                 context.assets.open("replay/model_provenance.json").use { it.readBytes().decodeToString() },
             )
+            val liveProvenance = parseModelProvenance(
+                context.assets.open("replay/live_model_provenance.json")
+                    .use { it.readBytes().decodeToString() },
+            )
+            val provenance = requireLiveModelProvenance(replayProvenance, liveProvenance)
             val clock = AndroidLiveClock()
             return LiveCameraComposition(
                 Dependencies(

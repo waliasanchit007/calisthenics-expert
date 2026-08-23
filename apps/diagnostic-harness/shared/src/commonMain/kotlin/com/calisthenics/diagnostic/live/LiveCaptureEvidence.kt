@@ -30,6 +30,9 @@ const val LIVE_CAPTURE_BLOCK_INSTRUMENTATION = "instrumentation_failed"
 const val LIVE_CAPTURE_BLOCK_TIMEOUT = "live_capture_timeout"
 const val LIVE_CAPTURE_BLOCK_STALL = "live_inference_stalled"
 const val LIVE_CAPTURE_BLOCK_FAILURE = "live_capture_failed"
+const val LIVE_CAPTURE_BLOCK_CAMERA_CAPABILITY = "camera_capability_not_admitted"
+const val LIVE_CAPTURE_BLOCK_PERMISSION = "camera_permission_denied"
+const val LIVE_CAPTURE_BLOCK_INITIALIZATION = "live_initialization_failed"
 
 private const val ADMITTED_CAMERA_ID = "0"
 private const val ADMITTED_TIMESTAMP_SOURCE = "REALTIME"
@@ -95,8 +98,18 @@ data class LiveCaptureEvidence(
     val referenceValidationSucceeded: Boolean,
     val instrumentationSucceeded: Boolean,
     val runFailureCode: String? = null,
+    val runFailureDetail: String? = null,
     val inferenceFailureIdentities: List<LiveCaptureFailureIdentity> = emptyList(),
 )
+
+private val ABSOLUTE_PATH = Regex("""(?:file://)?(?:/|[A-Za-z]:[\\/])\S+""")
+
+/** Keeps device evidence single-line, bounded, and free of local paths or stack-trace text. */
+fun sanitizeLiveCaptureFailureDetail(detail: String?): String? {
+    val firstLine = detail?.lineSequence()?.firstOrNull()?.trim()?.take(256) ?: return null
+    if (firstLine.isEmpty()) return null
+    return firstLine.replace(ABSOLUTE_PATH, "<redacted-path>")
+}
 
 fun isAuthorizedLiveCaptureTarget(environment: LiveCaptureEnvironment): Boolean =
     isAuthorizedS25Target(
@@ -136,6 +149,9 @@ fun liveCaptureBlockingReasons(evidence: LiveCaptureEvidence): List<String> {
         LIVE_CAPTURE_BLOCK_TIMEOUT -> reasons += LIVE_CAPTURE_BLOCK_TIMEOUT
         LIVE_CAPTURE_BLOCK_STALL -> reasons += LIVE_CAPTURE_BLOCK_STALL
         LIVE_CAPTURE_BLOCK_FAILURE -> reasons += LIVE_CAPTURE_BLOCK_FAILURE
+        LIVE_CAPTURE_BLOCK_CAMERA_CAPABILITY -> reasons += LIVE_CAPTURE_BLOCK_CAMERA_CAPABILITY
+        LIVE_CAPTURE_BLOCK_PERMISSION -> reasons += LIVE_CAPTURE_BLOCK_PERMISSION
+        LIVE_CAPTURE_BLOCK_INITIALIZATION -> reasons += LIVE_CAPTURE_BLOCK_INITIALIZATION
     }
     if (!evidence.instrumentationSucceeded) reasons += LIVE_CAPTURE_BLOCK_INSTRUMENTATION
     return reasons
@@ -209,6 +225,7 @@ fun renderLiveCaptureEvidence(evidence: LiveCaptureEvidence): String {
         put("reference_validation_succeeded", evidence.referenceValidationSucceeded)
         put("instrumentation_succeeded", evidence.instrumentationSucceeded)
         put("run_failure_code", evidence.runFailureCode)
+        put("run_failure_detail", evidence.runFailureDetail)
         putJsonArray("blocking_reasons") { blockingReasons.forEach(::add) }
         put("satisfies_s25_live_capture", blockingReasons.isEmpty())
     }

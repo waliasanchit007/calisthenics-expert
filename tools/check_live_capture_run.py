@@ -24,10 +24,15 @@ _S25_MARKER = "S25 Ultra"
 _AUTHORIZED_MANUFACTURER = "samsung"
 _ADMITTED_DATASPACE = 146931712
 _NO_EXPORT_REASON = "live_capture_export_unavailable"
+_UNSANITIZED_FAILURE_DETAIL = "run_failure_detail_not_sanitized"
+_ABSOLUTE_PATH = re.compile(r"(?:file://)?(?:/|[A-Za-z]:[\\/])\S+")
 _TYPED_FAILURES = {
     "live_capture_timeout",
     "live_inference_stalled",
     "live_capture_failed",
+    "camera_capability_not_admitted",
+    "camera_permission_denied",
+    "live_initialization_failed",
 }
 
 
@@ -134,8 +139,18 @@ def _intrinsic_blocking_reasons(record: dict) -> list[str]:
     if counts.get("unclassified_delivered_callbacks") != 0:
         reasons.append("unclassified_delivered_callbacks")
 
-    if record.get("run_failure_code") in _TYPED_FAILURES:
-        reasons.append(record["run_failure_code"])
+    failure_code = record.get("run_failure_code")
+    if failure_code in _TYPED_FAILURES:
+        reasons.append(failure_code)
+    failure_detail = record.get("run_failure_detail")
+    if failure_detail is not None and (
+        not isinstance(failure_detail, str)
+        or "\n" in failure_detail
+        or "\r" in failure_detail
+        or len(failure_detail) > 256
+        or _ABSOLUTE_PATH.search(failure_detail) is not None
+    ):
+        reasons.append(_UNSANITIZED_FAILURE_DETAIL)
     return list(dict.fromkeys(reasons))
 
 
