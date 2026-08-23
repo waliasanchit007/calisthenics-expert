@@ -4,6 +4,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import org.junit.Test
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 class CameraXFrameSourceLifecycleTest {
     @Test
@@ -31,6 +33,45 @@ class CameraXFrameSourceLifecycleTest {
         assertEquals(1, harness.configured)
         assertEquals(listOf("provider/use-case"), harness.cleaned)
         assertEquals(1, harness.shutdowns)
+    }
+
+    @Test
+    fun analyzerQuiescenceWaitsForAnEnteredCallbackBeforeSignalling() {
+        val fence = AnalyzerCallbackFence()
+        var quiescenceSignals = 0
+        val entered = CountDownLatch(1)
+        val allowLeave = CountDownLatch(1)
+        val callbackThread = Thread {
+            assertTrue(fence.tryEnter())
+            entered.countDown()
+            check(allowLeave.await(1, TimeUnit.SECONDS))
+            fence.leave()
+        }
+        callbackThread.start()
+        assertTrue(entered.await(1, TimeUnit.SECONDS))
+
+        fence.close()
+        fence.onQuiescent { quiescenceSignals += 1 }
+
+        assertEquals(0, quiescenceSignals)
+        allowLeave.countDown()
+        callbackThread.join(1_000)
+        assertEquals(1, quiescenceSignals)
+    }
+
+    @Test
+    fun callbackOwnedStopHandsOffQuiescenceWithoutDoubleRelease() {
+        val fence = AnalyzerCallbackFence()
+        var quiescenceSignals = 0
+
+        assertTrue(fence.tryEnter())
+        fence.close()
+        fence.onQuiescent { quiescenceSignals += 1 }
+
+        assertEquals(1, quiescenceSignals)
+        fence.leave()
+
+        assertEquals(1, quiescenceSignals)
     }
 
     @Test

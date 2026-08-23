@@ -227,6 +227,29 @@ class LiveCameraCompositionTest {
     }
 
     @Test
+    fun thermalEvidencePreservesNullReasonForPresentTelemetryAndUsesFallbackOnlyWhenAbsent() {
+        val present = thermalEvidenceFromTelemetry(
+            LiveCaptureEvidenceTelemetry(
+                captureWidth = 2,
+                captureHeight = 2,
+                orientationDegrees = 0,
+                mirrored = false,
+                thermalApiAvailable = true,
+                thermalUnavailableReason = null,
+                thermalObservations = listOf(LiveThermalObservation(0L, 0)),
+            ),
+        )
+        val absent = thermalEvidenceFromTelemetry(null)
+
+        assertTrue(present.apiAvailable)
+        assertNull(present.unavailableReason)
+        assertEquals(listOf(0L), present.observations.map { it.tMonotonicNs })
+        assertFalse(absent.apiAvailable)
+        assertEquals("composition_telemetry_unavailable", absent.unavailableReason)
+        assertTrue(absent.observations.isEmpty())
+    }
+
+    @Test
     fun everyDeliveredFrameHasExactlyOneSubmitOrSkipClassification() {
         withHarness(Harness()) { harness ->
             assertIs<LiveCameraStartResult.Started>(harness.start(10))
@@ -709,6 +732,86 @@ class LiveCameraCompositionTest {
         }
     }
 
+    @Test
+    fun stopWaitsForAnInFlightSourceCallbackBeforeFreezingCadenceEvidence() {
+        val harness = Harness(invokeManifestAtFinalization = true)
+        val completion = AtomicReference<LiveCameraCompletion?>(null)
+        val stopError = AtomicReference<Throwable?>(null)
+        val stopReturned = CountDownLatch(1)
+        var sourceCallbackThread: Thread? = null
+        val stopThread = Thread {
+            runCatching { harness.composition.stop() }
+                .onSuccess(completion::set)
+                .onFailure(stopError::set)
+            stopReturned.countDown()
+        }
+        try {
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            harness.source.emit(frame(timestampNs = 1_000_002_000L))
+            harness.inference.completeSuccess()
+
+            sourceCallbackThread = harness.source.emitInFlight(frame(timestampNs = 1_100_002_000L))
+            assertTrue(harness.source.inFlightCallbackEntered.await(1, TimeUnit.SECONDS))
+            stopThread.start()
+            assertTrue(harness.source.stopEntered.await(1, TimeUnit.SECONDS))
+            assertFalse(
+                stopReturned.await(100, TimeUnit.MILLISECONDS),
+                "stop froze evidence before the in-flight source callback was classified",
+            )
+
+            harness.source.allowInFlightCallback.countDown()
+            assertTrue(stopReturned.await(1, TimeUnit.SECONDS))
+            sourceCallbackThread.join(1_000)
+
+            assertNull(stopError.get())
+            val finished = assertNotNull(completion.get())
+            assertIs<FinalizationResult.Published>(finished.finalization)
+            assertEquals(2L, finished.snapshot.counts.cameraFramesReceived)
+            assertEquals(1L, finished.snapshot.counts.inferenceFramesSubmitted)
+            assertEquals(1L, finished.snapshot.counts.framesSkippedBeforeInference)
+            val cadence = assertNotNull(finished.cadenceDiagnostics)
+            assertEquals(finished.snapshot.counts.cameraFramesReceived, cadence.deliveredCallbackCount)
+            assertEquals(0L, cadence.deliveredCallbackClassificationGap)
+        } finally {
+            harness.source.allowInFlightCallback.countDown()
+            sourceCallbackThread?.join(1_000)
+            if (stopThread.isAlive) stopThread.join(1_000)
+            harness.close()
+        }
+    }
+
+    @Test
+    fun stopFromSourceCallbackCompletesWithoutWaitingOnItsOwnQuiescenceSignal() {
+        val harness = Harness(invokeManifestAtFinalization = true, drainTimeoutNs = 0L)
+        val nestedCompletion = AtomicReference<LiveCameraCompletion?>(null)
+        val nestedStopFailure = AtomicReference<Throwable?>(null)
+        val sourceCallbackThread = Thread {
+            harness.source.emit(frame(timestampNs = 1_000_002_000L))
+        }
+        try {
+            assertIs<LiveCameraStartResult.Started>(harness.start(10) { snapshot ->
+                if (snapshot.counts.cameraFramesReceived == 1L) {
+                    runCatching { harness.composition.stop() }
+                        .onSuccess(nestedCompletion::set)
+                        .onFailure(nestedStopFailure::set)
+                }
+            })
+
+            sourceCallbackThread.start()
+            sourceCallbackThread.join(2_000)
+
+            assertFalse(sourceCallbackThread.isAlive, "source callback deadlocked teardown")
+            assertNull(nestedStopFailure.get())
+            assertIs<FinalizationResult.Published>(assertNotNull(nestedCompletion.get()).finalization)
+        } finally {
+            if (sourceCallbackThread.isAlive) {
+                sourceCallbackThread.interrupt()
+                sourceCallbackThread.join(1_000)
+            }
+            harness.close()
+        }
+    }
+
     private inline fun <T> withHarness(harness: Harness, block: (Harness) -> T): T =
         try {
             block(harness)
@@ -811,7 +914,10 @@ class LiveCameraCompositionTest {
             ),
         )
 
-        fun start(fps: Int): LiveCameraStartResult = composition.start(fps).also { result ->
+        fun start(
+            fps: Int,
+            onProgress: (SessionRunnerSnapshot) -> Unit = {},
+        ): LiveCameraStartResult = composition.start(fps, onProgress).also { result ->
             if (result is LiveCameraStartResult.Started) started = true
         }
 
@@ -836,13 +942,22 @@ class LiveCameraCompositionTest {
         private val blockStart: Boolean,
         private val sourceResolution: LiveSourceResolution,
     ) : LiveFrameSource {
+        private val callbackMonitor = Any()
+        private val callbackOwnedByCurrentThread: ThreadLocal<Boolean> = ThreadLocal.withInitial { false }
+        private val callbackReleasedForQuiescence: ThreadLocal<Boolean> = ThreadLocal.withInitial { false }
         private var callback: ((OwnedYuvFrame) -> Unit)? = null
+        private var acceptingCallbacks = true
+        private var inFlightCallbacks = 0
+        private val quiescenceCallbacks = mutableListOf<() -> Unit>()
         @Volatile var stopped = false
         @Volatile var active = false
         @Volatile var startCount = 0
         @Volatile var stopCount = 0
         val startEntered = CountDownLatch(1)
         val allowStart = CountDownLatch(1)
+        val stopEntered = CountDownLatch(1)
+        val inFlightCallbackEntered = CountDownLatch(1)
+        val allowInFlightCallback = CountDownLatch(1)
         var onStopFrame: (() -> OwnedYuvFrame)? = null
 
         override fun start(
@@ -861,17 +976,87 @@ class LiveCameraCompositionTest {
             events += "source.start.completed"
         }
 
-        override fun stop() {
+        override fun stop(onCallbacksQuiesced: () -> Unit) {
             stopCount++
             events += "source.stop"
+            stopEntered.countDown()
             stopped = true
             active = false
-            onStopFrame?.invoke()?.let { callback?.invoke(it) }
+            onStopFrame?.invoke()?.let(::emit)
+            val callbacks = synchronized(callbackMonitor) {
+                acceptingCallbacks = false
+                quiescenceCallbacks += onCallbacksQuiesced
+                releaseCurrentCallbackOwnershipLocked()
+                takeQuiescenceCallbacksLocked()
+            }
+            callbacks.forEach { callback -> callback() }
         }
 
         fun emit(frame: OwnedYuvFrame) {
-            advanceClock(frame.timestampNs)
-            callback!!.invoke(frame)
+            if (!tryEnterCallback()) return
+            claimCurrentThreadCallbackOwnership()
+            try {
+                advanceClock(frame.timestampNs)
+                callback!!.invoke(frame)
+            } finally {
+                leaveCallback()
+            }
+        }
+
+        fun emitInFlight(frame: OwnedYuvFrame): Thread {
+            check(tryEnterCallback())
+            return Thread {
+                claimCurrentThreadCallbackOwnership()
+                inFlightCallbackEntered.countDown()
+                try {
+                    check(allowInFlightCallback.await(1, TimeUnit.SECONDS))
+                    advanceClock(frame.timestampNs)
+                    callback!!.invoke(frame)
+                } finally {
+                    leaveCallback()
+                }
+            }.apply { start() }
+        }
+
+        private fun tryEnterCallback(): Boolean = synchronized(callbackMonitor) {
+            if (!acceptingCallbacks) false else true.also {
+                inFlightCallbacks += 1
+            }
+        }
+
+        private fun claimCurrentThreadCallbackOwnership() {
+            callbackOwnedByCurrentThread.set(true)
+            callbackReleasedForQuiescence.set(false)
+        }
+
+        private fun leaveCallback() {
+            val callbacks = synchronized(callbackMonitor) {
+                if (callbackReleasedForQuiescence.get() == true) {
+                    emptyList()
+                } else {
+                    check(inFlightCallbacks > 0)
+                    inFlightCallbacks -= 1
+                    takeQuiescenceCallbacksLocked()
+                }
+            }
+            callbackOwnedByCurrentThread.remove()
+            callbackReleasedForQuiescence.remove()
+            callbacks.forEach { callback -> callback() }
+        }
+
+        private fun takeQuiescenceCallbacksLocked(): List<() -> Unit> =
+            if (!acceptingCallbacks && inFlightCallbacks == 0) {
+                quiescenceCallbacks.toList().also { quiescenceCallbacks.clear() }
+            } else {
+                emptyList()
+            }
+
+        private fun releaseCurrentCallbackOwnershipLocked() {
+            if (callbackOwnedByCurrentThread.get() == true && callbackReleasedForQuiescence.get() != true) {
+                check(inFlightCallbacks > 0)
+                inFlightCallbacks -= 1
+                callbackReleasedForQuiescence.set(true)
+            }
         }
     }
 

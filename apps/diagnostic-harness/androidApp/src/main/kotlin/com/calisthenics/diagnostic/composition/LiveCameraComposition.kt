@@ -29,6 +29,8 @@ import com.calisthenics.diagnostic.export.StorageRootsResult
 import com.calisthenics.diagnostic.hash.Sha256Digest
 import com.calisthenics.diagnostic.live.LiveFrameAdmission
 import com.calisthenics.diagnostic.live.LiveCaptureCadenceDiagnostics
+import com.calisthenics.diagnostic.live.LiveCaptureThermalObservation
+import com.calisthenics.diagnostic.live.LiveCaptureThermalSummary
 import com.calisthenics.diagnostic.live.achievedInferenceFpsTimeseriesOf
 import com.calisthenics.diagnostic.mediapipe.PoseLandmarkerConstructionEvidence
 import com.calisthenics.diagnostic.mediapipe.PoseLandmarkerLiveAdapterFactory
@@ -64,6 +66,7 @@ import java.time.Instant
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
@@ -142,6 +145,23 @@ data class LiveCaptureEvidenceTelemetry(
     val thermalObservations: List<LiveThermalObservation>,
 )
 
+/** Converts optional composition telemetry without conflating a present null reason with absence. */
+internal fun thermalEvidenceFromTelemetry(
+    telemetry: LiveCaptureEvidenceTelemetry?,
+): LiveCaptureThermalSummary = telemetry?.let { present ->
+    LiveCaptureThermalSummary(
+        apiAvailable = present.thermalApiAvailable,
+        unavailableReason = present.thermalUnavailableReason,
+        observations = present.thermalObservations.map { sample ->
+            LiveCaptureThermalObservation(sample.tMonotonicNs, sample.status)
+        },
+    )
+} ?: LiveCaptureThermalSummary(
+    apiAvailable = false,
+    unavailableReason = "composition_telemetry_unavailable",
+    observations = emptyList(),
+)
+
 interface LiveThermalProbe : Disposable {
     val available: Boolean
     val unavailableReason: String?
@@ -165,7 +185,13 @@ interface LiveFrameSource {
         onFrame: (OwnedYuvFrame) -> Unit,
         onFailure: (Throwable) -> Unit,
     )
-    fun stop()
+
+    /**
+     * Fences new frame callbacks and invokes [onCallbacksQuiesced] after source callback ownership
+     * has quiesced. Implementations wait for callbacks entered by other threads, but must hand off
+     * a callback that requests stop from within its terminal composition call without self-waiting.
+     */
+    fun stop(onCallbacksQuiesced: () -> Unit)
 }
 
 data class LiveSourceResolution(val width: Int, val height: Int) {
@@ -524,21 +550,21 @@ class LiveCameraComposition internal constructor(
             captureResourceReleasePlanLocked(abandonRunner = true)
         }
         if (plan == null) return
-        if (!waitForSourceStart) stopReleasedSource(plan.source)
         val release = {
-            if (waitForSourceStart) {
-                sourceStartFinished.await()
-                stopReleasedSource(plan.source)
-            }
             performRelease(plan, sourceAlreadyStopped = true)
             synchronized(monitor) { monitor.notifyAll() }
         }
-        if (waitForSourceStart || plan.runner != null) {
+        val releaseAfterQuiescence = {
+            if (waitForSourceStart || plan.runner != null) Thread(release).start() else release()
+        }
+        val stopAndRelease = { stopReleasedSource(plan.source, releaseAfterQuiescence) }
+        if (waitForSourceStart) {
             Thread {
-                release()
+                sourceStartFinished.await()
+                stopAndRelease()
             }.start()
         } else {
-            release()
+            stopAndRelease()
         }
     }
 
@@ -857,14 +883,24 @@ class LiveCameraComposition internal constructor(
     private fun performStop(stopWork: StopWork?, onProgress: ((SessionRunnerSnapshot) -> Unit)? = null) {
         if (stopWork == null) return
         if (stopWork.waitForSourceStart) sourceStartFinished.await()
-        stopReleasedSource(stopWork.source)
-        val stoppedSnapshot = stopWork.runner?.stop(relativeNowNs())
-        if (stoppedSnapshot != null) onProgress?.invoke(stoppedSnapshot)
-        stopWork.runner?.let(::finishIfSealed)
+        stopReleasedSource(stopWork.source) {
+            val stoppedSnapshot = stopWork.runner?.stop(relativeNowNs())
+            if (stoppedSnapshot != null) onProgress?.invoke(stoppedSnapshot)
+            stopWork.runner?.let(::finishIfSealed)
+        }
     }
 
-    private fun stopReleasedSource(source: LiveFrameSource?) {
-        runCatching { source?.stop() }
+    private fun stopReleasedSource(
+        source: LiveFrameSource?,
+        onCallbacksQuiesced: () -> Unit = {},
+    ) {
+        val signalDelivered = AtomicBoolean(false)
+        val signal = {
+            if (signalDelivered.compareAndSet(false, true)) onCallbacksQuiesced()
+        }
+        runCatching {
+            if (source == null) signal() else source.stop(signal)
+        }.onFailure { signal() }
     }
 
     private data class ResourceReleasePlan(
@@ -895,14 +931,17 @@ class LiveCameraComposition internal constructor(
 
     private fun performRelease(plan: ResourceReleasePlan?, sourceAlreadyStopped: Boolean = false) {
         if (plan == null) return
-        if (!sourceAlreadyStopped) stopReleasedSource(plan.source)
-        if (plan.abandonRunner) {
-            plan.runner?.let { runnerToAbandon -> runCatching { runnerToAbandon.abandon() } }
+        val release = {
+            if (plan.abandonRunner) {
+                plan.runner?.let { runnerToAbandon -> runCatching { runnerToAbandon.abandon() } }
+            }
+            runCatching { plan.inference?.disposable?.dispose() }
+            runCatching { plan.thermalProbe?.dispose() }
+            runCatching { plan.dispatcher?.shutdown() }
+            runCatching { plan.scheduler.shutdown() }
+            Unit
         }
-        runCatching { plan.inference?.disposable?.dispose() }
-        runCatching { plan.thermalProbe?.dispose() }
-        runCatching { plan.dispatcher?.shutdown() }
-        runCatching { plan.scheduler.shutdown() }
+        if (sourceAlreadyStopped) release() else stopReleasedSource(plan.source, release)
     }
 
     private fun takeSourceToStopLocked(): LiveFrameSource? {
@@ -1136,7 +1175,7 @@ class LiveCameraComposition internal constructor(
             onFrame = onFrame,
             onFailure = onFailure,
         )
-        override fun stop() = delegate.stop()
+        override fun stop(onCallbacksQuiesced: () -> Unit) = delegate.stop(onCallbacksQuiesced)
     }
 }
 

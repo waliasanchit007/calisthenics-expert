@@ -30,6 +30,7 @@ class CameraXFrameSource(
 ) {
     private val lifecycleDispatcher = AndroidCameraLifecycleDispatcher()
     private val analyzerExecutor = Executors.newSingleThreadExecutor()
+    private val analyzerCallbacks = AnalyzerCallbackFence()
     private val sourceLifecycle = CameraXSourceLifecycle<ProcessCameraProvider, ImageAnalysis>(
         cleanupUseCase = { provider, useCase ->
             useCase.clearAnalyzer()
@@ -82,7 +83,15 @@ class CameraXFrameSource(
                 val useCase = useCaseBuilder.build()
                 if (!sourceLifecycle.complete(generation, cameraProvider, useCase) {
                         useCase.setAnalyzer(analyzerExecutor) { image ->
-                            handleImage(image, onFrame, onFailure)
+                            if (!analyzerCallbacks.tryEnter()) {
+                                image.close()
+                                return@setAnalyzer
+                            }
+                            try {
+                                handleImage(image, onFrame, onFailure)
+                            } finally {
+                                analyzerCallbacks.leave()
+                            }
                         }
                     }
                 ) return@runCatching
@@ -99,8 +108,10 @@ class CameraXFrameSource(
         }, providerCompletionExecutor)
     }
 
-    fun stop() {
+    fun stop(onCallbacksQuiesced: () -> Unit) {
+        analyzerCallbacks.close()
         sourceLifecycle.stop()
+        analyzerCallbacks.onQuiescent(onCallbacksQuiesced)
     }
 
     @OptIn(ExperimentalGetImage::class)
@@ -131,6 +142,70 @@ class CameraXFrameSource(
         const val TARGET_CAMERA_FPS = 30
         const val REQUESTED_ANALYSIS_WIDTH = 1280
         const val REQUESTED_ANALYSIS_HEIGHT = 720
+    }
+}
+
+/** One-session fence that makes analyzer callback ownership explicit at source teardown. */
+internal class AnalyzerCallbackFence {
+    private val monitor = Any()
+    private val callbackOwnedByCurrentThread: ThreadLocal<Boolean> = ThreadLocal.withInitial { false }
+    private val callbackReleasedForQuiescence: ThreadLocal<Boolean> = ThreadLocal.withInitial { false }
+    private var acceptingCallbacks = true
+    private var inFlightCallbacks = 0
+    private val quiescenceCallbacks = mutableListOf<() -> Unit>()
+
+    fun tryEnter(): Boolean {
+        val entered: Boolean = synchronized(monitor) {
+            if (!acceptingCallbacks) false else true.also { inFlightCallbacks += 1 }
+        }
+        if (entered) {
+            callbackOwnedByCurrentThread.set(true)
+            callbackReleasedForQuiescence.set(false)
+        }
+        return entered
+    }
+
+    fun leave() {
+        val callbacks = synchronized(monitor) {
+            if (callbackReleasedForQuiescence.get() == true) {
+                emptyList()
+            } else {
+                check(inFlightCallbacks > 0) { "analyzer callback was not entered" }
+                inFlightCallbacks -= 1
+                takeQuiescenceCallbacksLocked()
+            }
+        }
+        callbackOwnedByCurrentThread.remove()
+        callbackReleasedForQuiescence.remove()
+        callbacks.forEach { callback -> runCatching(callback) }
+    }
+
+    fun close() {
+        synchronized(monitor) { acceptingCallbacks = false }
+    }
+
+    fun onQuiescent(callback: () -> Unit) {
+        val callbacks = synchronized(monitor) {
+            quiescenceCallbacks += callback
+            releaseCurrentCallbackOwnershipLocked()
+            takeQuiescenceCallbacksLocked()
+        }
+        callbacks.forEach { deferred -> runCatching(deferred) }
+    }
+
+    private fun takeQuiescenceCallbacksLocked(): List<() -> Unit> =
+        if (!acceptingCallbacks && inFlightCallbacks == 0) {
+            quiescenceCallbacks.toList().also { quiescenceCallbacks.clear() }
+        } else {
+            emptyList()
+        }
+
+    private fun releaseCurrentCallbackOwnershipLocked() {
+        if (callbackOwnedByCurrentThread.get() == true && callbackReleasedForQuiescence.get() != true) {
+            check(inFlightCallbacks > 0) { "analyzer callback was not entered" }
+            inFlightCallbacks -= 1
+            callbackReleasedForQuiescence.set(true)
+        }
     }
 }
 
