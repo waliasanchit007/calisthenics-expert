@@ -24,6 +24,7 @@ Usage: check_five_run_replay.py <serial> <package> <transcript-file>   ("-" read
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import subprocess
@@ -43,6 +44,8 @@ _S25_MARKER = "S25 Ultra"
 # gate exists to authorize. Mirrors isAuthorizedFiveRunGateTarget in FiveRunReplayEvidence.kt.
 _S25_MODEL_PREFIX = "SM-S938"
 _AUTHORIZED_MANUFACTURER = "samsung"
+_HARNESS_GIT_SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+_LEDGER_STATUSES = {"pending", "recorded"}
 
 
 def is_authorized_five_run_gate_target(environment: dict) -> bool:
@@ -73,6 +76,17 @@ class FiveRunReplayCheckError(Exception):
     pass
 
 
+def _require_harness_git_sha(record: dict) -> None:
+    harness_git_sha = record.get("harness_git_sha")
+    if (
+        not isinstance(harness_git_sha, str)
+        or _HARNESS_GIT_SHA_PATTERN.fullmatch(harness_git_sha) is None
+    ):
+        raise FiveRunReplayCheckError(
+            "FiveRunReplayEvidence harness_git_sha must be a lowercase 40-hex commit SHA"
+        )
+
+
 def require_exact_suite(transcript: str) -> None:
     if _SUITE_MARKER not in transcript:
         raise FiveRunReplayCheckError(
@@ -93,6 +107,7 @@ def extract_record(transcript: str) -> dict:
             f"expected exactly one FiveRunReplayEvidence record, found {len(matches)}"
         )
     record = json.loads(matches[0])
+    _require_harness_git_sha(record)
     runs = record.get("runs")
     if not isinstance(runs, list) or len(runs) != _EXPECTED_RUN_COUNT:
         raise FiveRunReplayCheckError(
@@ -106,6 +121,46 @@ def extract_record(transcript: str) -> dict:
                 "whether any pose was detected is not five-run gate evidence"
             )
     return record
+
+
+def verify_recorded_ledger(root: Path, ledger_relative: str) -> dict:
+    ledger = json.loads((root / ledger_relative).read_text(encoding="utf-8"))
+    status = ledger.get("status")
+    if status not in _LEDGER_STATUSES:
+        raise FiveRunReplayCheckError(
+            "replay ledger status must be pending or recorded"
+        )
+    if status == "pending":
+        if not ledger.get("missing_precondition"):
+            raise FiveRunReplayCheckError(
+                "pending replay ledger must name its missing physical precondition"
+            )
+        return ledger
+
+    evidence_file = ledger.get("evidence_file")
+    if not isinstance(evidence_file, str) or not evidence_file:
+        raise FiveRunReplayCheckError(
+            "recorded replay ledger must reference evidence_file"
+        )
+    evidence_path = root / evidence_file
+    if not evidence_path.is_file():
+        raise FiveRunReplayCheckError(
+            f"recorded replay evidence file is missing: {evidence_file}"
+        )
+    payload = evidence_path.read_bytes()
+    actual_sha = hashlib.sha256(payload).hexdigest()
+    if ledger.get("evidence_sha256") != actual_sha:
+        raise FiveRunReplayCheckError(
+            "recorded replay evidence_sha256 does not match evidence file sha256"
+        )
+    record = json.loads(payload)
+    _require_harness_git_sha(record)
+    recomputed = satisfies_gate(record)
+    if record.get("satisfies_s25_device_gate") is not recomputed:
+        raise FiveRunReplayCheckError(
+            "recorded replay evidence verdict disagrees with recomputed observations"
+        )
+    return ledger
 
 
 def _pull(

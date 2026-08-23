@@ -9,6 +9,8 @@ ROOT = Path(__file__).parents[2]
 
 sys.path.insert(0, str(ROOT / "tools"))
 
+import check_five_run_replay
+import record_process_kill_evidence
 from check_camera_capability_probe import (
     CameraProbeCheckError,
     is_authorized_camera_probe_target,
@@ -20,6 +22,124 @@ CAMERA_LEDGER = "docs/evidence/device-probes/s25-ultra-camera-capability-ledger.
 LIVE_CAPTURE_LEDGER = "docs/evidence/live-capture/s25-ultra-live-capture-ledger.json"
 
 
+def test_recorded_replay_ledger_rejects_mutated_evidence_digest(tmp_path: Path) -> None:
+    evidence = {
+        "harness_git_sha": "0123456789abcdef0123456789abcdef01234567",
+        "runs_completed": 5,
+        "runs": [],
+        "environment": {},
+        "satisfies_s25_device_gate": False,
+    }
+    evidence_path = tmp_path / "replay.json"
+    evidence_path.write_text(json.dumps(evidence) + "\n", encoding="utf-8")
+    ledger_path = tmp_path / "ledger.json"
+    ledger_path.write_text(
+        json.dumps(
+            {
+                "status": "recorded",
+                "evidence_file": "replay.json",
+                "evidence_sha256": hashlib.sha256(evidence_path.read_bytes()).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    evidence_path.write_text(evidence_path.read_text() + "tampered", encoding="utf-8")
+
+    verifier = getattr(check_five_run_replay, "verify_recorded_ledger", None)
+    assert callable(verifier), "replay checker must expose recorded-ledger verification"
+    with pytest.raises(check_five_run_replay.FiveRunReplayCheckError, match="sha256"):
+        verifier(tmp_path, "ledger.json")
+
+
+def test_recorded_process_kill_ledger_rejects_mutated_evidence_digest(tmp_path: Path) -> None:
+    evidence = {
+        "harness_git_sha": "0123456789abcdef0123456789abcdef01234567",
+        "environment": {},
+        "observation": {},
+        "satisfies_s25_process_kill_gate": False,
+    }
+    evidence_path = tmp_path / "process-kill.json"
+    evidence_path.write_text(json.dumps(evidence) + "\n", encoding="utf-8")
+    ledger_path = tmp_path / "ledger.json"
+    ledger_path.write_text(
+        json.dumps(
+            {
+                "status": "recorded",
+                "evidence_file": "process-kill.json",
+                "evidence_sha256": hashlib.sha256(evidence_path.read_bytes()).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    evidence_path.write_text(evidence_path.read_text() + "tampered", encoding="utf-8")
+
+    verifier = getattr(record_process_kill_evidence, "verify_recorded_ledger", None)
+    assert callable(verifier), "process-kill checker must expose recorded-ledger verification"
+    with pytest.raises(record_process_kill_evidence.ProcessKillRecordError, match="sha256"):
+        verifier(tmp_path, "ledger.json")
+
+
+@pytest.mark.parametrize("sha", [None, "not-a-commit-sha"])
+def test_recorded_replay_ledger_requires_a_well_formed_harness_git_sha(
+    tmp_path: Path, sha: str | None
+) -> None:
+    evidence = {
+        "runs_completed": 5,
+        "runs": [],
+        "environment": {},
+        "satisfies_s25_device_gate": False,
+    }
+    if sha is not None:
+        evidence["harness_git_sha"] = sha
+    evidence_path = tmp_path / "replay.json"
+    evidence_path.write_text(json.dumps(evidence) + "\n", encoding="utf-8")
+    (tmp_path / "ledger.json").write_text(
+        json.dumps(
+            {
+                "status": "recorded",
+                "evidence_file": "replay.json",
+                "evidence_sha256": hashlib.sha256(evidence_path.read_bytes()).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    verifier = check_five_run_replay.verify_recorded_ledger
+    with pytest.raises(check_five_run_replay.FiveRunReplayCheckError, match="harness_git_sha"):
+        verifier(tmp_path, "ledger.json")
+
+
+@pytest.mark.parametrize("sha", [None, "not-a-commit-sha"])
+def test_recorded_process_kill_ledger_requires_a_well_formed_harness_git_sha(
+    tmp_path: Path, sha: str | None
+) -> None:
+    evidence = {
+        "environment": {},
+        "observation": {},
+        "satisfies_s25_process_kill_gate": False,
+    }
+    if sha is not None:
+        evidence["harness_git_sha"] = sha
+    evidence_path = tmp_path / "process-kill.json"
+    evidence_path.write_text(json.dumps(evidence) + "\n", encoding="utf-8")
+    (tmp_path / "ledger.json").write_text(
+        json.dumps(
+            {
+                "status": "recorded",
+                "evidence_file": "process-kill.json",
+                "evidence_sha256": hashlib.sha256(evidence_path.read_bytes()).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    verifier = record_process_kill_evidence.verify_recorded_ledger
+    with pytest.raises(
+        record_process_kill_evidence.ProcessKillRecordError, match="harness_git_sha"
+    ):
+        verifier(tmp_path, "ledger.json")
+
+
 def test_s25_process_kill_ledger_reports_pending_or_recorded_status() -> None:
     ledger = json.loads(
         (ROOT / "docs/evidence/device-probes/s25-ultra-process-kill-ledger.json").read_text()
@@ -27,6 +147,9 @@ def test_s25_process_kill_ledger_reports_pending_or_recorded_status() -> None:
     assert ledger["status"] in {"pending", "recorded"}
     if ledger["status"] == "pending":
         assert ledger["missing_precondition"]
+        record_process_kill_evidence.verify_recorded_ledger(
+            ROOT, "docs/evidence/device-probes/s25-ultra-process-kill-ledger.json"
+        )
         return
 
     # A recorded ledger must be checked against the record it points at, to the same standard as
@@ -63,6 +186,9 @@ def test_s25_five_run_replay_ledger_reports_pending_or_recorded_status() -> None
     assert ledger["status"] in {"pending", "recorded"}
     if ledger["status"] == "pending":
         assert ledger["missing_precondition"]
+        check_five_run_replay.verify_recorded_ledger(
+            ROOT, "docs/evidence/replay-five-run/s25-ultra-five-run-replay-ledger.json"
+        )
     else:
         assert ledger["evidence_file"]
         recorded = json.loads((ROOT / ledger["evidence_file"]).read_text())

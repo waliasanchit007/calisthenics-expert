@@ -25,15 +25,8 @@ _AUTHORIZED_MANUFACTURER = "samsung"
 _ADMITTED_DATASPACE = 146931712
 _NO_EXPORT_REASON = "live_capture_export_unavailable"
 _UNSANITIZED_FAILURE_DETAIL = "run_failure_detail_not_sanitized"
+_HARNESS_GIT_SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 _ABSOLUTE_PATH = re.compile(r"(?:file://)?(?:/|[A-Za-z]:[\\/])\S+")
-_TYPED_FAILURES = {
-    "live_capture_timeout",
-    "live_inference_stalled",
-    "live_capture_failed",
-    "camera_capability_not_admitted",
-    "camera_permission_denied",
-    "live_initialization_failed",
-}
 
 
 class LiveCaptureCheckError(Exception):
@@ -84,6 +77,14 @@ def extract_record(transcript: str) -> dict:
     ):
         raise LiveCaptureCheckError(
             "LiveCaptureEvidence is not an exact sanitized record"
+        )
+    harness_git_sha = record.get("harness_git_sha")
+    if (
+        not isinstance(harness_git_sha, str)
+        or _HARNESS_GIT_SHA_PATTERN.fullmatch(harness_git_sha) is None
+    ):
+        raise LiveCaptureCheckError(
+            "LiveCaptureEvidence harness_git_sha must be a lowercase 40-hex commit SHA"
         )
     return record
 
@@ -165,8 +166,8 @@ def _intrinsic_blocking_reasons(record: dict) -> list[str]:
         reasons.append("unclassified_delivered_callbacks")
 
     failure_code = record.get("run_failure_code")
-    if failure_code in _TYPED_FAILURES:
-        reasons.append(failure_code)
+    if failure_code is not None:
+        reasons.append(str(failure_code))
     failure_detail = record.get("run_failure_detail")
     if failure_detail is not None and (
         not isinstance(failure_detail, str)
@@ -383,6 +384,15 @@ def _blocking_reasons(
     return list(dict.fromkeys(reasons))
 
 
+def _recorded_blocking_reasons(record: dict) -> list[str]:
+    reasons = _intrinsic_blocking_reasons(record)
+    if record.get("reference_validation_succeeded") is not True:
+        reasons.append("reference_validation_failed")
+    if record.get("instrumentation_succeeded") is not True:
+        reasons.append("instrumentation_failed")
+    return list(dict.fromkeys(reasons))
+
+
 def check_transcript(
     transcript: str,
     manifest: dict | None,
@@ -459,7 +469,15 @@ def verify_recorded_ledger(root: Path, ledger_relative: str) -> dict:
             "recorded evidence_sha256 does not match evidence file sha256"
         )
     record = json.loads(payload)
-    recomputed_reasons = _intrinsic_blocking_reasons(record)
+    harness_git_sha = record.get("harness_git_sha")
+    if (
+        not isinstance(harness_git_sha, str)
+        or _HARNESS_GIT_SHA_PATTERN.fullmatch(harness_git_sha) is None
+    ):
+        raise LiveCaptureCheckError(
+            "recorded evidence harness_git_sha must be a lowercase 40-hex commit SHA"
+        )
+    recomputed_reasons = _recorded_blocking_reasons(record)
     if record.get("blocking_reasons") != recomputed_reasons:
         raise LiveCaptureCheckError(
             "recorded blocking_reasons disagree with recomputed observations"
@@ -501,7 +519,7 @@ def main(argv: list[str]) -> int:
         )
         if (
             intrinsic_reasons
-            or record.get("run_failure_code") in _TYPED_FAILURES
+            or record.get("run_failure_code") is not None
             or no_real_session
             or status != 0
         ):

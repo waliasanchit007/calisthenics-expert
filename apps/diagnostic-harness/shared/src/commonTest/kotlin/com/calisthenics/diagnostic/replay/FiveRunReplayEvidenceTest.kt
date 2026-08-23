@@ -15,6 +15,18 @@ import kotlin.test.assertTrue
  */
 class FiveRunReplayEvidenceTest {
 
+    @Test
+    fun rejectsMalformedHarnessGitSha() {
+        assertFailsWith<IllegalArgumentException> {
+            renderFiveRunReplayEvidence(evidence().copy(harnessGitSha = "not-a-sha"))
+        }
+    }
+
+    @Test
+    fun renderedEvidenceCarriesTheProducerHarnessGitSha() {
+        assertTrue(renderFiveRunReplayEvidence(evidence()).contains("\"harness_git_sha\""))
+    }
+
     private fun environment(
         deviceClass: String = "physical_device",
         marketingName: String = "Galaxy S25 Ultra",
@@ -96,6 +108,7 @@ class FiveRunReplayEvidenceTest {
         runs: List<FiveRunReplayRunRecord> = fiveConsistentRuns(),
     ) = FiveRunReplayEvidence(
         emittedBy = "com.calisthenics.diagnostic.replay.FiveRunReplayDeviceGateTest",
+        harnessGitSha = "0123456789abcdef0123456789abcdef01234567",
         environment = environment,
         provenance = provenance(),
         fixture = fixture(),

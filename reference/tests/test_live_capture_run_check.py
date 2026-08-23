@@ -25,6 +25,7 @@ def exact_record() -> dict:
         "contains_landmark_coordinates": False,
         "emitted_by": "com.calisthenics.diagnostic.composition.LiveCaptureDeviceGateTest",
         "session_id": "session-1",
+        "harness_git_sha": "0123456789abcdef0123456789abcdef01234567",
         "environment": {
             "device_class": "physical_device",
             "device_identity": "samsung/SM-S938B/pa3q/pa3qxins",
@@ -159,6 +160,49 @@ def test_admitted_transcript_requires_manifest_and_all_observed_conjuncts() -> N
     )
     assert result["satisfies_s25_live_capture"] is True
     assert result["blocking_reasons"] == []
+
+
+@pytest.mark.parametrize(
+    ("field", "expected"),
+    [
+        ("reference_validation_succeeded", "reference_validation_failed"),
+        ("instrumentation_succeeded", "instrumentation_failed"),
+    ],
+)
+def test_recorded_ledger_recomputes_external_gate_fields(
+    tmp_path: Path, field: str, expected: str
+) -> None:
+    record = exact_record()
+    record[field] = False
+    record["blocking_reasons"] = [expected]
+    record["satisfies_s25_live_capture"] = False
+    evidence_path = tmp_path / "evidence.json"
+    evidence_path.write_text(json.dumps(record, sort_keys=True) + "\n", encoding="utf-8")
+    (tmp_path / "ledger.json").write_text(
+        json.dumps(
+            {
+                "status": "recorded",
+                "evidence_file": "evidence.json",
+                "evidence_sha256": hashlib.sha256(evidence_path.read_bytes()).hexdigest(),
+                "live_admission": "blocked",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert verify_recorded_ledger(tmp_path, "ledger.json")["status"] == "recorded"
+
+
+@pytest.mark.parametrize("sha", [None, "not-a-commit-sha"])
+def test_live_checker_requires_a_well_formed_harness_git_sha(sha: str | None) -> None:
+    record = exact_record()
+    if sha is None:
+        record.pop("harness_git_sha", None)
+    else:
+        record["harness_git_sha"] = sha
+
+    with pytest.raises(LiveCaptureCheckError, match="harness_git_sha"):
+        check_transcript(transcript(record), manifest(), True, 0)
 
 
 @pytest.mark.parametrize(
@@ -340,7 +384,8 @@ def test_validation_and_instrumentation_are_observations_not_caller_verdict() ->
 
 
 @pytest.mark.parametrize(
-    "failure_code", ["live_capture_timeout", "live_inference_stalled", "live_capture_failed"]
+    "failure_code",
+    ["live_capture_timeout", "live_inference_stalled", "live_capture_failed", "live_source_failed"],
 )
 def test_typed_run_failure_blocks(failure_code: str) -> None:
     record = exact_record()

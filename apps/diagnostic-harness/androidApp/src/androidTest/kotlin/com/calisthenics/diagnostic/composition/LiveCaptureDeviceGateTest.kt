@@ -138,6 +138,7 @@ class LiveCaptureDeviceGateTest {
             val evidence = LiveCaptureEvidence(
                 emittedBy = EMITTED_BY,
                 sessionId = completion?.sessionId?.value ?: manifest?.sessionId?.value ?: UNKNOWN_SESSION_ID,
+                harnessGitSha = BuildConfig.PROBE_GIT_SHA,
                 environment = LiveCaptureEnvironment(
                     deviceClass = androidDeviceClassOf(Build.FINGERPRINT, Build.HARDWARE),
                     deviceIdentity = "${Build.MANUFACTURER}/${Build.MODEL}/${Build.DEVICE}/${Build.PRODUCT}",

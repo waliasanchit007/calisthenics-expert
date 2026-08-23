@@ -6,6 +6,7 @@ import android.os.Process
 import android.util.Log
 import androidx.test.platform.app.InstrumentationRegistry
 import com.calisthenics.diagnostic.composition.HarnessComposition
+import com.calisthenics.diagnostic.android.BuildConfig
 import com.calisthenics.diagnostic.conformance.SyntheticFixture
 import com.calisthenics.diagnostic.contract.Counts
 import com.calisthenics.diagnostic.contract.Uuid
@@ -67,6 +68,7 @@ class ProcessKillDuringExportTest {
         val record = renderProcessKillEvidence(
             ProcessKillEvidence(
                 emittedBy = "com.calisthenics.diagnostic.export.ProcessKillDuringExportTest",
+                harnessGitSha = BuildConfig.PROBE_GIT_SHA,
                 environment = ProcessKillEnvironment(
                     deviceClass = androidDeviceClassOf(Build.FINGERPRINT, Build.HARDWARE),
                     deviceIdentity = "${Build.MANUFACTURER}/${Build.MODEL}/${Build.DEVICE}/${Build.PRODUCT}",
