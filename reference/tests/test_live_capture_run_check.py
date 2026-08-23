@@ -51,6 +51,18 @@ def exact_record() -> dict:
             "source_color_range": "FULL",
             "underlying_image_available": True,
             "pixel_format": "YUV_420_888",
+            "capture_width": 1280,
+            "capture_height": 720,
+            "orientation_degrees": 90,
+            "mirrored": True,
+        },
+        "thermal": {
+            "api_available": True,
+            "unavailable_reason": None,
+            "samples": [
+                {"t_monotonic_ns": 0, "status": 0},
+                {"t_monotonic_ns": 3_000_000_000, "status": 3},
+            ],
         },
         "counts": {
             "camera_frames_received": 10,
@@ -101,6 +113,7 @@ def manifest() -> dict:
             "os_version": "16",
             "device_model": "SM-S938B",
             "chipset": "s5e9955",
+            "thermal_api_available": True,
         },
         "pose_pipeline": {"running_mode": "live_stream"},
         "camera": {
@@ -110,6 +123,10 @@ def manifest() -> dict:
             "source_color_range": "FULL",
             "source_dataspace_raw": 146931712,
             "timestamp_source": "REALTIME",
+            "capture_width": 1280,
+            "capture_height": 720,
+            "orientation_degrees": 90,
+            "mirrored": True,
         },
         "counts": {
             "camera_frames_received": 10,
@@ -128,6 +145,7 @@ def manifest() -> dict:
         },
         "study_context": {
             "camera_cadence_diagnostics": exact_record()["counts"]["cadence_diagnostics"],
+            "thermal_observations": exact_record()["thermal"],
         },
     }
 
@@ -205,7 +223,11 @@ def test_each_gate_mutation_blocks(path: tuple[str, str], expected: str) -> None
 
 def test_upstream_cadence_gap_is_diagnostic_not_an_unclassified_delivered_callback() -> None:
     record = exact_record()
-    record["counts"]["cadence_diagnostics"]["upstream_unclassified_cadence_gap_estimate"] = 58
+    diagnostics = record["counts"]["cadence_diagnostics"]
+    diagnostics["last_delivered_capture_timestamp_ns"] = 2_300_000_006
+    diagnostics["observed_capture_span_ns"] = 2_300_000_006
+    diagnostics["requested_callback_opportunities"] = 70
+    diagnostics["upstream_unclassified_cadence_gap_estimate"] = 60
     pulled_manifest = manifest()
     pulled_manifest["study_context"]["camera_cadence_diagnostics"] = record["counts"][
         "cadence_diagnostics"
@@ -216,6 +238,75 @@ def test_upstream_cadence_gap_is_diagnostic_not_an_unclassified_delivered_callba
     )
 
     assert checked["satisfies_s25_live_capture"] is True
+
+
+def test_cadence_estimate_must_equal_requested_opportunities_minus_delivered_callbacks() -> None:
+    record = exact_record()
+    record["counts"]["cadence_diagnostics"]["upstream_unclassified_cadence_gap_estimate"] = 1
+    pulled = manifest()
+    pulled["study_context"]["camera_cadence_diagnostics"] = record["counts"]["cadence_diagnostics"]
+
+    checked = check_transcript(
+        transcript(record), pulled, validation_succeeded=True, instrumentation_exit_code=0
+    )
+
+    assert "camera_cadence_diagnostics_invalid" in checked["blocking_reasons"]
+    assert checked["satisfies_s25_live_capture"] is False
+
+
+def test_cadence_diagnostics_require_the_requested_thirty_fps_camera_rate() -> None:
+    record = exact_record()
+    diagnostics = record["counts"]["cadence_diagnostics"]
+    diagnostics["requested_camera_fps"] = 15
+    diagnostics["requested_callback_opportunities"] = 5
+    pulled = manifest()
+    pulled["study_context"]["camera_cadence_diagnostics"] = diagnostics
+
+    checked = check_transcript(
+        transcript(record), pulled, validation_succeeded=True, instrumentation_exit_code=0
+    )
+
+    assert "camera_cadence_diagnostics_invalid" in checked["blocking_reasons"]
+    assert checked["satisfies_s25_live_capture"] is False
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("capture_width", 0),
+        ("capture_height", 0),
+        ("orientation_degrees", 45),
+        ("mirrored", "true"),
+    ],
+)
+def test_camera_geometry_evidence_must_be_physical_and_admitted(field: str, value: object) -> None:
+    record = exact_record()
+    record["camera"][field] = value
+
+    checked = check_transcript(transcript(record), manifest(), True, 0)
+
+    assert "camera_geometry_invalid" in checked["blocking_reasons"]
+    assert checked["satisfies_s25_live_capture"] is False
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("api_available", False),
+        ("unavailable_reason", "thermal_api_unavailable"),
+        ("samples", []),
+        ("samples", [{"t_monotonic_ns": -1, "status": 3}]),
+        ("samples", [{"t_monotonic_ns": 1, "status": -1}]),
+    ],
+)
+def test_thermal_evidence_must_be_available_and_session_relative(field: str, value: object) -> None:
+    record = exact_record()
+    record["thermal"][field] = value
+
+    checked = check_transcript(transcript(record), manifest(), True, 0)
+
+    assert "thermal_evidence_invalid" in checked["blocking_reasons"]
+    assert checked["satisfies_s25_live_capture"] is False
 
 
 def test_cadence_diagnostics_must_match_delivered_callback_accounting() -> None:
@@ -319,6 +410,11 @@ def test_pulled_manifest_identity_is_checked_against_observed_record() -> None:
         (("camera", "source_color_range"), "LIMITED", "manifest_camera_mismatch"),
         (("camera", "source_dataspace_raw"), 0, "manifest_camera_mismatch"),
         (("camera", "requested_camera_fps"), 15.0, "manifest_camera_fps_mismatch"),
+        (("camera", "capture_width"), 640, "manifest_camera_geometry_mismatch"),
+        (("camera", "capture_height"), 360, "manifest_camera_geometry_mismatch"),
+        (("camera", "orientation_degrees"), 0, "manifest_camera_geometry_mismatch"),
+        (("camera", "mirrored"), False, "manifest_camera_geometry_mismatch"),
+        (("device", "thermal_api_available"), False, "manifest_thermal_device_mismatch"),
         (("cadence", "configured_inference_fps"), 30.0, "manifest_configured_fps_mismatch"),
         (("counts", "inference_failures"), 1, "manifest_counts_mismatch"),
         (("counts", "frames_skipped_before_inference"), 7, "manifest_counts_mismatch"),
@@ -339,6 +435,7 @@ def test_each_pulled_manifest_boundary_mutation_blocks(
 
 def test_manifest_cadence_rejects_synthetic_zero_sample_and_invalid_values() -> None:
     for timeseries in (
+        [],
         [{"t_monotonic_ns": 0, "achieved_inference_fps": 0.0}],
         [{"t_monotonic_ns": -1, "achieved_inference_fps": 1.0}],
         [{"t_monotonic_ns": 1, "achieved_inference_fps": -1.0}],
@@ -349,6 +446,19 @@ def test_manifest_cadence_rejects_synthetic_zero_sample_and_invalid_values() -> 
         checked = check_transcript(transcript(exact_record()), pulled, True, 0)
         assert "manifest_cadence_invalid" in checked["blocking_reasons"]
         assert checked["satisfies_s25_live_capture"] is False
+
+
+def test_pulled_manifest_thermal_samples_must_match_typed_evidence() -> None:
+    pulled = manifest()
+    pulled["study_context"]["thermal_observations"] = {
+        **exact_record()["thermal"],
+        "samples": [{"t_monotonic_ns": 0, "status": 4}],
+    }
+
+    checked = check_transcript(transcript(exact_record()), pulled, True, 0)
+
+    assert "manifest_thermal_observations_mismatch" in checked["blocking_reasons"]
+    assert checked["satisfies_s25_live_capture"] is False
 
 
 def test_pulled_manifest_failure_identity_mutation_blocks() -> None:

@@ -38,18 +38,30 @@ data class LiveCaptureCadenceDiagnostics(
     }
 
     /** The upstream estimate is diagnostic only; classification accounting must still close. */
-    fun isInternallyConsistentWith(counts: LiveCaptureCounts): Boolean =
-        deliveredCallbackCount == counts.cameraFramesReceived &&
-            deliveredCallbackClassificationGap == counts.deliveredCallbackClassificationGap &&
-            when (deliveredCallbackCount) {
-                0L -> firstDeliveredCaptureTimestampNs == null &&
-                    lastDeliveredCaptureTimestampNs == null &&
-                    observedCaptureSpanNs == null
+    fun isInternallyConsistentWith(counts: LiveCaptureCounts): Boolean {
+        if (requestedCameraFps != REQUESTED_CAMERA_FPS ||
+            deliveredCallbackCount != counts.cameraFramesReceived ||
+            deliveredCallbackClassificationGap != counts.deliveredCallbackClassificationGap ||
+            upstreamUnclassifiedCadenceGapEstimate !=
+            (requestedCallbackOpportunities - deliveredCallbackCount).coerceAtLeast(0L)
+        ) {
+            return false
+        }
+        return when (deliveredCallbackCount) {
+            0L -> firstDeliveredCaptureTimestampNs == null &&
+                lastDeliveredCaptureTimestampNs == null &&
+                observedCaptureSpanNs == null &&
+                requestedCallbackOpportunities == 0L
 
-                else -> firstDeliveredCaptureTimestampNs != null &&
-                    lastDeliveredCaptureTimestampNs != null &&
-                    observedCaptureSpanNs == lastDeliveredCaptureTimestampNs - firstDeliveredCaptureTimestampNs
+            else -> {
+                val first = firstDeliveredCaptureTimestampNs ?: return false
+                val last = lastDeliveredCaptureTimestampNs ?: return false
+                val span = observedCaptureSpanNs ?: return false
+                first >= 0L && last >= first && span == last - first &&
+                    requestedCallbackOpportunities == closedIntervalOpportunities(span, requestedCameraFps)
             }
+        }
+    }
 
     companion object {
         fun fromAdmittedTimestamps(
@@ -86,5 +98,6 @@ data class LiveCaptureCadenceDiagnostics(
         }
 
         private const val NANOS_PER_SECOND = 1_000_000_000L
+        private const val REQUESTED_CAMERA_FPS = 30
     }
 }

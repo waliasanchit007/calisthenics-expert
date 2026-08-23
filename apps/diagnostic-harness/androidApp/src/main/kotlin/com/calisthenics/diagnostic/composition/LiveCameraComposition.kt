@@ -131,6 +131,17 @@ data class LiveThermalObservation(val tMonotonicNs: Long, val status: Int) {
     }
 }
 
+/** Immutable, sanitized diagnostics exported by the physical device gate after composition stops. */
+data class LiveCaptureEvidenceTelemetry(
+    val captureWidth: Int?,
+    val captureHeight: Int?,
+    val orientationDegrees: Int?,
+    val mirrored: Boolean?,
+    val thermalApiAvailable: Boolean,
+    val thermalUnavailableReason: String?,
+    val thermalObservations: List<LiveThermalObservation>,
+)
+
 interface LiveThermalProbe : Disposable {
     val available: Boolean
     val unavailableReason: String?
@@ -566,6 +577,22 @@ class LiveCameraComposition internal constructor(
 
     fun latestThermalObservation(): LiveThermalObservation? = synchronized(monitor) {
         thermalProbe?.observations()?.lastOrNull()
+    }
+
+    /** Returns a copy of the admitted source geometry and session-relative thermal diagnostics. */
+    fun captureEvidenceTelemetry(): LiveCaptureEvidenceTelemetry? = synchronized(monitor) {
+        val probe = thermalProbe ?: return null
+        val geometry = observedSourceGeometry
+        val resolution = negotiatedSourceResolution
+        LiveCaptureEvidenceTelemetry(
+            captureWidth = geometry?.width ?: resolution?.width,
+            captureHeight = geometry?.height ?: resolution?.height,
+            orientationDegrees = geometry?.rotation?.degrees,
+            mirrored = geometry?.mirrored,
+            thermalApiAvailable = probe.available,
+            thermalUnavailableReason = probe.unavailableReason,
+            thermalObservations = probe.observations().toList(),
+        )
     }
 
     internal val internalFailure: LiveInternalFailure?

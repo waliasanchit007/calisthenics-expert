@@ -21,6 +21,8 @@ import com.calisthenics.diagnostic.live.LiveCaptureEnvironment
 import com.calisthenics.diagnostic.live.LiveCaptureEvidence
 import com.calisthenics.diagnostic.live.LiveCaptureFailureIdentity
 import com.calisthenics.diagnostic.live.LiveCaptureManifestDevice
+import com.calisthenics.diagnostic.live.LiveCaptureThermalObservation
+import com.calisthenics.diagnostic.live.LiveCaptureThermalSummary
 import com.calisthenics.diagnostic.live.sanitizeLiveCaptureFailureDetail
 import com.calisthenics.diagnostic.live.renderLiveCaptureEvidence
 import com.calisthenics.diagnostic.session.FinalizationResult
@@ -124,6 +126,7 @@ class LiveCaptureDeviceGateTest {
             lifecycleOwner?.let { owner -> instrumentation.runOnMainSync { owner.destroy() } }
             val snapshot = completion?.snapshot ?: composition?.snapshot()
             val manifest = composition?.manifest()
+            val telemetry = composition?.captureEvidenceTelemetry()
             val counts = snapshot?.counts
             val classificationGap = counts?.let {
                 it.cameraFramesReceived - it.inferenceFramesSubmitted - it.framesSkippedBeforeInference
@@ -160,6 +163,17 @@ class LiveCaptureDeviceGateTest {
                     sourceColorRange = observation.sourceColorRange,
                     underlyingImageAvailable = observation.underlyingImageAvailable,
                     pixelFormat = observation.pixelFormat,
+                    captureWidth = telemetry?.captureWidth,
+                    captureHeight = telemetry?.captureHeight,
+                    orientationDegrees = telemetry?.orientationDegrees,
+                    mirrored = telemetry?.mirrored,
+                ),
+                thermal = LiveCaptureThermalSummary(
+                    apiAvailable = telemetry?.thermalApiAvailable ?: false,
+                    unavailableReason = telemetry?.thermalUnavailableReason ?: "composition_telemetry_unavailable",
+                    observations = telemetry?.thermalObservations?.map { sample ->
+                        LiveCaptureThermalObservation(sample.tMonotonicNs, sample.status)
+                    } ?: emptyList(),
                 ),
                 counts = LiveCaptureCounts(
                     cameraFramesReceived = counts?.cameraFramesReceived ?: 0L,

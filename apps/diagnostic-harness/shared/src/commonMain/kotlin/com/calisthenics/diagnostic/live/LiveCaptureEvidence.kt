@@ -21,6 +21,8 @@ const val LIVE_CAPTURE_BLOCK_COLOUR_STANDARD = "colour_standard_not_bt601"
 const val LIVE_CAPTURE_BLOCK_COLOUR_RANGE = "colour_range_not_full"
 const val LIVE_CAPTURE_BLOCK_UNDERLYING_IMAGE = "underlying_image_bridge_unavailable"
 const val LIVE_CAPTURE_BLOCK_PIXEL_FORMAT = "pixel_format_not_yuv_420_888"
+const val LIVE_CAPTURE_BLOCK_CAMERA_GEOMETRY = "camera_geometry_invalid"
+const val LIVE_CAPTURE_BLOCK_THERMAL = "thermal_evidence_invalid"
 const val LIVE_CAPTURE_BLOCK_RECEIVED = "camera_frames_not_received"
 const val LIVE_CAPTURE_BLOCK_SUBMITTED = "inference_frames_not_submitted"
 const val LIVE_CAPTURE_BLOCK_EMITTED = "inference_records_not_emitted"
@@ -70,6 +72,26 @@ data class LiveCaptureCameraObservation(
     val sourceColorRange: String?,
     val underlyingImageAvailable: Boolean,
     val pixelFormat: String,
+    val captureWidth: Int?,
+    val captureHeight: Int?,
+    val orientationDegrees: Int?,
+    val mirrored: Boolean?,
+)
+
+data class LiveCaptureThermalObservation(
+    val tMonotonicNs: Long,
+    val status: Int,
+) {
+    init {
+        require(tMonotonicNs >= 0L) { "thermal observation time must be non-negative" }
+        require(status >= 0) { "thermal observation status must be non-negative" }
+    }
+}
+
+data class LiveCaptureThermalSummary(
+    val apiAvailable: Boolean,
+    val unavailableReason: String?,
+    val observations: List<LiveCaptureThermalObservation>,
 )
 
 data class LiveCaptureCounts(
@@ -100,6 +122,7 @@ data class LiveCaptureEvidence(
     val environment: LiveCaptureEnvironment,
     val manifestDevice: LiveCaptureManifestDevice,
     val camera: LiveCaptureCameraObservation,
+    val thermal: LiveCaptureThermalSummary,
     val counts: LiveCaptureCounts,
     val referenceValidationSucceeded: Boolean,
     val instrumentationSucceeded: Boolean,
@@ -145,6 +168,17 @@ fun liveCaptureBlockingReasons(evidence: LiveCaptureEvidence): List<String> {
     if (camera.sourceColorRange != ADMITTED_RANGE) reasons += LIVE_CAPTURE_BLOCK_COLOUR_RANGE
     if (!camera.underlyingImageAvailable) reasons += LIVE_CAPTURE_BLOCK_UNDERLYING_IMAGE
     if (camera.pixelFormat != ADMITTED_PIXEL_FORMAT) reasons += LIVE_CAPTURE_BLOCK_PIXEL_FORMAT
+    if (camera.captureWidth == null || camera.captureWidth <= 0 ||
+        camera.captureHeight == null || camera.captureHeight <= 0 ||
+        camera.orientationDegrees !in setOf(0, 90, 180, 270) ||
+        camera.mirrored == null
+    ) {
+        reasons += LIVE_CAPTURE_BLOCK_CAMERA_GEOMETRY
+    }
+    val thermal = evidence.thermal
+    if (!thermal.apiAvailable || thermal.unavailableReason != null || thermal.observations.isEmpty()) {
+        reasons += LIVE_CAPTURE_BLOCK_THERMAL
+    }
     val counts = evidence.counts
     if (counts.cameraFramesReceived <= 0L) reasons += LIVE_CAPTURE_BLOCK_RECEIVED
     if (counts.inferenceFramesSubmitted <= 0L) reasons += LIVE_CAPTURE_BLOCK_SUBMITTED
@@ -205,6 +239,22 @@ fun renderLiveCaptureEvidence(evidence: LiveCaptureEvidence): String {
             put("source_color_range", evidence.camera.sourceColorRange)
             put("underlying_image_available", evidence.camera.underlyingImageAvailable)
             put("pixel_format", evidence.camera.pixelFormat)
+            put("capture_width", evidence.camera.captureWidth)
+            put("capture_height", evidence.camera.captureHeight)
+            put("orientation_degrees", evidence.camera.orientationDegrees)
+            put("mirrored", evidence.camera.mirrored)
+        }
+        putJsonObject("thermal") {
+            put("api_available", evidence.thermal.apiAvailable)
+            put("unavailable_reason", evidence.thermal.unavailableReason)
+            putJsonArray("samples") {
+                evidence.thermal.observations.forEach { observation ->
+                    add(buildJsonObject {
+                        put("t_monotonic_ns", observation.tMonotonicNs)
+                        put("status", observation.status)
+                    })
+                }
+            }
         }
         putJsonObject("counts") {
             put("camera_frames_received", evidence.counts.cameraFramesReceived)

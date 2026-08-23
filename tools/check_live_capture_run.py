@@ -126,8 +126,26 @@ def _intrinsic_blocking_reasons(record: dict) -> list[str]:
     for key, expected in expected_camera.items():
         if camera.get(key) != expected:
             reasons.append(camera_reason[key])
-
     counts = record.get("counts", {})
+    modern_typed_evidence = "delivered_callback_classification_gap" in counts
+    if modern_typed_evidence:
+        capture_width = camera.get("capture_width")
+        capture_height = camera.get("capture_height")
+        orientation_degrees = camera.get("orientation_degrees")
+        mirrored = camera.get("mirrored")
+        if (
+            not _is_positive_int(capture_width)
+            or not _is_positive_int(capture_height)
+            or orientation_degrees not in {0, 90, 180, 270}
+            or isinstance(orientation_degrees, bool)
+            or not isinstance(mirrored, bool)
+        ):
+            reasons.append("camera_geometry_invalid")
+
+        thermal = record.get("thermal")
+        if not _thermal_evidence_is_valid(thermal):
+            reasons.append("thermal_evidence_invalid")
+
     count_reason = {
         "camera_frames_received": "camera_frames_not_received",
         "inference_frames_submitted": "inference_frames_not_submitted",
@@ -165,6 +183,29 @@ def _is_nonnegative_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
+def _is_positive_int(value: object) -> bool:
+    return _is_nonnegative_int(value) and value > 0
+
+
+def _thermal_evidence_is_valid(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    samples = value.get("samples")
+    if (
+        value.get("api_available") is not True
+        or value.get("unavailable_reason") is not None
+        or not isinstance(samples, list)
+        or not samples
+    ):
+        return False
+    return all(
+        isinstance(sample, dict)
+        and _is_nonnegative_int(sample.get("t_monotonic_ns"))
+        and _is_nonnegative_int(sample.get("status"))
+        for sample in samples
+    )
+
+
 def _cadence_diagnostics_are_consistent(counts: dict) -> bool:
     diagnostics = counts.get("cadence_diagnostics")
     if not isinstance(diagnostics, dict):
@@ -178,7 +219,7 @@ def _cadence_diagnostics_are_consistent(counts: dict) -> bool:
         not _is_nonnegative_int(delivered)
         or not isinstance(requested_fps, int)
         or isinstance(requested_fps, bool)
-        or requested_fps <= 0
+        or requested_fps != 30
         or not _is_nonnegative_int(opportunities)
         or not _is_nonnegative_int(upstream_gap)
         or not _is_nonnegative_int(classification_gap)
@@ -191,13 +232,22 @@ def _cadence_diagnostics_are_consistent(counts: dict) -> bool:
     last = diagnostics.get("last_delivered_capture_timestamp_ns")
     span = diagnostics.get("observed_capture_span_ns")
     if delivered == 0:
-        return first is None and last is None and span is None and opportunities == 0
+        return (
+            first is None
+            and last is None
+            and span is None
+            and opportunities == 0
+            and upstream_gap == 0
+        )
     if not all(_is_nonnegative_int(value) for value in (first, last, span)):
         return False
     if last < first or span != last - first:
         return False
     expected_opportunities = (span * requested_fps) // 1_000_000_000 + 1
-    return opportunities == expected_opportunities
+    return (
+        opportunities == expected_opportunities
+        and upstream_gap == max(opportunities - delivered, 0)
+    )
 
 
 def _manifest_blocking_reasons(record: dict, manifest: dict) -> list[str]:
@@ -229,10 +279,25 @@ def _manifest_blocking_reasons(record: dict, manifest: dict) -> list[str]:
         if actual_camera.get(manifest_key) != camera.get(evidence_key):
             reasons.append("manifest_camera_mismatch")
             break
+    counts = record.get("counts", {})
+    modern_typed_evidence = "delivered_callback_classification_gap" in counts
+    if modern_typed_evidence:
+        for key in ("capture_width", "capture_height", "orientation_degrees", "mirrored"):
+            if actual_camera.get(key) != camera.get(key):
+                reasons.append("manifest_camera_geometry_mismatch")
+                break
     if actual_camera.get("requested_camera_fps") != 30.0:
         reasons.append("manifest_camera_fps_mismatch")
 
-    counts = record.get("counts", {})
+    if modern_typed_evidence:
+        thermal = record.get("thermal")
+        if not isinstance(thermal, dict):
+            thermal = {}
+        if actual_device.get("thermal_api_available") != thermal.get("api_available"):
+            reasons.append("manifest_thermal_device_mismatch")
+        if manifest.get("study_context", {}).get("thermal_observations") != thermal:
+            reasons.append("manifest_thermal_observations_mismatch")
+
     diagnostics = counts.get("cadence_diagnostics")
     if diagnostics is not None and manifest.get("study_context", {}).get(
         "camera_cadence_diagnostics"
@@ -243,7 +308,7 @@ def _manifest_blocking_reasons(record: dict, manifest: dict) -> list[str]:
     if cadence.get("configured_inference_fps") != 10.0:
         reasons.append("manifest_configured_fps_mismatch")
     timeseries = cadence.get("achieved_inference_fps_timeseries")
-    if not isinstance(timeseries, list) or timeseries == [
+    if not isinstance(timeseries, list) or not timeseries or timeseries == [
         {"t_monotonic_ns": 0, "achieved_inference_fps": 0.0}
     ]:
         reasons.append("manifest_cadence_invalid")

@@ -198,6 +198,35 @@ class LiveCameraCompositionTest {
     }
 
     @Test
+    fun immutableEvidenceTelemetryCarriesAdmittedSourceGeometryAndThermalSummary() {
+        withHarness(Harness(sourceResolution = LiveSourceResolution(2, 4))) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            harness.thermal.emit(status = 3, nowNs = 2_000L)
+            harness.source.emit(
+                frame(
+                    width = 2,
+                    height = 4,
+                    rotation = FrameRotation.R90,
+                    mirrored = true,
+                ),
+            )
+
+            val telemetry = assertNotNull(harness.composition.captureEvidenceTelemetry())
+
+            assertEquals(2, telemetry.captureWidth)
+            assertEquals(4, telemetry.captureHeight)
+            assertEquals(90, telemetry.orientationDegrees)
+            assertTrue(telemetry.mirrored == true)
+            assertTrue(telemetry.thermalApiAvailable)
+            assertEquals(null, telemetry.thermalUnavailableReason)
+            assertEquals(
+                listOf(LiveThermalObservation(0L, 0), LiveThermalObservation(2_000L, 3)),
+                telemetry.thermalObservations,
+            )
+        }
+    }
+
+    @Test
     fun everyDeliveredFrameHasExactlyOneSubmitOrSkipClassification() {
         withHarness(Harness()) { harness ->
             assertIs<LiveCameraStartResult.Started>(harness.start(10))
