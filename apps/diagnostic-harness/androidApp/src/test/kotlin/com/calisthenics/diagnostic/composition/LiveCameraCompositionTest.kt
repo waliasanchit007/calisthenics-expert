@@ -15,6 +15,7 @@ import com.calisthenics.diagnostic.session.SessionRunnerSnapshot
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -203,6 +204,18 @@ class LiveCameraCompositionTest {
             assertEquals(5_000L, record.inferenceEndNs)
             assertEquals(0L, manifest.clock.t0MonotonicNs)
             assertEquals("session_relative_monotonic_ns", manifest.clock.monotonicTimeBase)
+        }
+    }
+
+    @Test
+    fun manifestSeparatesCameraTimestampSourceFromSessionTimeBase() {
+        withHarness(Harness()) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+
+            val manifest = assertNotNull(harness.composition.manifest())
+            assertEquals("REALTIME", manifest.camera.timestampSource)
+            assertEquals("session_relative_monotonic_ns", manifest.clock.monotonicTimeBase)
+            assertNotEquals(manifest.camera.timestampSource, manifest.clock.monotonicTimeBase)
         }
     }
 

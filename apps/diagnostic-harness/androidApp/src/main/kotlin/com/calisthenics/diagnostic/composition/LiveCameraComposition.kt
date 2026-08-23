@@ -796,7 +796,7 @@ class LiveCameraComposition internal constructor(
                 sourceColorMatrix = dependencies.cameraCapability.sourceColorStandard,
                 sourceColorRange = dependencies.cameraCapability.sourceColorRange,
                 sourceDataspaceRaw = dependencies.cameraCapability.sourceDataspaceRaw?.toLong(),
-                timestampSource = "session_relative_monotonic_ns",
+                timestampSource = dependencies.cameraCapability.timestampSource,
                 deliverySemantics = "keep_only_latest_observable_deliveries",
             ),
             modelInput = ModelInput(
