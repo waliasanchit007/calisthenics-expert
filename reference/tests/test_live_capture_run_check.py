@@ -59,7 +59,17 @@ def exact_record() -> dict:
             "inference_failures": 0,
             "frames_skipped_before_inference": 8,
             "frames_skipped_before_inference_by_reason": {"cadence_selection": 8},
-            "unclassified_delivered_callbacks": 0,
+            "delivered_callback_classification_gap": 0,
+            "cadence_diagnostics": {
+                "delivered_callback_count": 10,
+                "first_delivered_capture_timestamp_ns": 0,
+                "last_delivered_capture_timestamp_ns": 300000006,
+                "observed_capture_span_ns": 300000006,
+                "requested_camera_fps": 30,
+                "requested_callback_opportunities": 10,
+                "upstream_unclassified_cadence_gap_estimate": 0,
+                "delivered_callback_classification_gap": 0,
+            },
         },
         "inference_failure_identities": [],
         "reference_validation_succeeded": True,
@@ -116,6 +126,9 @@ def manifest() -> dict:
                 {"t_monotonic_ns": 1_000_000_000, "achieved_inference_fps": 1.0}
             ],
         },
+        "study_context": {
+            "camera_cadence_diagnostics": exact_record()["counts"]["cadence_diagnostics"],
+        },
     }
 
 
@@ -147,7 +160,10 @@ def test_admitted_transcript_requires_manifest_and_all_observed_conjuncts() -> N
         (("counts", "camera_frames_received"), "camera_frames_not_received"),
         (("counts", "inference_frames_submitted"), "inference_frames_not_submitted"),
         (("counts", "inference_records_emitted"), "inference_records_not_emitted"),
-        (("counts", "unclassified_delivered_callbacks"), "unclassified_delivered_callbacks"),
+        (
+            ("counts", "delivered_callback_classification_gap"),
+            "delivered_callback_classification_gap",
+        ),
     ],
 )
 def test_each_gate_mutation_blocks(path: tuple[str, str], expected: str) -> None:
@@ -163,7 +179,7 @@ def test_each_gate_mutation_blocks(path: tuple[str, str], expected: str) -> None
         mutated[path[0]][path[1]] = "unknown"
     elif path == ("camera", "underlying_image_available"):
         mutated[path[0]][path[1]] = False
-    elif path == ("counts", "unclassified_delivered_callbacks"):
+    elif path == ("counts", "delivered_callback_classification_gap"):
         mutated[path[0]][path[1]] = 1
     elif path[1] == "timestamp_source":
         mutated[path[0]][path[1]] = "UNKNOWN"
@@ -185,6 +201,32 @@ def test_each_gate_mutation_blocks(path: tuple[str, str], expected: str) -> None
     )
     assert expected in checked["blocking_reasons"]
     assert checked["satisfies_s25_live_capture"] is False
+
+
+def test_upstream_cadence_gap_is_diagnostic_not_an_unclassified_delivered_callback() -> None:
+    record = exact_record()
+    record["counts"]["cadence_diagnostics"]["upstream_unclassified_cadence_gap_estimate"] = 58
+    pulled_manifest = manifest()
+    pulled_manifest["study_context"]["camera_cadence_diagnostics"] = record["counts"][
+        "cadence_diagnostics"
+    ]
+
+    checked = check_transcript(
+        transcript(record), pulled_manifest, validation_succeeded=True, instrumentation_exit_code=0
+    )
+
+    assert checked["satisfies_s25_live_capture"] is True
+
+
+def test_cadence_diagnostics_must_match_delivered_callback_accounting() -> None:
+    record = exact_record()
+    record["counts"]["cadence_diagnostics"]["delivered_callback_count"] = 9
+
+    checked = check_transcript(
+        transcript(record), manifest(), validation_succeeded=True, instrumentation_exit_code=0
+    )
+
+    assert "camera_cadence_diagnostics_invalid" in checked["blocking_reasons"]
 
 
 def test_validation_and_instrumentation_are_observations_not_caller_verdict() -> None:

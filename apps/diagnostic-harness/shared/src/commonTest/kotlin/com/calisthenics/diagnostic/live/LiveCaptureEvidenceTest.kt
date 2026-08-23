@@ -12,6 +12,9 @@ class LiveCaptureEvidenceTest {
 
         assertEquals(EXACT_ADMITTED_RECORD, rendered)
         assertTrue(rendered.contains("\"sanitized\":true"))
+        assertTrue(rendered.contains("\"delivered_callback_classification_gap\":0"))
+        assertTrue(rendered.contains("\"upstream_unclassified_cadence_gap_estimate\":0"))
+        assertFalse(rendered.contains("\"unclassified_delivered_callbacks\""))
         assertTrue(rendered.contains("\"satisfies_s25_live_capture\":true"))
         assertTrue(liveCaptureBlockingReasons(admittedEvidence()).isEmpty())
     }
@@ -31,7 +34,14 @@ class LiveCaptureEvidenceTest {
             admittedEvidence().copy(counts = admittedEvidence().counts.copy(cameraFramesReceived = 0)) to LIVE_CAPTURE_BLOCK_RECEIVED,
             admittedEvidence().copy(counts = admittedEvidence().counts.copy(inferenceFramesSubmitted = 0)) to LIVE_CAPTURE_BLOCK_SUBMITTED,
             admittedEvidence().copy(counts = admittedEvidence().counts.copy(inferenceRecordsEmitted = 0)) to LIVE_CAPTURE_BLOCK_EMITTED,
-            admittedEvidence().copy(counts = admittedEvidence().counts.copy(unclassifiedDeliveredCallbacks = 1)) to LIVE_CAPTURE_BLOCK_UNCLASSIFIED,
+            admittedEvidence().copy(
+                counts = admittedEvidence().counts.copy(
+                    deliveredCallbackClassificationGap = 1,
+                    cadenceDiagnostics = admittedEvidence().counts.cadenceDiagnostics.copy(
+                        deliveredCallbackClassificationGap = 1,
+                    ),
+                ),
+            ) to LIVE_CAPTURE_BLOCK_CLASSIFICATION_ACCOUNTING,
             admittedEvidence().copy(referenceValidationSucceeded = false) to LIVE_CAPTURE_BLOCK_VALIDATOR,
             admittedEvidence().copy(runFailureCode = LIVE_CAPTURE_BLOCK_TIMEOUT) to LIVE_CAPTURE_BLOCK_TIMEOUT,
             admittedEvidence().copy(runFailureCode = LIVE_CAPTURE_BLOCK_STALL) to LIVE_CAPTURE_BLOCK_STALL,
@@ -97,12 +107,22 @@ class LiveCaptureEvidenceTest {
         ),
         manifestDevice = LiveCaptureManifestDevice("android", "16", "SM-S938B", "s5e9955"),
         camera = LiveCaptureCameraObservation("0", "REALTIME", 146931712, "BT601", "FULL", true, "YUV_420_888"),
-        counts = LiveCaptureCounts(10, 2, 2, 0),
+        counts = LiveCaptureCounts(
+            cameraFramesReceived = 10,
+            inferenceFramesSubmitted = 2,
+            inferenceRecordsEmitted = 2,
+            deliveredCallbackClassificationGap = 0,
+            cadenceDiagnostics = LiveCaptureCadenceDiagnostics.fromAdmittedTimestamps(
+                timestampsNs = (0L..9L).map { it * 33_333_334L },
+                requestedCameraFps = 30,
+                deliveredCallbackClassificationGap = 0,
+            ),
+        ),
         referenceValidationSucceeded = true,
         instrumentationSucceeded = true,
     )
 
     private companion object {
-        const val EXACT_ADMITTED_RECORD = "{\"artifact_schema_version\":\"1.0.0\",\"record_kind\":\"live_capture_device_gate_observation\",\"sanitized\":true,\"contains_landmark_coordinates\":false,\"emitted_by\":\"com.calisthenics.diagnostic.composition.LiveCaptureDeviceGateTest\",\"session_id\":\"00000000-0000-4000-8000-000000000001\",\"environment\":{\"device_class\":\"physical_device\",\"device_identity\":\"samsung/SM-S938B/pa3q/pa3qxins\",\"device_fingerprint\":\"samsung/pa3q/pa3qxins:16/BP1A.250605.004/S938BXXU1: user/release-keys\",\"api_level\":36,\"android_release\":\"16\",\"abi\":\"arm64-v8a\",\"manufacturer\":\"samsung\",\"model\":\"SM-S938B\",\"marketing_name\":\"\",\"chipset\":\"s5e9955\"},\"manifest_device\":{\"platform\":\"android\",\"os_version\":\"16\",\"device_model\":\"SM-S938B\",\"chipset\":\"s5e9955\"},\"camera\":{\"camera_id\":\"0\",\"timestamp_source\":\"REALTIME\",\"source_dataspace_raw\":146931712,\"source_color_standard\":\"BT601\",\"source_color_range\":\"FULL\",\"underlying_image_available\":true,\"pixel_format\":\"YUV_420_888\"},\"counts\":{\"camera_frames_received\":10,\"inference_frames_submitted\":2,\"inference_records_emitted\":2,\"unclassified_delivered_callbacks\":0,\"inference_failures\":0,\"frames_skipped_before_inference\":0,\"frames_skipped_before_inference_by_reason\":{}},\"inference_failure_identities\":[],\"reference_validation_succeeded\":true,\"instrumentation_succeeded\":true,\"run_failure_code\":null,\"run_failure_detail\":null,\"blocking_reasons\":[],\"satisfies_s25_live_capture\":true}"
+        const val EXACT_ADMITTED_RECORD = "{\"artifact_schema_version\":\"1.0.0\",\"record_kind\":\"live_capture_device_gate_observation\",\"sanitized\":true,\"contains_landmark_coordinates\":false,\"emitted_by\":\"com.calisthenics.diagnostic.composition.LiveCaptureDeviceGateTest\",\"session_id\":\"00000000-0000-4000-8000-000000000001\",\"environment\":{\"device_class\":\"physical_device\",\"device_identity\":\"samsung/SM-S938B/pa3q/pa3qxins\",\"device_fingerprint\":\"samsung/pa3q/pa3qxins:16/BP1A.250605.004/S938BXXU1: user/release-keys\",\"api_level\":36,\"android_release\":\"16\",\"abi\":\"arm64-v8a\",\"manufacturer\":\"samsung\",\"model\":\"SM-S938B\",\"marketing_name\":\"\",\"chipset\":\"s5e9955\"},\"manifest_device\":{\"platform\":\"android\",\"os_version\":\"16\",\"device_model\":\"SM-S938B\",\"chipset\":\"s5e9955\"},\"camera\":{\"camera_id\":\"0\",\"timestamp_source\":\"REALTIME\",\"source_dataspace_raw\":146931712,\"source_color_standard\":\"BT601\",\"source_color_range\":\"FULL\",\"underlying_image_available\":true,\"pixel_format\":\"YUV_420_888\"},\"counts\":{\"camera_frames_received\":10,\"inference_frames_submitted\":2,\"inference_records_emitted\":2,\"delivered_callback_classification_gap\":0,\"cadence_diagnostics\":{\"delivered_callback_count\":10,\"first_delivered_capture_timestamp_ns\":0,\"last_delivered_capture_timestamp_ns\":300000006,\"observed_capture_span_ns\":300000006,\"requested_camera_fps\":30,\"requested_callback_opportunities\":10,\"upstream_unclassified_cadence_gap_estimate\":0,\"delivered_callback_classification_gap\":0},\"inference_failures\":0,\"frames_skipped_before_inference\":0,\"frames_skipped_before_inference_by_reason\":{}},\"inference_failure_identities\":[],\"reference_validation_succeeded\":true,\"instrumentation_succeeded\":true,\"run_failure_code\":null,\"run_failure_detail\":null,\"blocking_reasons\":[],\"satisfies_s25_live_capture\":true}"
     }
 }

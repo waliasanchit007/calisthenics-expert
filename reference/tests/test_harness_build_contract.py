@@ -232,6 +232,20 @@ def test_live_capture_gate_binds_runtime_manifest_and_runs_instrumentation_contr
             / "androidApp/src/main/kotlin/com/calisthenics/diagnostic/camera/CameraXFrameSource.kt"
         ).read_text()
     )
+    camera_source = (
+        HARNESS
+        / "androidApp/src/main/kotlin/com/calisthenics/diagnostic/camera/CameraXFrameSource.kt"
+    ).read_text()
+    assert "ResolutionSelector.Builder()" in camera_source, (
+        "catches CameraX analysis no longer requesting the nominal 1280x720 resolution"
+    )
+    assert "FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER" in camera_source, (
+        "catches the nominal analysis resolution losing its explicit supported fallback"
+    )
+    assert "resolutionInfo" in camera_source and "onSourceStarted" in camera_source, (
+        "catches the source recording the requested dimensions instead of the bound use case's "
+        "negotiated resolution"
+    )
     assert "achievedInferenceFpsTimeseriesOf" in composition
     assert "achievedInferenceFpsTimeseries = listOf(CadenceSample(0L, 0.0))" not in composition
     assert "grantRuntimePermission" in live_test
@@ -295,6 +309,69 @@ def test_live_construction_stages_distinct_live_descriptor_for_the_same_model_as
     assert 'context.assets.open("replay/live_model_provenance.json")' in composition
     assert "requireLiveModelProvenance(replayProvenance, liveProvenance)" in composition
     assert 'staged.resolve("live_model_provenance.json")' in build
+
+
+def test_yuv_hot_loop_has_no_per_pixel_pair_coordinate_allocation() -> None:
+    converter = (
+        HARNESS / "shared/src/commonMain/kotlin/com/calisthenics/diagnostic/preprocessing/Yuv420.kt"
+    ).read_text()
+
+    assert "private fun sourceCoordinate" not in converter, (
+        "catches the YUV conversion hot loop returning a Pair for every output pixel"
+    )
+
+
+def test_camera_source_fences_startup_before_exactly_once_analyzer_shutdown() -> None:
+    source = (
+        HARNESS
+        / "androidApp/src/main/kotlin/com/calisthenics/diagnostic/camera/CameraXFrameSource.kt"
+    ).read_text()
+
+    assert "CameraXSourceLifecycle" in source, (
+        "catches the source losing its startup/stop fence around asynchronous provider completion"
+    )
+    assert "useCase.clearAnalyzer()" in source, (
+        "catches stop leaving CameraX's analyzer attached during owned-use-case cleanup"
+    )
+    assert "analyzerExecutor.shutdown()" in source, (
+        "catches the owned analyzer executor leaking after terminal source stop"
+    )
+    assert "providerCompletionExecutor" in source, (
+        "catches provider completion being queued onto the analyzer executor after it is stopped"
+    )
+
+
+def test_live_capture_records_real_thermal_and_cadence_diagnostics() -> None:
+    composition = (
+        HARNESS
+        / "androidApp/src/main/kotlin/com/calisthenics/diagnostic/composition/LiveCameraComposition.kt"
+    ).read_text()
+    thermal = (
+        HARNESS
+        / "androidApp/src/main/kotlin/com/calisthenics/diagnostic/thermal/AndroidLiveThermalProbe.kt"
+    )
+    app = (
+        HARNESS / "composeApp/src/commonMain/kotlin/com/calisthenics/diagnostic/ui/HarnessApp.kt"
+    ).read_text()
+    device_gate = (
+        HARNESS
+        / "androidApp/src/androidTest/kotlin/com/calisthenics/diagnostic/composition/LiveCaptureDeviceGateTest.kt"
+    ).read_text()
+
+    assert thermal.is_file(), "catches the Android thermal API port being omitted"
+    assert "getCurrentThermalStatus" in thermal.read_text()
+    assert "addThermalStatusListener" in thermal.read_text()
+    assert "thermalApiAvailable = false" not in composition, (
+        "catches an available Android thermal API being recorded as unavailable"
+    )
+    assert "thermal_observations" in composition, "catches manifest thermal samples being omitted"
+    assert "camera_cadence_diagnostics" in composition, (
+        "catches manifest cadence diagnostics being omitted"
+    )
+    assert "configured camera FPS" in app
+    assert "latest inference latency" in app
+    assert "latest thermal" in app
+    assert "MINIMUM_CAPTURE_SPAN_NANOS" in device_gate
 
 
 def test_camera_probe_admission_rule_has_exactly_one_home() -> None:

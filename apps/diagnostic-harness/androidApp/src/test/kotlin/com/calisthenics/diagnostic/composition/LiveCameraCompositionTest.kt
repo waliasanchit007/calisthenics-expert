@@ -12,6 +12,12 @@ import com.calisthenics.diagnostic.session.InferencePort
 import com.calisthenics.diagnostic.session.InferenceResult
 import com.calisthenics.diagnostic.session.SessionFinalizer
 import com.calisthenics.diagnostic.session.SessionRunnerSnapshot
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.long
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
@@ -24,6 +30,7 @@ import org.junit.Test
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.system.measureTimeMillis
 
 class LiveCameraCompositionTest {
     @Test
@@ -160,6 +167,37 @@ class LiveCameraCompositionTest {
     }
 
     @Test
+    fun unavailableThermalApiFailsClosedBeforeSourceOrSessionCreation() {
+        val harness = Harness(thermalAvailable = false)
+
+        val result = assertIs<LiveCameraStartResult.Unavailable>(harness.composition.start(10))
+
+        assertEquals("thermal_api_unavailable", result.reason.code)
+        assertEquals(1, harness.scheduler.shutdownCount)
+        assertEquals(0, harness.sourceCreations)
+        assertEquals(0, harness.inferenceCreations)
+    }
+
+    @Test
+    fun finalManifestRecordsSessionRelativeThermalObservations() {
+        withHarness(Harness(invokeManifestAtFinalization = true)) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            harness.thermal.emit(status = 3, nowNs = 2_000L)
+            harness.source.emit(frame(timestampNs = 1_000_002_000L))
+            harness.inference.completeSuccess()
+            harness.composition.stop()
+
+            val thermal = assertIs<JsonObject>(assertNotNull(harness.finalizedManifest)
+                .studyContext.getValue("thermal_observations"))
+            assertEquals(true, thermal["api_available"]?.jsonPrimitive?.boolean)
+            val samples = thermal["samples"]?.jsonArray ?: fail("missing thermal samples")
+            assertEquals(2, samples.size)
+            assertEquals(0L, samples.first().jsonObject["t_monotonic_ns"]?.jsonPrimitive?.long)
+            assertEquals(2_000L, samples.last().jsonObject["t_monotonic_ns"]?.jsonPrimitive?.long)
+        }
+    }
+
+    @Test
     fun everyDeliveredFrameHasExactlyOneSubmitOrSkipClassification() {
         withHarness(Harness()) { harness ->
             assertIs<LiveCameraStartResult.Started>(harness.start(10))
@@ -185,6 +223,52 @@ class LiveCameraCompositionTest {
                 ),
                 snapshot.counts.framesSkippedBeforeInferenceByReason,
             )
+            assertEquals(1, harness.inference.submissionCount)
+        }
+    }
+
+    @Test
+    fun backpressureSkipDoesNotRunTheLargeFrameConverter() {
+        val largeResolution = LiveSourceResolution(4_000, 3_000)
+        withHarness(Harness(sourceResolution = largeResolution)) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+
+            harness.source.emit(largeFrame(timestampNs = 1_000_002_000L))
+            val skippedFrame = largeFrame(timestampNs = 1_100_002_000L)
+            val elapsedMillis = measureTimeMillis {
+                harness.source.emit(skippedFrame)
+            }
+
+            val snapshot = assertNotNull(harness.composition.snapshot())
+            assertTrue(elapsedMillis < 10L, "backpressure skip took ${elapsedMillis}ms")
+            assertEquals(2L, snapshot.counts.cameraFramesReceived)
+            assertEquals(1L, snapshot.counts.inferenceFramesSubmitted)
+            assertEquals(1L, snapshot.counts.framesSkippedBeforeInference)
+            assertEquals(1L, snapshot.counts.framesSkippedBeforeInferenceByReason.getValue("backpressure"))
+            assertEquals(0L, snapshot.counts.framesSkippedBeforeInferenceByReason.getValue("preprocessing_failed"))
+            assertEquals(1, harness.inference.submissionCount)
+        }
+    }
+
+    @Test
+    fun cadenceSkipDoesNotRunTheLargeFrameConverter() {
+        val largeResolution = LiveSourceResolution(4_000, 3_000)
+        withHarness(Harness(sourceResolution = largeResolution)) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(30))
+
+            harness.source.emit(largeFrame(timestampNs = 1_000_002_000L))
+            harness.inference.completeSuccess()
+            val skippedFrame = largeFrame(timestampNs = 1_010_002_000L)
+            val elapsedMillis = measureTimeMillis {
+                harness.source.emit(skippedFrame)
+            }
+
+            val snapshot = assertNotNull(harness.composition.snapshot())
+            assertTrue(elapsedMillis < 10L, "cadence skip took ${elapsedMillis}ms")
+            assertEquals(2L, snapshot.counts.cameraFramesReceived)
+            assertEquals(1L, snapshot.counts.inferenceFramesSubmitted)
+            assertEquals(1L, snapshot.counts.framesSkippedBeforeInference)
+            assertEquals(1L, snapshot.counts.framesSkippedBeforeInferenceByReason.getValue("cadence_selection"))
             assertEquals(1, harness.inference.submissionCount)
         }
     }
@@ -327,6 +411,30 @@ class LiveCameraCompositionTest {
     }
 
     @Test
+    fun manifestSeparatesDeliveredCallbackAccountingFromRequestedCameraCadenceEstimate() {
+        withHarness(Harness(invokeManifestAtFinalization = true)) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            harness.source.emit(frame(timestampNs = 1_000_002_000L))
+            harness.inference.completeSuccess()
+            harness.inference.callbackNowNs = 2_000_005_000L
+            harness.source.emit(frame(timestampNs = 2_000_002_000L))
+            harness.inference.completeSuccess()
+            harness.inference.callbackNowNs = 3_000_005_000L
+            harness.source.emit(frame(timestampNs = 3_000_002_000L))
+            harness.inference.completeSuccess()
+            harness.composition.stop()
+
+            val manifest = assertNotNull(harness.finalizedManifest)
+            val diagnostics = assertIs<JsonObject>(assertNotNull(manifest.studyContext["camera_cadence_diagnostics"]))
+            assertEquals(3L, diagnostics["delivered_callback_count"]?.jsonPrimitive?.long)
+            assertEquals(2_000_000_000L, diagnostics["observed_capture_span_ns"]?.jsonPrimitive?.long)
+            assertEquals(61L, diagnostics["requested_callback_opportunities"]?.jsonPrimitive?.long)
+            assertEquals(58L, diagnostics["upstream_unclassified_cadence_gap_estimate"]?.jsonPrimitive?.long)
+            assertEquals(0L, diagnostics["delivered_callback_classification_gap"]?.jsonPrimitive?.long)
+        }
+    }
+
+    @Test
     fun manifestPinsWallClockStartAndFinalizationTimes() {
         val wallTimes = ArrayDeque(listOf("session-start", "session-end"))
         withHarness(
@@ -336,6 +444,8 @@ class LiveCameraCompositionTest {
             ),
         ) { harness ->
             assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            harness.source.emit(frame(timestampNs = 1_000_002_000L))
+            harness.inference.completeSuccess()
             harness.composition.stop()
 
             val finalized = assertNotNull(harness.finalizedManifest)
@@ -346,20 +456,64 @@ class LiveCameraCompositionTest {
 
     @Test
     fun rotationMirroringAndScalePadAreAppliedAndManifestSeparatesDimensions() {
-        withHarness(Harness(modelInputWidth = 2, modelInputHeight = 2)) { harness ->
+        withHarness(
+            Harness(
+                modelInputWidth = 2,
+                modelInputHeight = 2,
+                sourceResolution = LiveSourceResolution(2, 4),
+                invokeManifestAtFinalization = true,
+            ),
+        ) { harness ->
             assertIs<LiveCameraStartResult.Started>(harness.start(10))
             harness.source.emit(frame(width = 2, height = 4, rotation = FrameRotation.R90, mirrored = true))
+            harness.inference.completeSuccess()
+            harness.composition.stop()
+
             assertEquals(1, harness.inference.submissionCount)
             assertEquals(12, harness.inference.lastInput!!.size)
-            val manifest = assertNotNull(harness.composition.manifest())
+            val manifest = assertNotNull(harness.finalizedManifest)
             assertEquals(2, manifest.camera.captureWidth)
             assertEquals(4, manifest.camera.captureHeight)
+            assertEquals(90, manifest.camera.orientationDegrees)
+            assertTrue(manifest.camera.mirrored)
             assertEquals(2, manifest.modelInput.modelInputWidth)
             assertEquals(2, manifest.modelInput.modelInputHeight)
             assertEquals("live_conformance", manifest.sessionKind)
             assertEquals("live_stream", manifest.posePipeline.runningMode)
             assertEquals("mediapipe_pose_landmarker", manifest.posePipeline.backendName)
             assertTrue(manifest.studyContext.containsKey("mediapipe_construction_evidence"))
+        }
+    }
+
+    @Test
+    fun geometryChangeAfterTheFirstAdmittedFrameIsRejectedBeforeInference() {
+        withHarness(Harness()) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            harness.source.emit(frame(timestampNs = 1_000_002_000L, rotation = FrameRotation.R90, mirrored = true))
+            harness.inference.completeSuccess()
+
+            harness.inference.callbackNowNs = 1_100_005_000L
+            harness.source.emit(frame(timestampNs = 1_100_002_000L, rotation = FrameRotation.R0, mirrored = false))
+
+            val snapshot = assertNotNull(harness.composition.snapshot())
+            assertEquals(2L, snapshot.counts.cameraFramesReceived)
+            assertEquals(1L, snapshot.counts.inferenceFramesSubmitted)
+            assertEquals(1L, snapshot.counts.framesSkippedBeforeInference)
+            assertEquals(1L, snapshot.counts.framesSkippedBeforeInferenceByReason.getValue("preprocessing_failed"))
+            assertEquals(1, harness.inference.submissionCount)
+        }
+    }
+
+    @Test
+    fun zeroFrameLiveSessionFailsFinalizationRatherThanPublishingTemplateGeometry() {
+        withHarness(Harness(invokeManifestAtFinalization = true)) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+
+            val completion = harness.composition.stop()
+
+            val failure = assertIs<FinalizationResult.Failed>(completion.finalization)
+            assertEquals("finalization_failed", failure.failureCode)
+            assertTrue(failure.detail.contains("source_geometry_not_observed"))
         }
     }
 
@@ -414,6 +568,8 @@ class LiveCameraCompositionTest {
         }
         try {
             assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            harness.source.emit(frame(timestampNs = 1_000_002_000L))
+            harness.inference.completeSuccess()
             stopThread.start()
 
             assertTrue(stopReturned.await(1, TimeUnit.SECONDS), "stop/finalization deadlocked")
@@ -556,12 +712,15 @@ class LiveCameraCompositionTest {
         beforeSourceStart: () -> Unit = {},
         blockSourceStart: Boolean = false,
         runNonPositiveSchedulerActions: Boolean = true,
+        sourceResolution: LiveSourceResolution = LiveSourceResolution(2, 2),
+        thermalAvailable: Boolean = true,
     ) {
         val events = mutableListOf<String>()
         val inference = FakeInference(events)
         private val fallbackClock = FakeClock(clockNowNs)
         val clock = clockOverride ?: fallbackClock
         val scheduler = FakeScheduler(events, runNonPositiveSchedulerActions)
+        val thermal = FakeThermalProbe(thermalAvailable)
         val source = FakeSource(
             advanceClock = onFrameTimestamp ?: { timestampNs ->
                 fallbackClock.value = maxOf(fallbackClock.value, timestampNs + 1_000L)
@@ -569,6 +728,7 @@ class LiveCameraCompositionTest {
             events = events,
             startFailure = sourceStartFailure,
             blockStart = blockSourceStart,
+            sourceResolution = sourceResolution,
         )
         var sourceCreations = 0
         var inferenceCreations = 0
@@ -597,6 +757,7 @@ class LiveCameraCompositionTest {
                     inferenceCreations++
                     LiveInference(inference, inference, constructionEvidence)
                 },
+                thermalProbeFactory = { thermal },
                 sessionFinalizerFactory = { template, manifestAtFinalization ->
                     finalizerFailure?.let { throw it }
                     finalizerCreated = true
@@ -644,6 +805,7 @@ class LiveCameraCompositionTest {
         private val events: MutableList<String>,
         private val startFailure: Throwable?,
         private val blockStart: Boolean,
+        private val sourceResolution: LiveSourceResolution,
     ) : LiveFrameSource {
         private var callback: ((OwnedYuvFrame) -> Unit)? = null
         @Volatile var stopped = false
@@ -654,12 +816,17 @@ class LiveCameraCompositionTest {
         val allowStart = CountDownLatch(1)
         var onStopFrame: (() -> OwnedYuvFrame)? = null
 
-        override fun start(onFrame: (OwnedYuvFrame) -> Unit, onFailure: (Throwable) -> Unit) {
+        override fun start(
+            onSourceStarted: (LiveSourceResolution) -> Unit,
+            onFrame: (OwnedYuvFrame) -> Unit,
+            onFailure: (Throwable) -> Unit,
+        ) {
             startCount++
             events += "source.start.entered"
             startEntered.countDown()
             if (blockStart) check(allowStart.await(1, TimeUnit.SECONDS))
             startFailure?.let { throw it }
+            onSourceStarted(sourceResolution)
             callback = onFrame
             active = true
             events += "source.start.completed"
@@ -713,6 +880,34 @@ class LiveCameraCompositionTest {
         }
 
         fun awaitDisposed(): Boolean = disposed.await(1, TimeUnit.SECONDS)
+    }
+
+    private class FakeThermalProbe(
+        override val available: Boolean,
+    ) : LiveThermalProbe {
+        private var nowNs: (() -> Long)? = null
+        private val samples = mutableListOf<LiveThermalObservation>()
+        var disposeCount = 0
+        override val unavailableReason: String?
+            get() = if (available) null else "thermal_api_unavailable"
+
+        override fun start(nowNs: () -> Long) {
+            check(available) { "thermal_api_unavailable" }
+            this.nowNs = nowNs
+            samples += LiveThermalObservation(nowNs(), 0)
+        }
+
+        fun emit(status: Int, nowNs: Long) {
+            check(this.nowNs != null) { "thermal probe not started" }
+            samples += LiveThermalObservation(nowNs, status)
+        }
+
+        override fun observations(): List<LiveThermalObservation> = samples.toList()
+
+        override fun dispose() {
+            disposeCount++
+            nowNs = null
+        }
     }
 
     private class FakeScheduler(
@@ -884,5 +1079,31 @@ class LiveCameraCompositionTest {
             colorRange = YuvColorRange.FULL,
             timestampNs = timestampNs,
         )
+
+        fun largeFrame(timestampNs: Long): OwnedYuvFrame {
+            val width = 4_000
+            val height = 3_000
+            val chromaWidth = (width + 1) / 2
+            val chromaHeight = (height + 1) / 2
+            return OwnedYuvFrame(
+                yBytes = ByteArray(width * height) { 100.toByte() },
+                yRowStride = width,
+                yPixelStride = 1,
+                uBytes = ByteArray(chromaWidth * chromaHeight) { 128.toByte() },
+                uRowStride = chromaWidth,
+                uPixelStride = 1,
+                vBytes = ByteArray(chromaWidth * chromaHeight) { 128.toByte() },
+                vRowStride = chromaWidth,
+                vPixelStride = 1,
+                width = width,
+                height = height,
+                rotation = FrameRotation.R0,
+                mirrored = false,
+                rawDataSpace = OwnedYuvFrame.ADMITTED_RAW_DATASPACE,
+                colorStandard = YuvColorStandard.BT601,
+                colorRange = YuvColorRange.FULL,
+                timestampNs = timestampNs,
+            )
+        }
     }
 }

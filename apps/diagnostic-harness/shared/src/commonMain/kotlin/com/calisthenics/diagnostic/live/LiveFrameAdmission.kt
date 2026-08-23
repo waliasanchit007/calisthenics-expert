@@ -18,22 +18,37 @@ class LiveFrameAdmission(configuredFps: Int) {
     private val minimumIntervalNs = 1_000_000_000L / configuredFps
     private var lastSelectedTimestampNs: Long? = null
     private var submissionInFlight = false
+    private var candidateTimestampNs: Long? = null
     private var stopping = false
 
-    fun classify(captureTimestampNs: Long, preprocessingSucceeded: Boolean = true): LiveFrameClassification {
+    /** Cheaply reserves the sole prospective inference slot before preprocessing. */
+    fun reserve(captureTimestampNs: Long): LiveFrameClassification {
         require(captureTimestampNs >= 0L) { "captureTimestampNs must be non-negative" }
         if (stopping) return LiveFrameClassification.SESSION_STOPPING
-        if (submissionInFlight) return LiveFrameClassification.BACKPRESSURE
+        if (submissionInFlight || candidateTimestampNs != null) return LiveFrameClassification.BACKPRESSURE
 
         val previous = lastSelectedTimestampNs
         if (previous != null && captureTimestampNs - previous < minimumIntervalNs) {
             return LiveFrameClassification.CADENCE_SELECTION
         }
-        if (!preprocessingSucceeded) return LiveFrameClassification.PREPROCESSING_FAILED
+        candidateTimestampNs = captureTimestampNs
+        return LiveFrameClassification.SUBMIT
+    }
 
-        lastSelectedTimestampNs = captureTimestampNs
+    /** Commits a reserved candidate after preprocessing, or releases it with one terminal skip. */
+    fun commitCandidate(preprocessingSucceeded: Boolean): LiveFrameClassification {
+        val timestamp = checkNotNull(candidateTimestampNs) { "no candidate is reserved" }
+        candidateTimestampNs = null
+        if (stopping) return LiveFrameClassification.SESSION_STOPPING
+        if (!preprocessingSucceeded) return LiveFrameClassification.PREPROCESSING_FAILED
+        lastSelectedTimestampNs = timestamp
         submissionInFlight = true
         return LiveFrameClassification.SUBMIT
+    }
+
+    fun classify(captureTimestampNs: Long, preprocessingSucceeded: Boolean = true): LiveFrameClassification {
+        val reservation = reserve(captureTimestampNs)
+        return if (reservation == LiveFrameClassification.SUBMIT) commitCandidate(preprocessingSucceeded) else reservation
     }
 
     fun completeSubmission() {

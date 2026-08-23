@@ -136,7 +136,14 @@ def _intrinsic_blocking_reasons(record: dict) -> list[str]:
     for key, reason in count_reason.items():
         if not isinstance(counts.get(key), int) or counts[key] <= 0:
             reasons.append(reason)
-    if counts.get("unclassified_delivered_callbacks") != 0:
+    # New records distinguish exact accounting of delivered analyzer callbacks from the
+    # requested-camera-rate estimate. Old, already-recorded evidence remains readable.
+    if "delivered_callback_classification_gap" in counts:
+        if counts.get("delivered_callback_classification_gap") != 0:
+            reasons.append("delivered_callback_classification_gap")
+        if not _cadence_diagnostics_are_consistent(counts):
+            reasons.append("camera_cadence_diagnostics_invalid")
+    elif counts.get("unclassified_delivered_callbacks") != 0:
         reasons.append("unclassified_delivered_callbacks")
 
     failure_code = record.get("run_failure_code")
@@ -152,6 +159,45 @@ def _intrinsic_blocking_reasons(record: dict) -> list[str]:
     ):
         reasons.append(_UNSANITIZED_FAILURE_DETAIL)
     return list(dict.fromkeys(reasons))
+
+
+def _is_nonnegative_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _cadence_diagnostics_are_consistent(counts: dict) -> bool:
+    diagnostics = counts.get("cadence_diagnostics")
+    if not isinstance(diagnostics, dict):
+        return False
+    delivered = diagnostics.get("delivered_callback_count")
+    requested_fps = diagnostics.get("requested_camera_fps")
+    opportunities = diagnostics.get("requested_callback_opportunities")
+    upstream_gap = diagnostics.get("upstream_unclassified_cadence_gap_estimate")
+    classification_gap = diagnostics.get("delivered_callback_classification_gap")
+    if (
+        not _is_nonnegative_int(delivered)
+        or not isinstance(requested_fps, int)
+        or isinstance(requested_fps, bool)
+        or requested_fps <= 0
+        or not _is_nonnegative_int(opportunities)
+        or not _is_nonnegative_int(upstream_gap)
+        or not _is_nonnegative_int(classification_gap)
+        or delivered != counts.get("camera_frames_received")
+        or classification_gap != counts.get("delivered_callback_classification_gap")
+    ):
+        return False
+
+    first = diagnostics.get("first_delivered_capture_timestamp_ns")
+    last = diagnostics.get("last_delivered_capture_timestamp_ns")
+    span = diagnostics.get("observed_capture_span_ns")
+    if delivered == 0:
+        return first is None and last is None and span is None and opportunities == 0
+    if not all(_is_nonnegative_int(value) for value in (first, last, span)):
+        return False
+    if last < first or span != last - first:
+        return False
+    expected_opportunities = (span * requested_fps) // 1_000_000_000 + 1
+    return opportunities == expected_opportunities
 
 
 def _manifest_blocking_reasons(record: dict, manifest: dict) -> list[str]:
@@ -186,6 +232,13 @@ def _manifest_blocking_reasons(record: dict, manifest: dict) -> list[str]:
     if actual_camera.get("requested_camera_fps") != 30.0:
         reasons.append("manifest_camera_fps_mismatch")
 
+    counts = record.get("counts", {})
+    diagnostics = counts.get("cadence_diagnostics")
+    if diagnostics is not None and manifest.get("study_context", {}).get(
+        "camera_cadence_diagnostics"
+    ) != diagnostics:
+        reasons.append("manifest_cadence_diagnostics_mismatch")
+
     cadence = manifest.get("cadence", {})
     if cadence.get("configured_inference_fps") != 10.0:
         reasons.append("manifest_configured_fps_mismatch")
@@ -214,7 +267,6 @@ def _manifest_blocking_reasons(record: dict, manifest: dict) -> list[str]:
                 reasons.append("manifest_cadence_invalid")
                 break
 
-    counts = record.get("counts", {})
     manifest_counts = manifest.get("counts", {})
     count_fields = (
         "camera_frames_received",

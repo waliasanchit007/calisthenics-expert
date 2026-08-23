@@ -7,6 +7,33 @@ import org.junit.Test
 
 class CameraXFrameSourceLifecycleTest {
     @Test
+    fun immediateStopFencesProviderCompletionAndShutsAnalyzerOnce() {
+        val harness = SourceHarness()
+        val generation = harness.lifecycle.begin()
+
+        harness.lifecycle.stop()
+
+        assertFalse(harness.lifecycle.complete(generation, "provider", "use-case") { harness.configured += 1 })
+        assertEquals(0, harness.configured)
+        assertEquals(listOf("provider/use-case"), harness.cleaned)
+        assertEquals(1, harness.shutdowns)
+    }
+
+    @Test
+    fun normalStopClearsOwnedAnalyzerBeforeExactlyOnceShutdown() {
+        val harness = SourceHarness()
+        val generation = harness.lifecycle.begin()
+        assertTrue(harness.lifecycle.complete(generation, "provider", "use-case") { harness.configured += 1 })
+
+        harness.lifecycle.stop()
+        harness.lifecycle.stop()
+
+        assertEquals(1, harness.configured)
+        assertEquals(listOf("provider/use-case"), harness.cleaned)
+        assertEquals(1, harness.shutdowns)
+    }
+
+    @Test
     fun stopBeforeAsyncCompletionMakesOldGenerationInactiveAndCleansItsUseCase() {
         val harness = Harness()
         val generation = harness.gate.begin()
@@ -60,5 +87,15 @@ class CameraXFrameSourceLifecycleTest {
         val gate = CameraXLifecycleGeneration<String, String> { provider, useCase ->
             unbound += "$provider/$useCase"
         }
+    }
+
+    private class SourceHarness {
+        val cleaned = mutableListOf<String>()
+        var configured = 0
+        var shutdowns = 0
+        val lifecycle = CameraXSourceLifecycle<String, String>(
+            cleanupUseCase = { provider, useCase -> cleaned += "$provider/$useCase" },
+            shutdownAnalyzer = { shutdowns += 1 },
+        )
     }
 }

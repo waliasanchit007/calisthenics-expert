@@ -30,6 +30,13 @@ class CapabilityTest {
 
         assertTrue(canStart(HarnessMode.LIVE, capabilities, sessionActive = false))
         assertFalse(
+            canStart(
+                HarnessMode.LIVE,
+                capabilities.filterNot { it.id == CapabilityId.THERMAL_API },
+                sessionActive = false,
+            ),
+        )
+        assertFalse(
             canStart(HarnessMode.LIVE, capabilities.replaceState(CapabilityId.TIMESTAMP_COMPARABILITY, CapabilityState.Unknown("timestamp source not probed")), sessionActive = false),
         )
         assertFalse(

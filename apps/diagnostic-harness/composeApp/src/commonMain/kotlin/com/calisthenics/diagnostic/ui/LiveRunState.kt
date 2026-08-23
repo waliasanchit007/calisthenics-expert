@@ -16,6 +16,12 @@ sealed interface LiveRunPhase {
         val inferenceRecordsEmitted: Long,
         val framesSkippedBeforeInference: Long,
         val inferenceFailures: Long,
+        val configuredCameraFps: Int = 30,
+        val deliveredCallbackCount: Long = cameraFramesReceived,
+        val latestInferenceLatencyNs: Long? = null,
+        val latestThermalStatus: Int? = null,
+        val latestThermalObservedAtNs: Long? = null,
+        val thermalUnavailableReason: String? = null,
     ) : LiveRunPhase
 
     data class Completed(

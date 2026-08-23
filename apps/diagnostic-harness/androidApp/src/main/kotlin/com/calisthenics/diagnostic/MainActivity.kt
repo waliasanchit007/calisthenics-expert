@@ -36,6 +36,7 @@ import com.calisthenics.diagnostic.probe.StorageProbeOutcome
 import com.calisthenics.diagnostic.replay.CameraCapabilityObservation
 import com.calisthenics.diagnostic.session.FinalizationResult
 import com.calisthenics.diagnostic.session.SessionRunnerSnapshot
+import com.calisthenics.diagnostic.thermal.AndroidLiveThermalProbe
 import com.calisthenics.diagnostic.ui.HarnessApp
 import com.calisthenics.diagnostic.ui.HarnessUiState
 import com.calisthenics.diagnostic.ui.LiveRunPhase
@@ -198,7 +199,14 @@ class MainActivity : ComponentActivity() {
                             }
                             liveComposition = composition
                             when (val started = withContext(Dispatchers.IO) {
-                                composition.start(state.selectedLiveFps.value) { snapshot -> state = state.copy(liveRunPhase = snapshot.toLiveRunning(state.selectedLiveFps.value)) }
+                                composition.start(state.selectedLiveFps.value) { snapshot ->
+                                    state = state.copy(
+                                        liveRunPhase = snapshot.toLiveRunning(
+                                            fps = state.selectedLiveFps.value,
+                                            composition = composition,
+                                        ),
+                                    )
+                                }
                             }) {
                                 is LiveCameraStartResult.Unavailable -> {
                                     composition.abandon()
@@ -217,10 +225,28 @@ class MainActivity : ComponentActivity() {
 
     private fun initialState(): HarnessUiState {
         val permissionGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        val thermalProbe = AndroidLiveThermalProbe.from(applicationContext)
         return HarnessUiState(
             platform = "Android",
             capabilities = requiredLiveCapabilities().map { id ->
-                Capability(id, if (id == CapabilityId.CAMERA_PERMISSION && permissionGranted) CapabilityState.Available else if (id == CapabilityId.CAMERA_PERMISSION) CapabilityState.Unavailable("camera_permission_denied") else CapabilityState.Unknown("capability probe pending"))
+                Capability(
+                    id,
+                    when (id) {
+                        CapabilityId.CAMERA_PERMISSION -> if (permissionGranted) {
+                            CapabilityState.Available
+                        } else {
+                            CapabilityState.Unavailable("camera_permission_denied")
+                        }
+
+                        CapabilityId.THERMAL_API -> if (thermalProbe.available) {
+                            CapabilityState.Available
+                        } else {
+                            CapabilityState.Unavailable(thermalProbe.unavailableReason ?: "thermal_api_unavailable")
+                        }
+
+                        else -> CapabilityState.Unknown("capability probe pending")
+                    },
+                )
             },
             selectedMode = HarnessMode.REPLAY,
             sessionActive = false,
@@ -230,7 +256,27 @@ class MainActivity : ComponentActivity() {
 
 private fun SessionRunnerSnapshot.toReplayRunning() = ReplayRunPhase.Running(counts.inferenceFramesSubmitted, counts.inferenceRecordsEmitted, counts.poseDetectedRecords)
 
-private fun SessionRunnerSnapshot.toLiveRunning(fps: Int) = LiveRunPhase.Running(fps, counts.cameraFramesReceived, counts.inferenceFramesSubmitted, counts.inferenceRecordsEmitted, counts.framesSkippedBeforeInference, counts.inferenceFailures)
+private fun SessionRunnerSnapshot.toLiveRunning(
+    fps: Int,
+    composition: LiveCameraComposition,
+): LiveRunPhase.Running {
+    val latestRecord = records.lastOrNull()
+    val latestThermal = composition.latestThermalObservation()
+    return LiveRunPhase.Running(
+        configuredInferenceFps = fps,
+        cameraFramesReceived = counts.cameraFramesReceived,
+        inferenceFramesSubmitted = counts.inferenceFramesSubmitted,
+        inferenceRecordsEmitted = counts.inferenceRecordsEmitted,
+        framesSkippedBeforeInference = counts.framesSkippedBeforeInference,
+        inferenceFailures = counts.inferenceFailures,
+        configuredCameraFps = 30,
+        deliveredCallbackCount = counts.cameraFramesReceived,
+        latestInferenceLatencyNs = latestRecord?.let { it.inferenceEndNs - it.inferenceStartNs },
+        latestThermalStatus = latestThermal?.status,
+        latestThermalObservedAtNs = latestThermal?.tMonotonicNs,
+        thermalUnavailableReason = null,
+    )
+}
 
 private fun LiveCameraCompletion.toLivePhase(): LiveRunPhase = when (val result = finalization) {
     is FinalizationResult.Published -> LiveRunPhase.Completed(sessionId.value, true, snapshot.counts.inferenceRecordsEmitted, snapshot.counts.framesSkippedBeforeInference, snapshot.counts.inferenceFailures)

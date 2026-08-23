@@ -24,7 +24,8 @@ const val LIVE_CAPTURE_BLOCK_PIXEL_FORMAT = "pixel_format_not_yuv_420_888"
 const val LIVE_CAPTURE_BLOCK_RECEIVED = "camera_frames_not_received"
 const val LIVE_CAPTURE_BLOCK_SUBMITTED = "inference_frames_not_submitted"
 const val LIVE_CAPTURE_BLOCK_EMITTED = "inference_records_not_emitted"
-const val LIVE_CAPTURE_BLOCK_UNCLASSIFIED = "unclassified_delivered_callbacks"
+const val LIVE_CAPTURE_BLOCK_CLASSIFICATION_ACCOUNTING = "delivered_callback_classification_gap"
+const val LIVE_CAPTURE_BLOCK_CADENCE_DIAGNOSTICS = "camera_cadence_diagnostics_invalid"
 const val LIVE_CAPTURE_BLOCK_VALIDATOR = "reference_validation_failed"
 const val LIVE_CAPTURE_BLOCK_INSTRUMENTATION = "instrumentation_failed"
 const val LIVE_CAPTURE_BLOCK_TIMEOUT = "live_capture_timeout"
@@ -75,7 +76,12 @@ data class LiveCaptureCounts(
     val cameraFramesReceived: Long,
     val inferenceFramesSubmitted: Long,
     val inferenceRecordsEmitted: Long,
-    val unclassifiedDeliveredCallbacks: Long,
+    /**
+     * Identity check for delivered analyzer callbacks only. It deliberately excludes the
+     * requested-versus-delivered upstream cadence estimate.
+     */
+    val deliveredCallbackClassificationGap: Long,
+    val cadenceDiagnostics: LiveCaptureCadenceDiagnostics,
     val inferenceFailures: Long = 0L,
     val framesSkippedBeforeInference: Long = 0L,
     val framesSkippedBeforeInferenceByReason: Map<String, Long> = emptyMap(),
@@ -143,7 +149,12 @@ fun liveCaptureBlockingReasons(evidence: LiveCaptureEvidence): List<String> {
     if (counts.cameraFramesReceived <= 0L) reasons += LIVE_CAPTURE_BLOCK_RECEIVED
     if (counts.inferenceFramesSubmitted <= 0L) reasons += LIVE_CAPTURE_BLOCK_SUBMITTED
     if (counts.inferenceRecordsEmitted <= 0L) reasons += LIVE_CAPTURE_BLOCK_EMITTED
-    if (counts.unclassifiedDeliveredCallbacks != 0L) reasons += LIVE_CAPTURE_BLOCK_UNCLASSIFIED
+    if (counts.deliveredCallbackClassificationGap != 0L) {
+        reasons += LIVE_CAPTURE_BLOCK_CLASSIFICATION_ACCOUNTING
+    }
+    if (!counts.cadenceDiagnostics.isInternallyConsistentWith(counts)) {
+        reasons += LIVE_CAPTURE_BLOCK_CADENCE_DIAGNOSTICS
+    }
     if (!evidence.referenceValidationSucceeded) reasons += LIVE_CAPTURE_BLOCK_VALIDATOR
     when (evidence.runFailureCode) {
         LIVE_CAPTURE_BLOCK_TIMEOUT -> reasons += LIVE_CAPTURE_BLOCK_TIMEOUT
@@ -199,7 +210,8 @@ fun renderLiveCaptureEvidence(evidence: LiveCaptureEvidence): String {
             put("camera_frames_received", evidence.counts.cameraFramesReceived)
             put("inference_frames_submitted", evidence.counts.inferenceFramesSubmitted)
             put("inference_records_emitted", evidence.counts.inferenceRecordsEmitted)
-            put("unclassified_delivered_callbacks", evidence.counts.unclassifiedDeliveredCallbacks)
+            put("delivered_callback_classification_gap", evidence.counts.deliveredCallbackClassificationGap)
+            put("cadence_diagnostics", evidence.counts.cadenceDiagnostics.asJson())
             put("inference_failures", evidence.counts.inferenceFailures)
             put("frames_skipped_before_inference", evidence.counts.framesSkippedBeforeInference)
             putJsonObject("frames_skipped_before_inference_by_reason") {

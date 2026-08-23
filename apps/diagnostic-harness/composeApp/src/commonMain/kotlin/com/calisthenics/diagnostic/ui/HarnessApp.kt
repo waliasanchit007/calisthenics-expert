@@ -88,10 +88,17 @@ private fun LiveRunStatus(phase: LiveRunPhase) {
         LiveRunPhase.NotStarted -> Unit
         is LiveRunPhase.Running -> {
             Text("Live running", style = MaterialTheme.typography.titleMedium)
-            Text("configured FPS: ${phase.configuredInferenceFps}")
-            Text("received/submitted/emitted: ${phase.cameraFramesReceived}/${phase.inferenceFramesSubmitted}/${phase.inferenceRecordsEmitted}")
+            Text("configured camera FPS: ${phase.configuredCameraFps}")
+            Text("configured inference FPS: ${phase.configuredInferenceFps}")
+            Text("delivered/submitted/emitted: ${phase.deliveredCallbackCount}/${phase.inferenceFramesSubmitted}/${phase.inferenceRecordsEmitted}")
             Text("skipped: ${phase.framesSkippedBeforeInference}")
             Text("inference failures: ${phase.inferenceFailures}")
+            Text("latest inference latency: ${phase.latestInferenceLatencyNs?.let { "${it / 1_000_000.0} ms" } ?: "unavailable"}")
+            Text(
+                "latest thermal: ${phase.latestThermalStatus?.let { status ->
+                    "status $status at ${phase.latestThermalObservedAtNs ?: 0L} ns"
+                } ?: phase.thermalUnavailableReason ?: "unavailable"}",
+            )
         }
         is LiveRunPhase.Completed -> {
             Text("Live completed", style = MaterialTheme.typography.titleMedium)

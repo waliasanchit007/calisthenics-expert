@@ -91,7 +91,29 @@ fun yuv420ToUprightRgb24(frame: Yuv420Frame): ByteArray {
     for (outputY in 0 until outputHeight) {
         for (outputX in 0 until outputWidth) {
             val uprightX = if (frame.mirrored) outputWidth - 1 - outputX else outputX
-            val (sourceX, sourceY) = sourceCoordinate(uprightX, outputY, frame.width, frame.height, frame.rotation)
+            val sourceX: Int
+            val sourceY: Int
+            when (frame.rotation) {
+                FrameRotation.R0 -> {
+                    sourceX = uprightX
+                    sourceY = outputY
+                }
+
+                FrameRotation.R90 -> {
+                    sourceX = outputY
+                    sourceY = frame.height - 1 - uprightX
+                }
+
+                FrameRotation.R180 -> {
+                    sourceX = frame.width - 1 - uprightX
+                    sourceY = frame.height - 1 - outputY
+                }
+
+                FrameRotation.R270 -> {
+                    sourceX = frame.width - 1 - outputY
+                    sourceY = uprightX
+                }
+            }
             val y = frame.y.sample(sourceX, sourceY)
             val chromaX = sourceX / 2
             val chromaY = sourceY / 2
@@ -104,19 +126,6 @@ fun yuv420ToUprightRgb24(frame: Yuv420Frame): ByteArray {
         }
     }
     return output
-}
-
-private fun sourceCoordinate(
-    uprightX: Int,
-    uprightY: Int,
-    width: Int,
-    height: Int,
-    rotation: FrameRotation,
-): Pair<Int, Int> = when (rotation) {
-    FrameRotation.R0 -> uprightX to uprightY
-    FrameRotation.R90 -> uprightY to (height - 1 - uprightX)
-    FrameRotation.R180 -> (width - 1 - uprightX) to (height - 1 - uprightY)
-    FrameRotation.R270 -> (width - 1 - uprightY) to uprightX
 }
 
 private fun convert(y: Int, delta: Int, coefficient: Int): Int =

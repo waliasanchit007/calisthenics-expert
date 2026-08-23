@@ -6,6 +6,8 @@ import android.os.SystemClock
 import androidx.lifecycle.LifecycleOwner
 import com.calisthenics.diagnostic.android.BuildConfig
 import com.calisthenics.diagnostic.camera.CameraXFrameSource
+import com.calisthenics.diagnostic.camera.NegotiatedAnalysisResolution
+import com.calisthenics.diagnostic.thermal.AndroidLiveThermalProbe
 import com.calisthenics.diagnostic.camera.OwnedYuvFrame
 import com.calisthenics.diagnostic.contract.AvailableObservations
 import com.calisthenics.diagnostic.contract.Cadence
@@ -26,6 +28,7 @@ import com.calisthenics.diagnostic.export.SessionExporter
 import com.calisthenics.diagnostic.export.StorageRootsResult
 import com.calisthenics.diagnostic.hash.Sha256Digest
 import com.calisthenics.diagnostic.live.LiveFrameAdmission
+import com.calisthenics.diagnostic.live.LiveCaptureCadenceDiagnostics
 import com.calisthenics.diagnostic.live.achievedInferenceFpsTimeseriesOf
 import com.calisthenics.diagnostic.mediapipe.PoseLandmarkerConstructionEvidence
 import com.calisthenics.diagnostic.mediapipe.PoseLandmarkerLiveAdapterFactory
@@ -38,6 +41,7 @@ import com.calisthenics.diagnostic.model.requireLiveModelProvenance
 import com.calisthenics.diagnostic.preprocessing.scalePadRgb24
 import com.calisthenics.diagnostic.preprocessing.uprightDimensions
 import com.calisthenics.diagnostic.preprocessing.yuv420ToUprightRgb24
+import com.calisthenics.diagnostic.preprocessing.FrameRotation
 import com.calisthenics.diagnostic.preprocessing.Yuv420Frame
 import com.calisthenics.diagnostic.preprocessing.YuvPlane
 import com.calisthenics.diagnostic.replay.CameraCapabilityObservation
@@ -52,6 +56,8 @@ import com.calisthenics.diagnostic.session.SessionRunnerSnapshot
 import com.calisthenics.diagnostic.session.SessionConfiguration
 import com.calisthenics.diagnostic.session.SkipReason
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.time.Instant
@@ -87,6 +93,10 @@ sealed interface LiveUnavailableReason {
         override val code: String = "camera_permission_denied"
     }
 
+    data class ThermalApi(val detail: String) : LiveUnavailableReason {
+        override val code: String = "thermal_api_unavailable"
+    }
+
     data class Initialization(val detail: String) : LiveUnavailableReason {
         override val code: String = "live_initialization_failed"
     }
@@ -105,6 +115,8 @@ data class LiveCameraCompletion(
     val finalization: FinalizationResult,
     val snapshot: SessionRunnerSnapshot,
     val internalFailure: LiveInternalFailure? = null,
+    val cadenceDiagnostics: LiveCaptureCadenceDiagnostics? = null,
+    val thermalObservations: List<LiveThermalObservation> = emptyList(),
 )
 
 data class LiveInference(
@@ -112,6 +124,19 @@ data class LiveInference(
     val disposable: Disposable,
     val constructionEvidence: PoseLandmarkerConstructionEvidence,
 )
+
+data class LiveThermalObservation(val tMonotonicNs: Long, val status: Int) {
+    init {
+        require(tMonotonicNs >= 0L) { "thermal observation time must be non-negative" }
+    }
+}
+
+interface LiveThermalProbe : Disposable {
+    val available: Boolean
+    val unavailableReason: String?
+    fun start(nowNs: () -> Long)
+    fun observations(): List<LiveThermalObservation>
+}
 
 interface LiveClock {
     fun nowNs(): Long
@@ -124,8 +149,18 @@ interface LiveScheduler {
 }
 
 interface LiveFrameSource {
-    fun start(onFrame: (OwnedYuvFrame) -> Unit, onFailure: (Throwable) -> Unit)
+    fun start(
+        onSourceStarted: (LiveSourceResolution) -> Unit,
+        onFrame: (OwnedYuvFrame) -> Unit,
+        onFailure: (Throwable) -> Unit,
+    )
     fun stop()
+}
+
+data class LiveSourceResolution(val width: Int, val height: Int) {
+    init {
+        require(width > 0 && height > 0) { "source dimensions must be positive" }
+    }
 }
 
 fun interface LiveSessionFinalizerFactory {
@@ -165,6 +200,7 @@ class LiveCameraComposition internal constructor(
         val scheduler: LiveScheduler,
         val sourceFactory: () -> LiveFrameSource,
         val inferenceFactory: (nowNs: () -> Long) -> LiveInference,
+        val thermalProbeFactory: () -> LiveThermalProbe,
         val sessionFinalizerFactory: LiveSessionFinalizerFactory,
         val sessionIdProvider: () -> Uuid = { Uuid(randomSessionId()) },
         val manifestMetadata: LiveManifestMetadata = LiveManifestMetadata(),
@@ -200,10 +236,20 @@ class LiveCameraComposition internal constructor(
     private var source: LiveFrameSource? = null
     private var runner: SessionRunner? = null
     private var inference: LiveInference? = null
+    private var thermalProbe: LiveThermalProbe? = null
     private var manifest: SessionManifest? = null
     private var frameIndex = 0L
-    private var observedSourceWidth: Int? = null
-    private var observedSourceHeight: Int? = null
+    private data class SourceGeometry(
+        val width: Int,
+        val height: Int,
+        val rotation: FrameRotation,
+        val mirrored: Boolean,
+    )
+
+    private var observedSourceGeometry: SourceGeometry? = null
+    private var negotiatedSourceResolution: LiveSourceResolution? = null
+    private val admittedCallbackTimestampsNs = mutableListOf<Long>()
+    private var cadenceDiagnostics: LiveCaptureCadenceDiagnostics? = null
     private var stopping = false
     private var stallHandle: Disposable? = null
     private var stalled = false
@@ -254,6 +300,32 @@ class LiveCameraComposition internal constructor(
                 return@synchronized
             }
             sessionStartNs = dependencies.clock.nowNs()
+            val liveThermalProbe = try {
+                dependencies.thermalProbeFactory()
+            } catch (error: Throwable) {
+                unavailable = LiveCameraStartResult.Unavailable(
+                    LiveUnavailableReason.ThermalApi(error.message ?: "thermal_api_unavailable"),
+                )
+                releasePlan = captureResourceReleasePlanLocked(abandonRunner = true)
+                return@synchronized
+            }
+            thermalProbe = liveThermalProbe
+            if (!liveThermalProbe.available) {
+                unavailable = LiveCameraStartResult.Unavailable(
+                    LiveUnavailableReason.ThermalApi(liveThermalProbe.unavailableReason ?: "thermal_api_unavailable"),
+                )
+                releasePlan = captureResourceReleasePlanLocked(abandonRunner = true)
+                return@synchronized
+            }
+            try {
+                liveThermalProbe.start(::relativeNowNs)
+            } catch (error: Throwable) {
+                unavailable = LiveCameraStartResult.Unavailable(
+                    LiveUnavailableReason.ThermalApi(error.message ?: "thermal_api_unavailable"),
+                )
+                releasePlan = captureResourceReleasePlanLocked(abandonRunner = true)
+                return@synchronized
+            }
             val id = dependencies.sessionIdProvider()
             sessionId = id
             createdSessionId = id
@@ -286,15 +358,44 @@ class LiveCameraComposition internal constructor(
                     drainTimeoutNs = dependencies.drainTimeoutNs,
                     finalizer = dependencies.sessionFinalizerFactory.create(template) { finalized, sealed ->
                         synchronized(monitor) {
+                            val geometry = checkNotNull(observedSourceGeometry) { "source_geometry_not_observed" }
+                            val classificationGap = sealed.counts.cameraFramesReceived -
+                                sealed.counts.inferenceFramesSubmitted -
+                                sealed.counts.framesSkippedBeforeInference
+                            val cadenceDiagnostics = LiveCaptureCadenceDiagnostics.fromAdmittedTimestamps(
+                                timestampsNs = admittedCallbackTimestampsNs,
+                                requestedCameraFps = CameraXFrameSource.TARGET_CAMERA_FPS,
+                                deliveredCallbackClassificationGap = classificationGap,
+                            )
+                            this@LiveCameraComposition.cadenceDiagnostics = cadenceDiagnostics
+                            val activeThermalProbe = checkNotNull(thermalProbe)
+                            val thermalObservations = activeThermalProbe.observations()
                             val completed = finalized.copy(
                                 camera = finalized.camera.copy(
-                                    captureWidth = observedSourceWidth ?: finalized.camera.captureWidth,
-                                    captureHeight = observedSourceHeight ?: finalized.camera.captureHeight,
+                                    captureWidth = geometry.width,
+                                    captureHeight = geometry.height,
+                                    orientationDegrees = geometry.rotation.degrees,
+                                    mirrored = geometry.mirrored,
                                 ),
                                 cadence = finalized.cadence.copy(
                                     achievedInferenceFpsTimeseries = achievedInferenceFpsTimeseriesOf(sealed.records),
                                 ),
                                 clock = finalized.clock.copy(endedAtUtc = dependencies.wallClockUtc()),
+                                studyContext = finalized.studyContext + mapOf(
+                                    "camera_cadence_diagnostics" to cadenceDiagnostics.asJson(),
+                                    "thermal_observations" to buildJsonObject {
+                                        put("api_available", activeThermalProbe.available)
+                                        put("unavailable_reason", activeThermalProbe.unavailableReason)
+                                        put("samples", buildJsonArray {
+                                            thermalObservations.forEach { observation ->
+                                                add(buildJsonObject {
+                                                    put("t_monotonic_ns", observation.tMonotonicNs)
+                                                    put("status", observation.status)
+                                                })
+                                            }
+                                        })
+                                    },
+                                ),
                             )
                             manifest = completed
                             completed
@@ -374,6 +475,7 @@ class LiveCameraComposition internal constructor(
         }
         val startError = runCatching {
             startedSource.start(
+                onSourceStarted = ::handleSourceStarted,
                 onFrame = { frame -> handleFrame(frame, onProgress) },
                 onFailure = { failure -> handleSourceFailure(failure, onProgress) },
             )
@@ -455,10 +557,38 @@ class LiveCameraComposition internal constructor(
 
     fun manifest(): SessionManifest? = synchronized(monitor) { manifest }
 
+    /** Observed delivery span, used by the physical gate after the first delivered callback. */
+    fun observedCaptureSpanNs(): Long? = synchronized(monitor) {
+        admittedCallbackTimestampsNs.firstOrNull()?.let { first ->
+            admittedCallbackTimestampsNs.last() - first
+        }
+    }
+
+    fun latestThermalObservation(): LiveThermalObservation? = synchronized(monitor) {
+        thermalProbe?.observations()?.lastOrNull()
+    }
+
     internal val internalFailure: LiveInternalFailure?
         get() = synchronized(monitor) {
             if (stalled) LiveInternalFailure.LiveInferenceStalled else null
         }
+
+    private fun handleSourceStarted(resolution: LiveSourceResolution) {
+        synchronized(monitor) {
+            // A source may finish an external asynchronous start after teardown has fenced it.
+            // Do not revive the session or convert the already-requested teardown into a new error.
+            if (stopping || resourcesReleased) return
+            val previous = negotiatedSourceResolution
+            require(previous == null || previous == resolution) { "negotiated source resolution changed" }
+            negotiatedSourceResolution = resolution
+            manifest = manifest?.copy(
+                camera = manifest!!.camera.copy(
+                    captureWidth = resolution.width,
+                    captureHeight = resolution.height,
+                ),
+            )
+        }
+    }
 
     private data class FrameWork(
         val runner: SessionRunner,
@@ -468,8 +598,15 @@ class LiveCameraComposition internal constructor(
         val canonical: ByteArray?,
     )
 
+    private data class ReservedFrame(
+        val runner: SessionRunner,
+        val index: Long,
+        val timestampNs: Long,
+        val frame: OwnedYuvFrame,
+    )
+
     private fun handleFrame(frame: OwnedYuvFrame, onProgress: (SessionRunnerSnapshot) -> Unit) {
-        val work = synchronized(monitor) {
+        val reservation = synchronized(monitor) {
             val currentRunner = runner ?: return
             val currentAdmission = admission ?: return
             val rebasedCaptureNs = frame.timestampNs - sessionStartNs
@@ -483,48 +620,53 @@ class LiveCameraComposition internal constructor(
                     canonical = null,
                 )
             }
-            observedSourceWidth = observedSourceWidth ?: frame.width
-            observedSourceHeight = observedSourceHeight ?: frame.height
-            manifest = manifest?.copy(
-                camera = manifest!!.camera.copy(
-                    captureWidth = observedSourceWidth!!,
-                    captureHeight = observedSourceHeight!!,
-                ),
-            )
-            val canonical = try {
-                val upright = yuv420ToUprightRgb24(
-                    Yuv420Frame(
-                        width = frame.width,
-                        height = frame.height,
-                        y = YuvPlane(frame.y.bytes, frame.y.rowStride, frame.y.pixelStride),
-                        u = YuvPlane(frame.u.bytes, frame.u.rowStride, frame.u.pixelStride),
-                        v = YuvPlane(frame.v.bytes, frame.v.rowStride, frame.v.pixelStride),
-                        colorStandard = frame.colorStandard,
-                        colorRange = frame.colorRange,
-                        rotation = frame.rotation,
-                        mirrored = frame.mirrored,
-                    ),
-                )
-                val (uprightWidth, uprightHeight) = uprightDimensions(frame.width, frame.height, frame.rotation)
-                scalePadRgb24(
-                    source = upright,
-                    sourceWidth = uprightWidth,
-                    sourceHeight = uprightHeight,
-                    targetWidth = dependencies.modelInputWidth,
-                    targetHeight = dependencies.modelInputHeight,
-                )
-            } catch (_: Throwable) {
+            admittedCallbackTimestampsNs += rebasedCaptureNs
+            val negotiated = negotiatedSourceResolution
+            if (negotiated == null || frame.width != negotiated.width || frame.height != negotiated.height) {
                 val classification = currentAdmission.classify(rebasedCaptureNs, preprocessingSucceeded = false)
                 return@synchronized FrameWork(currentRunner, index, rebasedCaptureNs, classification, null)
             }
-
-            FrameWork(
-                runner = currentRunner,
-                index = index,
-                timestampNs = rebasedCaptureNs,
-                classification = currentAdmission.classify(rebasedCaptureNs),
-                canonical = canonical,
+            val geometry = SourceGeometry(frame.width, frame.height, frame.rotation, frame.mirrored)
+            val previousGeometry = observedSourceGeometry
+            if (previousGeometry != null && previousGeometry != geometry) {
+                val classification = currentAdmission.classify(rebasedCaptureNs, preprocessingSucceeded = false)
+                return@synchronized FrameWork(currentRunner, index, rebasedCaptureNs, classification, null)
+            }
+            observedSourceGeometry = geometry
+            manifest = manifest?.copy(
+                camera = manifest!!.camera.copy(
+                    captureWidth = geometry.width,
+                    captureHeight = geometry.height,
+                    orientationDegrees = geometry.rotation.degrees,
+                    mirrored = geometry.mirrored,
+                ),
             )
+            when (val classification = currentAdmission.reserve(rebasedCaptureNs)) {
+                com.calisthenics.diagnostic.live.LiveFrameClassification.SUBMIT ->
+                    ReservedFrame(currentRunner, index, rebasedCaptureNs, frame)
+
+                else -> FrameWork(currentRunner, index, rebasedCaptureNs, classification, null)
+            }
+        }
+
+        val work = when (reservation) {
+            is FrameWork -> reservation
+            is ReservedFrame -> {
+                val canonical = runCatching { canonicalize(reservation.frame) }.getOrNull()
+                synchronized(monitor) {
+                    val classification = admission?.commitCandidate(canonical != null)
+                        ?: com.calisthenics.diagnostic.live.LiveFrameClassification.SESSION_STOPPING
+                    FrameWork(
+                        runner = reservation.runner,
+                        index = reservation.index,
+                        timestampNs = reservation.timestampNs,
+                        classification = classification,
+                        canonical = if (classification == com.calisthenics.diagnostic.live.LiveFrameClassification.SUBMIT) canonical else null,
+                    )
+                }
+            }
+
+            else -> error("unexpected live frame reservation")
         }
 
         when (work.classification) {
@@ -559,6 +701,30 @@ class LiveCameraComposition internal constructor(
             else -> work.runner.skip(work.index, work.timestampNs, work.classification.toSkipReason())
         }
         onProgress(work.runner.snapshot())
+    }
+
+    private fun canonicalize(frame: OwnedYuvFrame): ByteArray {
+        val upright = yuv420ToUprightRgb24(
+            Yuv420Frame(
+                width = frame.width,
+                height = frame.height,
+                y = YuvPlane(frame.y.bytes, frame.y.rowStride, frame.y.pixelStride),
+                u = YuvPlane(frame.u.bytes, frame.u.rowStride, frame.u.pixelStride),
+                v = YuvPlane(frame.v.bytes, frame.v.rowStride, frame.v.pixelStride),
+                colorStandard = frame.colorStandard,
+                colorRange = frame.colorRange,
+                rotation = frame.rotation,
+                mirrored = frame.mirrored,
+            ),
+        )
+        val (uprightWidth, uprightHeight) = uprightDimensions(frame.width, frame.height, frame.rotation)
+        return scalePadRgb24(
+            source = upright,
+            sourceWidth = uprightWidth,
+            sourceHeight = uprightHeight,
+            targetWidth = dependencies.modelInputWidth,
+            targetHeight = dependencies.modelInputHeight,
+        )
     }
 
     private fun com.calisthenics.diagnostic.live.LiveFrameClassification.toSkipReason(): SkipReason = when (this) {
@@ -649,6 +815,8 @@ class LiveCameraComposition internal constructor(
                 finalization = finalization,
                 snapshot = finalSnapshot,
                 internalFailure = if (stalled) LiveInternalFailure.LiveInferenceStalled else null,
+                cadenceDiagnostics = cadenceDiagnostics,
+                thermalObservations = thermalProbe?.observations().orEmpty(),
             )
             completion = finished
             finished to captureResourceReleasePlanLocked(abandonRunner = false)
@@ -676,6 +844,7 @@ class LiveCameraComposition internal constructor(
         val source: LiveFrameSource?,
         val runner: SessionRunner?,
         val inference: LiveInference?,
+        val thermalProbe: LiveThermalProbe?,
         val dispatcher: SingleThreadSessionDispatcher?,
         val scheduler: LiveScheduler,
         val abandonRunner: Boolean,
@@ -690,6 +859,7 @@ class LiveCameraComposition internal constructor(
             source = sourceToStop,
             runner = runner,
             inference = inference,
+            thermalProbe = thermalProbe,
             dispatcher = sessionDispatcher,
             scheduler = dependencies.scheduler,
             abandonRunner = abandonRunner,
@@ -703,6 +873,7 @@ class LiveCameraComposition internal constructor(
             plan.runner?.let { runnerToAbandon -> runCatching { runnerToAbandon.abandon() } }
         }
         runCatching { plan.inference?.disposable?.dispose() }
+        runCatching { plan.thermalProbe?.dispose() }
         runCatching { plan.dispatcher?.shutdown() }
         runCatching { plan.scheduler.shutdown() }
     }
@@ -771,7 +942,7 @@ class LiveCameraComposition internal constructor(
             participantPseudonymId = metadata.participantPseudonymId,
             captureProtocolVersion = SemanticVersion("1.0.0"),
             harnessGitSha = metadata.harnessGitSha,
-            device = metadata.device,
+            device = metadata.device.copy(thermalApiAvailable = thermalProbe?.available ?: false),
             posePipeline = PosePipeline(
                 backendName = "mediapipe_pose_landmarker",
                 backendVersion = evidence.tasksVisionVersion,
@@ -850,6 +1021,7 @@ class LiveCameraComposition internal constructor(
             )
             val provenance = requireLiveModelProvenance(replayProvenance, liveProvenance)
             val clock = AndroidLiveClock()
+            val thermalProbe = AndroidLiveThermalProbe.from(context)
             return LiveCameraComposition(
                 Dependencies(
                     cameraCapability = cameraCapability,
@@ -871,6 +1043,7 @@ class LiveCameraComposition internal constructor(
                         val port = factory.create()
                         LiveInference(port, port, checkNotNull(factory.lastConstructionEvidence))
                     },
+                    thermalProbeFactory = { thermalProbe },
                     sessionFinalizerFactory = LiveSessionFinalizerFactory { template, atFinalization ->
                         SessionExporter(AndroidStoragePort(roots), template, atFinalization)
                     },
@@ -882,7 +1055,7 @@ class LiveCameraComposition internal constructor(
                             osVersion = Build.VERSION.RELEASE,
                             deviceModel = Build.MODEL,
                             chipset = runtimeChipset(),
-                            thermalApiAvailable = false,
+                            thermalApiAvailable = thermalProbe.available,
                         ),
                     ),
                     registerRunner = onSessionRunnerCreated,
@@ -927,10 +1100,28 @@ class LiveCameraComposition internal constructor(
     }
 
     private class AndroidLiveFrameSource(private val delegate: CameraXFrameSource) : LiveFrameSource {
-        override fun start(onFrame: (OwnedYuvFrame) -> Unit, onFailure: (Throwable) -> Unit) = delegate.start(onFrame, onFailure)
+        override fun start(
+            onSourceStarted: (LiveSourceResolution) -> Unit,
+            onFrame: (OwnedYuvFrame) -> Unit,
+            onFailure: (Throwable) -> Unit,
+        ) = delegate.start(
+            onSourceStarted = { resolution -> onSourceStarted(resolution.toLiveSourceResolution()) },
+            onFrame = onFrame,
+            onFailure = onFailure,
+        )
         override fun stop() = delegate.stop()
     }
 }
+
+private fun NegotiatedAnalysisResolution.toLiveSourceResolution() = LiveSourceResolution(width, height)
+
+private val FrameRotation.degrees: Int
+    get() = when (this) {
+        FrameRotation.R0 -> 0
+        FrameRotation.R90 -> 90
+        FrameRotation.R180 -> 180
+        FrameRotation.R270 -> 270
+    }
 
 private class TerminalTrackingInferencePort(
     private val delegate: InferencePort,

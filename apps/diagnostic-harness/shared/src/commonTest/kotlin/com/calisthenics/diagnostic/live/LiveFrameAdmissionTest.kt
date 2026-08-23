@@ -59,6 +59,18 @@ class LiveFrameAdmissionTest {
     }
 
     @Test
+    fun stopRacingReservedCandidateProducesOneSessionStoppingClassification() {
+        val admission = LiveFrameAdmission(30)
+
+        assertEquals(LiveFrameClassification.SUBMIT, admission.reserve(0L))
+        admission.stop()
+
+        assertEquals(LiveFrameClassification.SESSION_STOPPING, admission.commitCandidate(preprocessingSucceeded = true))
+        assertEquals(LiveFrameClassification.SESSION_STOPPING, admission.classify(1_000_000_000L))
+        assertFailsWith<IllegalStateException> { admission.completeSubmission() }
+    }
+
+    @Test
     fun oneDeliveredCallbackHasExactlyOneTerminalClassification() {
         val admission = LiveFrameAdmission(30)
 

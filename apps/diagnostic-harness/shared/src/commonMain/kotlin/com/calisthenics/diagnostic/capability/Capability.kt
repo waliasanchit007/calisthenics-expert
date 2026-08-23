@@ -17,6 +17,7 @@ private val liveRequirements = replayRequirements + setOf(
     CapabilityId.CAMERA_SOURCE,
     CapabilityId.TIMESTAMP_COMPARABILITY,
     CapabilityId.COLOR_METADATA,
+    CapabilityId.THERMAL_API,
 )
 
 fun requiredLiveCapabilities(): Set<CapabilityId> = liveRequirements
