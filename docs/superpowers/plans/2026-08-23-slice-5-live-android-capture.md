@@ -249,19 +249,19 @@ git commit -m "feat: compose live Android observation sessions"
 - `make verify-harness-s25-live-capture` requires exactly one authorized physical S25, rejects emulators, fetches/verifies the model asset, installs the APK/test APK, runs the exact test, pulls the export, validates it with the Python reference package, and passes the transcript to `tools/check_live_capture_run.py`.
 - The checker derives admission from observed identity, camera metadata, counters, validation result, and instrumentation exit status. It never trusts a caller-declared success boolean.
 
-- [ ] **Step 1: RED — typed evidence and transcript checker**
+- [x] **Step 1: RED — typed evidence and transcript checker**
 
 Write exhaustive common/Python tests for authorized identity, exact BT601/FULL metadata, at least one received/submitted/emitted record, zero unclassified delivered callbacks, validator success, one evidence record, and typed blocking reasons. The ledger's recorded branch must open the exact evidence file and verify its SHA.
 
-- [ ] **Step 2: RED — build/device gate contract**
+- [x] **Step 2: RED — build/device gate contract**
 
 Pin the exact device-counting preamble (`awk '$2 == "device"'`), emulator rejection, shared authorization helper, model fetch, install/run/pull/validate order, instrumentation status channel, and the rule that the target never writes the ledger.
 
-- [ ] **Step 3: GREEN — implement the bounded device gate**
+- [x] **Step 3: GREEN — implement the bounded device gate**
 
 Implement the instrumented test, renderer/checker, Make target, and pending ledger. The target is not part of Ubuntu protected CI because it requires physical hardware.
 
-- [ ] **Step 4: Verify mutations and host gates**
+- [x] **Step 4: Verify mutations and host gates**
 
 Mutate each gate conjunct once: identity, timestamp source, standard, range, bridge, emitted count, validation result, and instrumentation status. Each mutation must make a focused test fail. Revert and run:
 
