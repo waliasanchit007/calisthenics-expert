@@ -65,6 +65,13 @@ def test_harness_build_contract() -> None:
     assert ":shared:jvmTest" in makefile, (
         "catches removal of shared JVM tests from the host-test gate"
     )
+    verify_harness_jvm = makefile.split("verify-harness-jvm:", 1)[1].split("\n\n", 1)[0]
+    assert ":shared:testAndroidHostTest" in verify_harness_jvm, (
+        "catches shared Android host tests leaving the protected JVM/Android host-test gate"
+    )
+    assert ":androidApp:testDebugUnitTest" in verify_harness_jvm, (
+        "catches Android app unit tests leaving the protected JVM/Android host-test gate"
+    )
     assert "verify-harness-ios:" in makefile, (
         "catches removal/renaming of the iOS compile/link gate"
     )
