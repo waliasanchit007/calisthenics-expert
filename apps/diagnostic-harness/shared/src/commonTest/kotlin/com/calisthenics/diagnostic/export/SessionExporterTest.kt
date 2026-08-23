@@ -44,8 +44,9 @@ class SessionExporterTest {
         val result = SessionExporter(
             storage,
             template,
-            manifestAtFinalization = { current ->
+            manifestAtFinalization = { current, sealedSnapshot ->
                 assertTrue(storage.operations.contains("reconcile"))
+                assertEquals(1L, sealedSnapshot.counts.inferenceRecordsEmitted)
                 current.copy(clock = current.clock.copy(endedAtUtc = afterReplay))
             },
         ).finalize(snapshot(listOf(frame(posePresent = true))))

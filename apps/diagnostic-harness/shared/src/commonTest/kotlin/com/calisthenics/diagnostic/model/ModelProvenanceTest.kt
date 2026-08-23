@@ -78,4 +78,28 @@ class ModelProvenanceTest {
         assertFailsWith<ModelProvenanceException> { requireReplayProvenance(live) }
         requireReplayProvenance(parseModelProvenance(VALID))
     }
+
+    @Test
+    fun liveExecutionDescriptorUsesLiveStreamWithTheSameImmutableModelIdentity() {
+        val replay = parseModelProvenance(VALID)
+        val live = parseModelProvenance(VALID.replace("\"VIDEO\"", "\"LIVE_STREAM\""))
+
+        val selected = requireLiveModelProvenance(replay, live)
+
+        assertEquals("LIVE_STREAM", selected.runningMode)
+        assertEquals(replay.copy(runningMode = "LIVE_STREAM"), selected)
+    }
+
+    @Test
+    fun liveExecutionDescriptorCannotChangeThePinnedModelIdentity() {
+        val replay = parseModelProvenance(VALID)
+        val live = parseModelProvenance(VALID.replace("\"VIDEO\"", "\"LIVE_STREAM\""))
+            .copy(sha256 = "0".repeat(64))
+
+        val error = assertFailsWith<ModelProvenanceException> {
+            requireLiveModelProvenance(replay, live)
+        }
+
+        assertTrue(error.message!!.contains("model identity"))
+    }
 }

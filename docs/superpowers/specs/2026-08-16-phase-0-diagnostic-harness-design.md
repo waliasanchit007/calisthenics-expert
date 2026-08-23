@@ -186,7 +186,7 @@ Generated Kotlin observation artifacts stay in untracked build output and are va
 
 Replay is implemented and accepted before live capture. It consumes a synthetic RGB24 fixture through the released decoded-frame and scale/pad contracts and invokes MediaPipe in VIDEO mode synchronously.
 
-Replay sessions use a **session-relative monotonic time base with `t0 = 0`**. Every session timestamp is expressed against that base: fixture capture timestamps are rebased so the first frame lands on `0`, and every inference clock reading is recorded as `realNow - realSessionStart`. The manifest declares the base honestly (`t0_monotonic_ns: 0`). Live sessions keep the real device base; this definition is replay-only.
+Replay sessions use a **session-relative monotonic time base with `t0 = 0`**. Every session timestamp is expressed against that base: fixture capture timestamps are rebased so the first frame lands on `0`, and every inference clock reading is recorded as `realNow - realSessionStart`. The manifest declares the base honestly (`t0_monotonic_ns: 0`). Live sessions record the same session-relative base, while sourcing pre-rebase capture and inference readings from the device's shared `elapsedRealtimeNanos` domain.
 
 Pinning the base is required, not cosmetic. `FRAME.BACKEND_TIMESTAMP_ORDER` enforces `backend_timestamp_ms >= floor(capture_timestamp_ns / 1_000_000)` per record, while this section requires backend timestamps to be identical across runs. Under an arbitrary session start those two requirements are jointly unsatisfiable, because `floor(capture / 10^6)` moves every run while the backend sequence may not. Pinning `t0` resolves it and makes rebased capture reproducible.
 
@@ -253,14 +253,46 @@ Using `STRATEGY_BLOCK_PRODUCER` would move delay into the camera pipeline withou
 - Before session start, record source format, colour standard, colour range, raw DataSpace, orientation, mirroring, source width, and source height.
 - Capture width/height describe the source buffer before orientation. Canonical scale/pad operates on the upright post-rotation plane.
 
+The recorded S25 capability evidence admits one concrete live adapter configuration for this
+milestone: camera ID `0`, `YUV_420_888`, timestamp source `REALTIME`, raw DataSpace `146931712`,
+colour standard `BT601`, colour range `FULL`, and an available CameraX underlying-image bridge.
+The live source selects camera ID `0` explicitly rather than relying on a generic back-camera
+selector. Every delivered buffer is checked against the admitted pixel format, DataSpace, colour
+standard/range, and bridge availability before submission. Any different or unavailable value is
+a typed blocking observation and stops the session; this milestone does not silently select
+another conversion matrix or reinterpret the probe evidence.
+
 ### MediaPipe boundary
 
 - Exactly one LIVE_STREAM call may be in flight.
 - The in-flight slot stores submission index, capture timestamp, backend timestamp, inference start, and the immutable input.
-- The slot is released only by a result/error callback or the drain timeout fence, never by `detectAsync` returning.
+- The LIVE_STREAM port's monitor-confined slot is the ownership authority. `SessionRunner`'s
+  pending-submission view is a conservative advisory gate: it may briefly report occupied after
+  the port has released ownership, but it must never report free while the port remains occupied.
+- The slot is released only by a result/error callback, explicit cancellation, disposal, or the
+  drain timeout fence, never by `detectAsync` returning. Result timestamps must equal the slot's
+  backend timestamp; a mismatch fails the occupied submission closed and latches the port unhealthy.
+- Result/error listeners clear the slot and close only the `MPImage` created by the port before
+  notifying `SessionRunner`. They never close the callback-supplied image. Notification is enqueued
+  on a port-owned callback executor so MediaPipe's callback thread never blocks on the session
+  dispatcher. No callback exception may escape into MediaPipe's thread.
+- A callback against an empty or closed slot is a diagnostic drop and cannot re-enter
+  `SessionRunner`. An unattributable error additionally latches the port unhealthy. Disposal is
+  idempotent, closes owned resources exactly once, and cannot deadlock against a callback waiting
+  for the session dispatcher.
+- LIVE_STREAM listeners are installed in the options builder before detector construction. A
+  listener sink exists before construction and is installed with the port afterward; any
+  pre-install callback is recorded as a diagnostic and cannot dereference an absent port.
 - MediaPipe's internal detector resize and tracker-derived ROI are backend behaviour, not harness-controlled canonical preprocessing. Pin and record model SHA, Tasks Vision version, delegate, running mode, and all task options.
 - No external ROI is supplied in this milestone.
 - A backend error becomes `backend_call_failed`. Missing completion at the drain deadline becomes `session_teardown_timeout`; the harness does not fabricate a backend error.
+- MediaPipe may accept a LIVE_STREAM input without producing a callback. The live controller owns
+  a five-second in-flight stall fence. Expiry stops acquisition and the session, surfaces a typed
+  internal `live_inference_stalled` failure in app state, and lets the normal drain fence classify
+  the still-missing completion as `session_teardown_timeout`. It does not fabricate
+  `backend_call_failed` or add a new released-contract classification.
+- Live capture supplies callback-time `nowNs` rebased to the same session-relative monotonic `t0`
+  as capture and inference-start timestamps.
 - `inference_frames_submitted` increments only after preprocessing succeeds and immediately before the inference call is dispatched. A frame whose preprocessing fails is not a submission and is attributed to the `preprocessing_failed` skip reason.
 
 ## 9. Preprocessing
@@ -269,6 +301,9 @@ The released decoded-frame and live-capture preprocessing contracts are normativ
 
 - Fixture replay starts from tightly packed RGB24 sRGB full-range bytes.
 - Live conversion uses the admitted YUV colour standard/range and source plane layout.
+- The Android adapter in this milestone implements BT601/FULL conversion only. BT709, LIMITED,
+  or any other known-but-unproven combination remains fail-closed until its own committed
+  source-format vectors and physical capability evidence are admitted.
 - Orientation and mirroring are applied before canonical scale-to-fit.
 - Scale-to-fit uses center-of-pixel mapping, exact-fraction bilinear sampling with half-up channel rounding, and exact black padding as released.
 - Source-format YUV byte vectors cover row stride, pixel stride, odd dimensions, rotation, mirroring, matrix, and range cases.

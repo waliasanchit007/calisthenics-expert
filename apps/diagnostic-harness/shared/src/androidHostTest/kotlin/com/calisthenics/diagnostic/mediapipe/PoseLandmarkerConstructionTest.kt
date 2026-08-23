@@ -1,8 +1,12 @@
 package com.calisthenics.diagnostic.mediapipe
 
 import com.calisthenics.diagnostic.model.ModelProvenance
+import com.google.mediapipe.framework.image.ByteBufferImageBuilder
+import com.google.mediapipe.framework.image.MPImage
+import java.nio.ByteBuffer
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 private val PROVENANCE = ModelProvenance(
     assetName = "pose_landmarker_full.task",
@@ -26,6 +30,67 @@ private val PROVENANCE = ModelProvenance(
 )
 
 class PoseLandmarkerConstructionTest {
+
+    @Test
+    fun resultMappingFailureIsConvertedToAnAttributedCallbackErrorWithoutEscaping() {
+        val errors = mutableListOf<Throwable>()
+        val listeners = PoseLandmarkerLiveListenerBundle(
+            resultListener = { _, _, _ -> error("result callback must not be reached") },
+            errorListener = { errors += it },
+        )
+        val callbackImage = ByteBufferImageBuilder(
+            ByteBuffer.allocateDirect(4 * 4 * 3),
+            4,
+            4,
+            MPImage.IMAGE_FORMAT_RGB,
+        ).build()
+
+        var escaped: Throwable? = null
+        try {
+            notifyLiveResultSafely({ 10L }, callbackImage, listeners) {
+                error("mapping failed")
+            }
+        } catch (error: Throwable) {
+            escaped = error
+        } finally {
+            callbackImage.close()
+        }
+
+        assertEquals(null, escaped)
+        assertEquals(1, errors.size)
+        assertTrue(errors.single() is PoseLandmarkerLiveCallbackException)
+        assertEquals("result_mapping_failed", (errors.single() as PoseLandmarkerLiveCallbackException).sourceErrorCode)
+    }
+
+    @Test
+    fun resultTimestampExtractionFailureIsContainedAndAttributedWithoutEscaping() {
+        val errors = mutableListOf<Throwable>()
+        val listeners = PoseLandmarkerLiveListenerBundle(
+            resultListener = { _, _, _ -> error("result callback must not be reached") },
+            errorListener = { errors += it },
+        )
+        val callbackImage = ByteBufferImageBuilder(
+            ByteBuffer.allocateDirect(4 * 4 * 3),
+            4,
+            4,
+            MPImage.IMAGE_FORMAT_RGB,
+        ).build()
+
+        var escaped: Throwable? = null
+        try {
+            notifyLiveResultSafely({ error("timestamp unavailable") }, callbackImage, listeners) {
+                PoseLandmarkerDetection(false, 0, null, null)
+            }
+        } catch (error: Throwable) {
+            escaped = error
+        } finally {
+            callbackImage.close()
+        }
+
+        assertEquals(null, escaped)
+        assertEquals(1, errors.size)
+        assertEquals("result_timestamp_failed", (errors.single() as PoseLandmarkerLiveCallbackException).sourceErrorCode)
+    }
 
     @Test
     fun evidenceRecordsThePinnedValuesUsedToBuildTheRealOptions() {

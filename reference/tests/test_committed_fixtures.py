@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -46,6 +47,32 @@ def test_every_negative_fixture_fails_with_declared_code() -> None:
     for case in cases:
         result = run_declared_validation(case)
         assert result.codes == [case.expected_error_code]
+
+
+def test_committed_yuv420_vector_has_literal_bytes_and_independent_hashes() -> None:
+    vector = _json(
+        repository_root() / "fixtures/synthetic/preprocessing/yuv420_bt601_full/vector.json"
+    )
+    assert vector["synthetic"] is True
+    assert vector["conversion"] == {
+        "color_standard": "BT601",
+        "color_range": "FULL",
+        "fixed_point_scale": 1000000,
+        "rounding": "half_up",
+        "clamp": "0..255",
+    }
+    for case in vector["cases"]:
+        assert {"y", "u", "v", "expected_rgb24"} <= case.keys()
+        expected = bytes(case["expected_rgb24"])
+        assert case["expected_byte_length"] == len(expected)
+        assert case["expected_sha256"] == hashlib.sha256(expected).hexdigest()
+        for plane_name in ("y", "u", "v"):
+            plane = case[plane_name]
+            plane_bytes = bytes(plane["bytes"])
+            assert plane["byte_length"] == len(plane_bytes)
+            assert plane["sha256"] == hashlib.sha256(plane_bytes).hexdigest()
+            assert plane["row_stride"] > 0
+            assert plane["pixel_stride"] > 0
 
 
 def test_declared_negative_artifact_paths_match_reported_issue_artifacts() -> None:

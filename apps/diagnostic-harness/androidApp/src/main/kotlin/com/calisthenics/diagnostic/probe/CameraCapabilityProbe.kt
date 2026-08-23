@@ -56,6 +56,9 @@ class CameraCapabilityProbe(
             camera2Info.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE),
         )
         val executor = Executors.newSingleThreadExecutor()
+        val cameraReleaseQuiescence = CameraReleaseQuiescence(
+            registration = AndroidCameraAvailabilityRegistration(context, executor),
+        )
         val analysis = ImageAnalysis.Builder()
             .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
@@ -86,7 +89,7 @@ class CameraCapabilityProbe(
                     image.close()
                 }
             }
-            lifecycleDispatcher.dispatch(timeoutMillis) { provider.unbindAll() }
+            unbindAndAwaitCameraRelease(provider, cameraId, cameraReleaseQuiescence)
             lifecycleDispatcher.dispatch(timeoutMillis) {
                 provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, analysis)
             }
@@ -94,7 +97,7 @@ class CameraCapabilityProbe(
         } finally {
             analysis.clearAnalyzer()
             try {
-                lifecycleDispatcher.dispatch(timeoutMillis) { provider.unbindAll() }
+                unbindAndAwaitCameraRelease(provider, cameraId, cameraReleaseQuiescence)
             } finally {
                 executor.shutdownNow()
                 check(executor.awaitTermination(timeoutMillis, TimeUnit.MILLISECONDS)) {
@@ -118,6 +121,17 @@ class CameraCapabilityProbe(
             directoryFsyncSupported = durability.first,
             atomicRenameSupported = durability.second,
         )
+    }
+
+    private fun unbindAndAwaitCameraRelease(
+        provider: ProcessCameraProvider,
+        cameraId: String,
+        cameraReleaseQuiescence: CameraReleaseQuiescence,
+    ) {
+        lifecycleDispatcher.dispatch(timeoutMillis) { provider.unbindAll() }
+        check(cameraReleaseQuiescence.await(cameraId, timeoutMillis)) {
+            "camera $cameraId did not become available after unbind"
+        }
     }
 
     fun runAndPersist(): ProbeResult {

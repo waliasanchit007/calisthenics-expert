@@ -17,6 +17,7 @@ from check_camera_capability_probe import (
 )
 
 CAMERA_LEDGER = "docs/evidence/device-probes/s25-ultra-camera-capability-ledger.json"
+LIVE_CAPTURE_LEDGER = "docs/evidence/live-capture/s25-ultra-live-capture-ledger.json"
 
 
 def test_s25_process_kill_ledger_reports_pending_or_recorded_status() -> None:
@@ -135,6 +136,18 @@ def test_s25_camera_capability_ledger_reports_pending_or_recorded_status() -> No
     # The same entry, checked by the shared implementation the Make target's checker uses, so the
     # ledger and the wrapper can never disagree about what a recorded entry has to satisfy.
     verify_recorded_ledger(ROOT, CAMERA_LEDGER)
+
+
+def test_s25_live_capture_ledger_reports_pending_or_verifies_recorded_content() -> None:
+    from check_live_capture_run import verify_recorded_ledger as verify_live_ledger
+
+    ledger = json.loads((ROOT / LIVE_CAPTURE_LEDGER).read_text())
+    assert ledger["status"] in {"pending", "recorded"}
+    if ledger["status"] == "pending":
+        assert ledger["missing_precondition"]
+    else:
+        verified = verify_live_ledger(ROOT, LIVE_CAPTURE_LEDGER)
+        assert verified["live_admission"] == "admitted"
 
 
 def test_the_committed_camera_ledger_passes_the_shared_recorded_ledger_check() -> None:

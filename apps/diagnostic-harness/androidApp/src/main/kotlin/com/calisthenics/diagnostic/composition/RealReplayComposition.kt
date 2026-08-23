@@ -159,7 +159,7 @@ class RealReplayComposition(
                     startedAt,
                     fixtureMetadataBytes,
                 ),
-                manifestAtFinalization = { manifest ->
+                manifestAtFinalization = { manifest, _ ->
                     manifest.copy(clock = manifest.clock.copy(endedAtUtc = Instant.now().toString()))
                 },
             ),

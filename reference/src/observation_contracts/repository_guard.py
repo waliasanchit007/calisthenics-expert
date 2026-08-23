@@ -575,6 +575,8 @@ def _validate_preprocessing_vector(
     inventory_paths: list[str],
     source: _RepositoryContent,
 ) -> str | None:
+    if "cases" in document:
+        return _validate_yuv420_vector(document)
     required = {
         "tooling_schema_version",
         "synthetic",
@@ -614,6 +616,86 @@ def _validate_preprocessing_vector(
             "expected_output_sha256",
         ),
     )
+
+
+def _validate_yuv420_vector(document: Mapping[str, Any]) -> str | None:
+    required = {"tooling_schema_version", "synthetic", "vector_id", "conversion", "cases"}
+    missing = sorted(required - document.keys())
+    if missing:
+        return f"YUV420 vector is missing required fields: {', '.join(missing)}"
+    if document["synthetic"] is not True or not _is_semver(document["tooling_schema_version"]):
+        return "YUV420 vector declaration is malformed"
+    conversion = document["conversion"]
+    if conversion != {
+        "color_standard": "BT601",
+        "color_range": "FULL",
+        "fixed_point_scale": 1000000,
+        "rounding": "half_up",
+        "clamp": "0..255",
+    }:
+        return "YUV420 vector must declare the admitted BT601/FULL fixed-point conversion"
+    cases = document["cases"]
+    if not isinstance(cases, list) or not cases:
+        return "YUV420 vector must contain at least one case"
+    for case in cases:
+        if not isinstance(case, Mapping):
+            return "YUV420 vector case must be an object"
+        required_case = {
+            "case_id",
+            "width",
+            "height",
+            "y",
+            "u",
+            "v",
+            "color_standard",
+            "color_range",
+            "rotation",
+            "mirrored",
+            "expected_rgb24",
+            "expected_byte_length",
+            "expected_sha256",
+        }
+        missing_case = sorted(required_case - case.keys())
+        if missing_case:
+            return f"YUV420 vector case is missing required fields: {', '.join(missing_case)}"
+        if not _positive_integer(case["width"]) or not _positive_integer(case["height"]):
+            return "YUV420 vector case dimensions must be positive integers"
+        if case["color_standard"] != "BT601" or case["color_range"] != "FULL":
+            return "YUV420 vector case must declare BT601/FULL"
+        expected = case["expected_rgb24"]
+        if not isinstance(expected, list) or any(
+            not isinstance(value, int) or not 0 <= value <= 255 for value in expected
+        ):
+            return "YUV420 expected RGB bytes must be integers in 0..255"
+        if (
+            case["expected_byte_length"] != len(expected)
+            or not isinstance(case["expected_sha256"], str)
+            or not _SHA256_RE.fullmatch(case["expected_sha256"])
+        ):
+            return "YUV420 expected RGB length or SHA-256 is malformed"
+        if hashlib.sha256(bytes(expected)).hexdigest() != case["expected_sha256"]:
+            return "YUV420 expected RGB SHA-256 does not match literal bytes"
+        for plane_name in ("y", "u", "v"):
+            plane = case[plane_name]
+            if not isinstance(plane, Mapping) or not isinstance(plane.get("bytes"), list):
+                return f"YUV420 {plane_name} plane bytes are malformed"
+            plane_bytes = plane["bytes"]
+            if any(not isinstance(value, int) or not 0 <= value <= 255 for value in plane_bytes):
+                return f"YUV420 {plane_name} plane bytes must be integers in 0..255"
+            if (
+                not _positive_integer(plane.get("byte_length"))
+                or not isinstance(plane.get("sha256"), str)
+                or not _SHA256_RE.fullmatch(plane["sha256"])
+                or plane["byte_length"] != len(plane_bytes)
+            ):
+                return f"YUV420 {plane_name} plane length or SHA-256 is malformed"
+            if hashlib.sha256(bytes(plane_bytes)).hexdigest() != plane["sha256"]:
+                return f"YUV420 {plane_name} plane SHA-256 does not match literal bytes"
+            if not _positive_integer(plane.get("row_stride")) or not _positive_integer(
+                plane.get("pixel_stride")
+            ):
+                return f"YUV420 {plane_name} strides must be positive integers"
+    return None
 
 
 def _validate_hashed_reference(

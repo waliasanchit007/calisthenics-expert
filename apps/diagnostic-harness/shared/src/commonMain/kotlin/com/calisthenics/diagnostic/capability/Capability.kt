@@ -12,7 +12,15 @@ data class Capability(val id: CapabilityId, val state: CapabilityState)
 enum class HarnessMode { REPLAY, LIVE }
 
 private val replayRequirements = setOf(CapabilityId.MODEL_ASSET, CapabilityId.STORAGE_DURABILITY, CapabilityId.POSE_BACKEND)
-private val liveRequirements = replayRequirements + setOf(CapabilityId.CAMERA_PERMISSION, CapabilityId.CAMERA_SOURCE, CapabilityId.TIMESTAMP_COMPARABILITY, CapabilityId.COLOR_METADATA, CapabilityId.THERMAL_API)
+private val liveRequirements = replayRequirements + setOf(
+    CapabilityId.CAMERA_PERMISSION,
+    CapabilityId.CAMERA_SOURCE,
+    CapabilityId.TIMESTAMP_COMPARABILITY,
+    CapabilityId.COLOR_METADATA,
+    CapabilityId.THERMAL_API,
+)
+
+fun requiredLiveCapabilities(): Set<CapabilityId> = liveRequirements
 
 fun requiredCapabilities(mode: HarnessMode): Set<CapabilityId> = when (mode) {
     HarnessMode.REPLAY -> replayRequirements

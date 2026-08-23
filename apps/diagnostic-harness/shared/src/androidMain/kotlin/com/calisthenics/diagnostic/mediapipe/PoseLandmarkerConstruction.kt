@@ -52,9 +52,13 @@ fun buildPoseLandmarkerOptions(
     modelBytes: ByteArray,
     modelInputWidth: Int,
     modelInputHeight: Int,
+    liveListeners: PoseLandmarkerLiveListenerBundle? = null,
 ): PoseLandmarkerConstructionResult {
     val delegate = Delegate.valueOf(provenance.delegate)
     val runningMode = RunningMode.valueOf(provenance.runningMode)
+    require((runningMode == RunningMode.LIVE_STREAM) == (liveListeners != null)) {
+        "LIVE_STREAM requires result/error listeners, and non-LIVE_STREAM modes reject them"
+    }
     val numPoses = provenance.taskOptionInt("num_poses")
     val minPoseDetectionConfidence = provenance.taskOptionFloat("min_pose_detection_confidence")
     val minPosePresenceConfidence = provenance.taskOptionFloat("min_pose_presence_confidence")
@@ -70,7 +74,7 @@ fun buildPoseLandmarkerOptions(
         .setDelegate(delegate)
         .build()
 
-    val options = PoseLandmarker.PoseLandmarkerOptions.builder()
+    val optionsBuilder = PoseLandmarker.PoseLandmarkerOptions.builder()
         .setBaseOptions(baseOptions)
         .setRunningMode(runningMode)
         .setNumPoses(numPoses)
@@ -78,7 +82,28 @@ fun buildPoseLandmarkerOptions(
         .setMinPosePresenceConfidence(minPosePresenceConfidence)
         .setMinTrackingConfidence(minTrackingConfidence)
         .setOutputSegmentationMasks(outputSegmentationMasks)
-        .build()
+
+    liveListeners?.let { listeners ->
+        optionsBuilder
+            .setResultListener { result, image ->
+                notifyLiveResultSafely(
+                    timestampMs = { result.timestampMs() },
+                    callbackImage = image,
+                    listeners = listeners,
+                ) {
+                    poseLandmarkerDetectionOf(result.landmarks(), result.worldLandmarks())
+                }
+            }
+            .setErrorListener { error ->
+                try {
+                    listeners.errorListener(error)
+                } catch (_: Throwable) {
+                    // No native listener exception may escape to MediaPipe.
+                }
+            }
+    }
+
+    val options = optionsBuilder.build()
 
     val evidence = PoseLandmarkerConstructionEvidence(
         modelSha256 = provenance.sha256,

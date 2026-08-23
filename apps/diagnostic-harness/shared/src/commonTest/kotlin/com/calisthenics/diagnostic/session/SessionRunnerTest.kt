@@ -86,6 +86,44 @@ class SessionRunnerTest {
     }
 
     @Test
+    fun deadlineExpiryCancelsEachPendingInferenceBeforeRecordingTheTimeout() {
+        val scheduler = VirtualDeadlineScheduler()
+        val inference = RecordingInferencePort()
+        val runner = runner(scheduler, inference, RecordingFinalizer())
+        val submission = runner.submit(0, 100, 110, byteArrayOf(1))!!
+
+        runner.stop(nowNs = 200)
+        scheduler.advanceTo(1_200)
+
+        assertEquals(listOf("submit:$submission", "cancel:$submission"), inference.events)
+        assertEquals("session_teardown_timeout", runner.snapshot().sealedSnapshot!!.failures.single().classification)
+    }
+
+    @Test
+    fun pendingInferenceAdvisoryRemainsOccupiedUntilACompletionOrDrainTimeout() {
+        val scheduler = VirtualDeadlineScheduler()
+        val inference = RecordingInferencePort()
+        val runner = runner(scheduler, inference, RecordingFinalizer())
+
+        assertEquals(false, runner.hasPendingInference())
+        val submission = runner.submit(0, 100, 110, byteArrayOf(1))!!
+        assertEquals(true, runner.hasPendingInference())
+
+        // The backend call has returned, but no asynchronous terminal callback has arrived.
+        assertEquals(true, runner.hasPendingInference())
+
+        inference.complete(submission, InferenceResult.Success(120, posePresent = false))
+        assertEquals(false, runner.hasPendingInference())
+
+        val timedOut = runner(VirtualDeadlineScheduler(), RecordingInferencePort(), RecordingFinalizer())
+        val timedOutSubmission = timedOut.submit(0, 100, 110, byteArrayOf(1))!!
+        timedOut.stop(nowNs = 200)
+        timedOut.postDeadline()
+        assertEquals(timedOutSubmission, timedOut.snapshot().sealedSnapshot!!.terminalMap.keys.single())
+        assertEquals(false, timedOut.hasPendingInference())
+    }
+
+    @Test
     fun terminalClassificationIsSingleAssignmentAndReassignmentFailsSession() {
         val scheduler = VirtualDeadlineScheduler()
         val inference = RecordingInferencePort()
@@ -481,6 +519,7 @@ class SessionRunnerTest {
             private set
         var cancelled = 0
             private set
+        val events = mutableListOf<String>()
 
         override fun submit(
             submissionIndex: Long,
@@ -489,11 +528,13 @@ class SessionRunnerTest {
             callback: (InferenceResult) -> Unit,
         ) {
             submissions++
+            events += "submit:$submissionIndex"
             callbacks[submissionIndex] = callback
         }
 
         override fun cancel(submissionIndex: Long) {
             cancelled++
+            events += "cancel:$submissionIndex"
         }
 
         fun complete(submissionIndex: Long, result: InferenceResult) {
@@ -550,4 +591,5 @@ class SessionRunnerTest {
         const val TEST_WIDTH = 256
         const val TEST_HEIGHT = 256
     }
+
 }

@@ -1,3 +1,4 @@
+import json
 import tomllib
 from pathlib import Path
 
@@ -208,6 +209,171 @@ def test_android_probe_has_executable_instrumentation_wiring() -> None:
     assert "satisfies_s25_camera_live_admission" not in probe_test
 
 
+def test_live_capture_gate_binds_runtime_manifest_and_runs_instrumentation_contract() -> None:
+    composition = (
+        HARNESS
+        / "androidApp/src/main/kotlin/com/calisthenics/diagnostic/composition/LiveCameraComposition.kt"
+    ).read_text()
+    live_test = (
+        HARNESS
+        / "androidApp/src/androidTest/kotlin/com/calisthenics/diagnostic/composition/LiveCaptureDeviceGateTest.kt"
+    ).read_text()
+    makefile = (ROOT / "Makefile").read_text()
+    target = makefile.split("verify-harness-s25-live-capture:", 1)[1].split("\nverify:\n", 1)[0]
+
+    assert "device = Device(" in composition
+    assert "osVersion = Build.VERSION.RELEASE" in composition
+    assert "deviceModel = Build.MODEL" in composition
+    assert "Build.SOC_MODEL" in composition and "Build.HARDWARE" in composition
+    assert (
+        "setCaptureRequestOption("
+        in (
+            HARNESS
+            / "androidApp/src/main/kotlin/com/calisthenics/diagnostic/camera/CameraXFrameSource.kt"
+        ).read_text()
+    )
+    camera_source = (
+        HARNESS
+        / "androidApp/src/main/kotlin/com/calisthenics/diagnostic/camera/CameraXFrameSource.kt"
+    ).read_text()
+    assert "ResolutionSelector.Builder()" in camera_source, (
+        "catches CameraX analysis no longer requesting the nominal 1280x720 resolution"
+    )
+    assert "FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER" in camera_source, (
+        "catches the nominal analysis resolution losing its explicit supported fallback"
+    )
+    assert "resolutionInfo" in camera_source and "onSourceStarted" in camera_source, (
+        "catches the source recording the requested dimensions instead of the bound use case's "
+        "negotiated resolution"
+    )
+    assert "achievedInferenceFpsTimeseriesOf" in composition
+    assert "achievedInferenceFpsTimeseries = listOf(CadenceSample(0L, 0.0))" not in composition
+    assert "grantRuntimePermission" in live_test
+    assert "LiveCameraComposition.fromAndroid" in live_test
+    assert "MainActivity" not in live_test
+    assert "ActivityScenario" not in live_test
+    assert "LifecycleRegistry" in live_test
+    assert "RESUMED" in live_test
+    assert "sendStatus(" in live_test and live_test.count("sendStatus(") == 1
+    assert "LiveCaptureEvidence" in live_test
+    assert "timeout" in live_test.lower() and "live_inference_stalled" in live_test
+    assert "awk '$$2 == \"device\"'" in target
+    assert "emulator-*)" in target
+    assert "fetch-model-asset" in target
+    assert (
+        ":androidApp:assembleDebug" in target and ":androidApp:assembleDebugAndroidTest" in target
+    )
+    assert target.count('adb -s "$$serial" install') == 2
+    assert "am instrument -w -r" in target
+    assert "tools/check_live_capture_run.py" in target
+    checker = (ROOT / "tools/check_live_capture_run.py").read_text()
+    assert "observation_contracts" in checker and "validate-session" in checker
+    checker_main = checker.split("def main", 1)[1]
+    assert checker_main.index("_pull(serial") < checker_main.index("_validate_export")
+    assert "s25-ultra-live-capture-ledger.json" not in target
+    assert "grep -q '^OK ('" not in target
+    assert "pm clear com.calisthenics.diagnostic.android" in target
+    assert target.index("pm clear com.calisthenics.diagnostic.android") < target.index(
+        "am instrument"
+    )
+    assert 'clear_result" != "Success"' in target
+
+
+def test_live_construction_stages_distinct_live_descriptor_for_the_same_model_asset() -> None:
+    replay_descriptor = json.loads((HARNESS / "model-assets/model_provenance.json").read_text())
+    live_descriptor = json.loads((HARNESS / "model-assets/live_model_provenance.json").read_text())
+    immutable_fields = (
+        "asset_name",
+        "sha256",
+        "byte_count",
+        "source_url",
+        "model_family",
+        "model_variant",
+        "quantization",
+        "upstream_revision",
+        "tasks_vision_version",
+        "delegate",
+        "task_options",
+    )
+
+    assert replay_descriptor["running_mode"] == "VIDEO"
+    assert live_descriptor["running_mode"] == "LIVE_STREAM"
+    for field in immutable_fields:
+        assert live_descriptor[field] == replay_descriptor[field], field
+
+    composition = (
+        HARNESS
+        / "androidApp/src/main/kotlin/com/calisthenics/diagnostic/composition/LiveCameraComposition.kt"
+    ).read_text()
+    build = (HARNESS / "androidApp/build.gradle.kts").read_text()
+    assert 'context.assets.open("replay/live_model_provenance.json")' in composition
+    assert "requireLiveModelProvenance(replayProvenance, liveProvenance)" in composition
+    assert 'staged.resolve("live_model_provenance.json")' in build
+
+
+def test_yuv_hot_loop_has_no_per_pixel_pair_coordinate_allocation() -> None:
+    converter = (
+        HARNESS / "shared/src/commonMain/kotlin/com/calisthenics/diagnostic/preprocessing/Yuv420.kt"
+    ).read_text()
+
+    assert "private fun sourceCoordinate" not in converter, (
+        "catches the YUV conversion hot loop returning a Pair for every output pixel"
+    )
+
+
+def test_camera_source_fences_startup_before_exactly_once_analyzer_shutdown() -> None:
+    source = (
+        HARNESS
+        / "androidApp/src/main/kotlin/com/calisthenics/diagnostic/camera/CameraXFrameSource.kt"
+    ).read_text()
+
+    assert "CameraXSourceLifecycle" in source, (
+        "catches the source losing its startup/stop fence around asynchronous provider completion"
+    )
+    assert "useCase.clearAnalyzer()" in source, (
+        "catches stop leaving CameraX's analyzer attached during owned-use-case cleanup"
+    )
+    assert "analyzerExecutor.shutdown()" in source, (
+        "catches the owned analyzer executor leaking after terminal source stop"
+    )
+    assert "providerCompletionExecutor" in source, (
+        "catches provider completion being queued onto the analyzer executor after it is stopped"
+    )
+
+
+def test_live_capture_records_real_thermal_and_cadence_diagnostics() -> None:
+    composition = (
+        HARNESS
+        / "androidApp/src/main/kotlin/com/calisthenics/diagnostic/composition/LiveCameraComposition.kt"
+    ).read_text()
+    thermal = (
+        HARNESS
+        / "androidApp/src/main/kotlin/com/calisthenics/diagnostic/thermal/AndroidLiveThermalProbe.kt"
+    )
+    app = (
+        HARNESS / "composeApp/src/commonMain/kotlin/com/calisthenics/diagnostic/ui/HarnessApp.kt"
+    ).read_text()
+    device_gate = (
+        HARNESS
+        / "androidApp/src/androidTest/kotlin/com/calisthenics/diagnostic/composition/LiveCaptureDeviceGateTest.kt"
+    ).read_text()
+
+    assert thermal.is_file(), "catches the Android thermal API port being omitted"
+    assert "getCurrentThermalStatus" in thermal.read_text()
+    assert "addThermalStatusListener" in thermal.read_text()
+    assert "thermalApiAvailable = false" not in composition, (
+        "catches an available Android thermal API being recorded as unavailable"
+    )
+    assert "thermal_observations" in composition, "catches manifest thermal samples being omitted"
+    assert "camera_cadence_diagnostics" in composition, (
+        "catches manifest cadence diagnostics being omitted"
+    )
+    assert "configured camera FPS" in app
+    assert "latest inference latency" in app
+    assert "latest thermal" in app
+    assert "MINIMUM_CAPTURE_SPAN_NANOS" in device_gate
+
+
 def test_camera_probe_admission_rule_has_exactly_one_home() -> None:
     """The device-authorization rule existed as four divergent copies once. Not a fifth, and not a
     second copy of the camera admission rule beside it."""
@@ -257,7 +423,9 @@ def test_s25_camera_probe_target_delegates_its_verdict_to_the_checker() -> None:
         HARNESS
         / "androidApp/src/androidTest/kotlin/com/calisthenics/diagnostic/probe/CameraCapabilityProbeTest.kt"
     )
-    target = makefile.split("verify-harness-s25-camera-probe:", 1)[1].split("\nverify:", 1)[0]
+    target = makefile.split("verify-harness-s25-camera-probe:", 1)[1].split(
+        "\n# Task 5's bounded physical live-capture evidence gate.", 1
+    )[0]
 
     assert probe_test.is_file()
     phony_line = makefile.split("\n.PHONY", 1)[1].split("\n", 1)[0]
