@@ -87,7 +87,8 @@ class LiveCameraCompositionTest {
         assertEquals(1, harness.source.stopCount)
         assertEquals(1, harness.inference.disposeCount)
         assertEquals(1, harness.scheduler.shutdownCount)
-        assertEquals("source.stop", harness.events.first())
+        assertTrue(harness.events.indexOf("source.start.entered") < harness.events.indexOf("source.stop"))
+        assertTrue(harness.events.indexOf("source.stop") < harness.events.indexOf("inference.dispose"))
         assertNoLiveSessionDispatcher()
     }
 
@@ -108,7 +109,7 @@ class LiveCameraCompositionTest {
             assertTrue(harness.scheduler.awaitShutdown(), "abandon did not release scheduler")
             assertEquals(1, harness.inference.disposeCount)
             assertEquals(1, harness.scheduler.shutdownCount)
-            assertEquals("source.stop", harness.events.first())
+            assertTrue(harness.events.indexOf("source.stop") < harness.events.indexOf("inference.dispose"))
 
             harness.composition.abandon()
             assertEquals(1, harness.source.stopCount)
@@ -329,6 +330,38 @@ class LiveCameraCompositionTest {
     }
 
     @Test
+    fun abandonDuringExternalSourceStartStopsAfterStartCompletes() {
+        val harness = Harness(blockSourceStart = true)
+        val startResult = AtomicReference<LiveCameraStartResult?>(null)
+        val startThread = Thread { startResult.set(harness.composition.start(10)) }
+        try {
+            startThread.start()
+            assertTrue(harness.source.startEntered.await(1, TimeUnit.SECONDS), "source.start was not entered")
+
+            harness.composition.abandon()
+            assertEquals(0, harness.source.stopCount, "teardown stopped source before external start returned")
+
+            harness.source.allowStart.countDown()
+            startThread.join(1_000)
+
+            val unavailable = assertIs<LiveCameraStartResult.Unavailable>(startResult.get())
+            assertEquals("live_session_closed", assertIs<LiveUnavailableReason.Initialization>(unavailable.reason).detail)
+            assertEquals(1, harness.source.startCount)
+            assertEquals(1, harness.source.stopCount)
+            assertTrue(harness.events.indexOf("source.start.completed") < harness.events.indexOf("source.stop"))
+            assertFalse(harness.source.active)
+            assertTrue(harness.inference.awaitDisposed(), "abandon did not release inference")
+            assertTrue(harness.scheduler.awaitShutdown(), "abandon did not release scheduler")
+            assertEquals(1, harness.inference.disposeCount)
+            assertEquals(1, harness.scheduler.shutdownCount)
+        } finally {
+            harness.source.allowStart.countDown()
+            startThread.join(1_000)
+            harness.composition.abandon()
+        }
+    }
+
+    @Test
     fun callbackAfterStopCompletesTheDrainWithoutWaitingForDeadline() {
         withHarness(Harness()) { harness ->
             assertIs<LiveCameraStartResult.Started>(harness.start(10))
@@ -380,12 +413,13 @@ class LiveCameraCompositionTest {
         sourceStartFailure: Throwable? = null,
         invokeManifestAtFinalization: Boolean = false,
         beforeSourceStart: () -> Unit = {},
+        blockSourceStart: Boolean = false,
     ) {
         val events = mutableListOf<String>()
         val inference = FakeInference(events)
         val scheduler = FakeScheduler(events)
         val clock = FakeClock(clockNowNs)
-        val source = FakeSource(clock, events, sourceStartFailure)
+        val source = FakeSource(clock, events, sourceStartFailure, blockSourceStart)
         var sourceCreations = 0
         var inferenceCreations = 0
         var finalizerCreated = false
@@ -456,23 +490,33 @@ class LiveCameraCompositionTest {
         private val clock: FakeClock,
         private val events: MutableList<String>,
         private val startFailure: Throwable?,
+        private val blockStart: Boolean,
     ) : LiveFrameSource {
         private var callback: ((OwnedYuvFrame) -> Unit)? = null
-        var stopped = false
-        var startCount = 0
-        var stopCount = 0
+        @Volatile var stopped = false
+        @Volatile var active = false
+        @Volatile var startCount = 0
+        @Volatile var stopCount = 0
+        val startEntered = CountDownLatch(1)
+        val allowStart = CountDownLatch(1)
         var onStopFrame: (() -> OwnedYuvFrame)? = null
 
         override fun start(onFrame: (OwnedYuvFrame) -> Unit, onFailure: (Throwable) -> Unit) {
             startCount++
+            events += "source.start.entered"
+            startEntered.countDown()
+            if (blockStart) check(allowStart.await(1, TimeUnit.SECONDS))
             startFailure?.let { throw it }
             callback = onFrame
+            active = true
+            events += "source.start.completed"
         }
 
         override fun stop() {
             stopCount++
             events += "source.stop"
             stopped = true
+            active = false
             onStopFrame?.invoke()?.let { callback?.invoke(it) }
         }
 

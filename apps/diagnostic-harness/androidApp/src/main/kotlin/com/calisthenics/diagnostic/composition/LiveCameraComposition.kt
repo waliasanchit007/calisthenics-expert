@@ -54,10 +54,11 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.time.Instant
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 
 private const val LIVE_SESSION_KIND = "live_conformance"
 private const val LIVE_PREPROCESSING_VERSION = "1.0.0"
@@ -207,7 +208,16 @@ class LiveCameraComposition internal constructor(
     private var finalizationStarted = false
     private var sessionDispatcher: SingleThreadSessionDispatcher? = null
     private var sourceStopped = false
-    private val sourceStartPermit = AtomicBoolean(false)
+    private enum class SourceLifecycle {
+        NOT_PUBLISHED,
+        PUBLISHED,
+        STARTING,
+        STARTED,
+        TEARDOWN_REQUESTED,
+    }
+
+    private val sourceLifecycle = AtomicReference(SourceLifecycle.NOT_PUBLISHED)
+    private val sourceStartFinished = CountDownLatch(1)
     private var resourcesReleased = false
     private var abandonRequested = false
 
@@ -317,7 +327,7 @@ class LiveCameraComposition internal constructor(
                 try {
                     liveSource = dependencies.sourceFactory()
                     source = liveSource
-                    sourceStartPermit.set(true)
+                    sourceLifecycle.set(SourceLifecycle.PUBLISHED)
                     admission = LiveFrameAdmission(configuredInferenceFps)
                     null
                 } catch (error: Throwable) {
@@ -334,13 +344,6 @@ class LiveCameraComposition internal constructor(
         val startedSource = checkNotNull(liveSource)
         try {
             dependencies.beforeSourceStart()
-            if (!sourceStartPermit.compareAndSet(true, false)) {
-                return LiveCameraStartResult.Unavailable(LiveUnavailableReason.Initialization("live_session_closed"))
-            }
-            startedSource.start(
-                onFrame = { frame -> handleFrame(frame, onProgress) },
-                onFailure = { failure -> handleSourceFailure(failure, onProgress) },
-            )
         } catch (error: Throwable) {
             val startPlan = synchronized(monitor) {
                 val result = LiveCameraStartResult.Unavailable(
@@ -352,30 +355,63 @@ class LiveCameraComposition internal constructor(
             performRelease(startPlan)
             return checkNotNull(unavailable)
         }
+        if (!sourceLifecycle.compareAndSet(SourceLifecycle.PUBLISHED, SourceLifecycle.STARTING)) {
+            return LiveCameraStartResult.Unavailable(LiveUnavailableReason.Initialization("live_session_closed"))
+        }
+        val startError = runCatching {
+            startedSource.start(
+                onFrame = { frame -> handleFrame(frame, onProgress) },
+                onFailure = { failure -> handleSourceFailure(failure, onProgress) },
+            )
+        }.exceptionOrNull()
+        sourceLifecycle.compareAndSet(SourceLifecycle.STARTING, SourceLifecycle.STARTED)
+        sourceStartFinished.countDown()
+        if (startError != null) {
+            val startPlan = synchronized(monitor) {
+                val result = LiveCameraStartResult.Unavailable(
+                    LiveUnavailableReason.Initialization(startError.message ?: "live_source_start_failed"),
+                )
+                unavailable = result
+                captureResourceReleasePlanLocked(abandonRunner = true)
+            }
+            performRelease(startPlan)
+            return checkNotNull(unavailable)
+        }
+        if (sourceLifecycle.get() == SourceLifecycle.TEARDOWN_REQUESTED) {
+            return LiveCameraStartResult.Unavailable(LiveUnavailableReason.Initialization("live_session_closed"))
+        }
         return LiveCameraStartResult.Started(checkNotNull(createdSessionId))
     }
 
     /** Releases live-owned resources without entering the five-second drain path. */
     fun abandon() {
-        val plan = synchronized(monitor) {
+        val waitForSourceStart = synchronized(monitor) {
             if (resourcesReleased || abandonRequested) return
             abandonRequested = true
             stopping = true
             admission?.stop()
             disposeStallHandleLocked()
-            sourceStartPermit.set(false)
+            requestSourceTeardownLocked()
+        }
+        val plan = synchronized(monitor) {
             captureResourceReleasePlanLocked(abandonRunner = true)
         }
         if (plan == null) return
-        stopReleasedSource(plan.source)
-        if (plan.runner != null) {
-            Thread {
-                performRelease(plan, sourceAlreadyStopped = true)
-                synchronized(monitor) { monitor.notifyAll() }
-            }.start()
-        } else {
+        if (!waitForSourceStart) stopReleasedSource(plan.source)
+        val release = {
+            if (waitForSourceStart) {
+                sourceStartFinished.await()
+                stopReleasedSource(plan.source)
+            }
             performRelease(plan, sourceAlreadyStopped = true)
             synchronized(monitor) { monitor.notifyAll() }
+        }
+        if (waitForSourceStart || plan.runner != null) {
+            Thread {
+                release()
+            }.start()
+        } else {
+            release()
         }
     }
 
@@ -567,6 +603,7 @@ class LiveCameraComposition internal constructor(
     private data class StopWork(
         val source: LiveFrameSource?,
         val runner: SessionRunner?,
+        val waitForSourceStart: Boolean,
     )
 
     private fun requestStopLocked(): StopWork? {
@@ -574,9 +611,11 @@ class LiveCameraComposition internal constructor(
         stopping = true
         admission?.stop()
         disposeStallHandleLocked()
+        val waitForSourceStart = requestSourceTeardownLocked()
         return StopWork(
             source = takeSourceToStopLocked(),
             runner = runner,
+            waitForSourceStart = waitForSourceStart,
         )
     }
 
@@ -608,6 +647,7 @@ class LiveCameraComposition internal constructor(
 
     private fun performStop(stopWork: StopWork?, onProgress: ((SessionRunnerSnapshot) -> Unit)? = null) {
         if (stopWork == null) return
+        if (stopWork.waitForSourceStart) sourceStartFinished.await()
         stopReleasedSource(stopWork.source)
         val stoppedSnapshot = stopWork.runner?.stop(relativeNowNs())
         if (stoppedSnapshot != null) onProgress?.invoke(stoppedSnapshot)
@@ -657,6 +697,21 @@ class LiveCameraComposition internal constructor(
         if (sourceStopped) return null
         sourceStopped = true
         return source
+    }
+
+    private fun requestSourceTeardownLocked(): Boolean {
+        while (true) {
+            val current = sourceLifecycle.get()
+            when (current) {
+                SourceLifecycle.STARTING -> if (sourceLifecycle.compareAndSet(current, SourceLifecycle.TEARDOWN_REQUESTED)) return true
+                SourceLifecycle.NOT_PUBLISHED,
+                SourceLifecycle.PUBLISHED,
+                SourceLifecycle.STARTED,
+                -> if (sourceLifecycle.compareAndSet(current, SourceLifecycle.TEARDOWN_REQUESTED)) return false
+
+                SourceLifecycle.TEARDOWN_REQUESTED -> return false
+            }
+        }
     }
 
     private fun disposeStallHandleLocked() {
