@@ -371,6 +371,8 @@ verify-harness-s25-live-capture:
 	cd apps/diagnostic-harness && ./gradlew --no-daemon :androidApp:assembleDebug :androidApp:assembleDebugAndroidTest; \
 	adb -s "$$serial" install -r androidApp/build/outputs/apk/debug/androidApp-debug.apk; \
 	adb -s "$$serial" install -r androidApp/build/outputs/apk/androidTest/debug/androidApp-debug-androidTest.apk; \
+	clear_result=$$(adb -s "$$serial" shell pm clear com.calisthenics.diagnostic.android | tr -d '\r'); \
+	if [ "$$clear_result" != "Success" ]; then echo "error: pm clear returned '$$clear_result'" >&2; exit 1; fi; \
 	transcript=$$(mktemp); \
 	trap 'rm -f "$$transcript"' EXIT INT TERM; \
 	set +e; \

@@ -73,6 +73,16 @@ data class LiveCaptureCounts(
     val inferenceFramesSubmitted: Long,
     val inferenceRecordsEmitted: Long,
     val unclassifiedDeliveredCallbacks: Long,
+    val inferenceFailures: Long = 0L,
+    val framesSkippedBeforeInference: Long = 0L,
+    val framesSkippedBeforeInferenceByReason: Map<String, Long> = emptyMap(),
+)
+
+data class LiveCaptureFailureIdentity(
+    val submissionIndex: Long,
+    val failureSource: String,
+    val classification: String,
+    val sourceErrorCode: String?,
 )
 
 data class LiveCaptureEvidence(
@@ -85,6 +95,7 @@ data class LiveCaptureEvidence(
     val referenceValidationSucceeded: Boolean,
     val instrumentationSucceeded: Boolean,
     val runFailureCode: String? = null,
+    val inferenceFailureIdentities: List<LiveCaptureFailureIdentity> = emptyList(),
 )
 
 fun isAuthorizedLiveCaptureTarget(environment: LiveCaptureEnvironment): Boolean =
@@ -173,6 +184,27 @@ fun renderLiveCaptureEvidence(evidence: LiveCaptureEvidence): String {
             put("inference_frames_submitted", evidence.counts.inferenceFramesSubmitted)
             put("inference_records_emitted", evidence.counts.inferenceRecordsEmitted)
             put("unclassified_delivered_callbacks", evidence.counts.unclassifiedDeliveredCallbacks)
+            put("inference_failures", evidence.counts.inferenceFailures)
+            put("frames_skipped_before_inference", evidence.counts.framesSkippedBeforeInference)
+            putJsonObject("frames_skipped_before_inference_by_reason") {
+                evidence.counts.framesSkippedBeforeInferenceByReason.entries.sortedBy { it.key }.forEach { entry ->
+                    val reason = entry.key
+                    val count = entry.value
+                    put(reason, count)
+                }
+            }
+        }
+        putJsonArray("inference_failure_identities") {
+            evidence.inferenceFailureIdentities.forEach { failure ->
+                add(
+                    buildJsonObject {
+                        put("submission_index", failure.submissionIndex)
+                        put("failure_source", failure.failureSource)
+                        put("classification", failure.classification)
+                        put("source_error_code", failure.sourceErrorCode)
+                    },
+                )
+            }
         }
         put("reference_validation_succeeded", evidence.referenceValidationSucceeded)
         put("instrumentation_succeeded", evidence.instrumentationSucceeded)

@@ -5,9 +5,10 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.core.content.ContextCompat
-import androidx.test.core.app.ActivityScenario
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
 import androidx.test.platform.app.InstrumentationRegistry
-import com.calisthenics.diagnostic.MainActivity
 import com.calisthenics.diagnostic.android.BuildConfig
 import com.calisthenics.diagnostic.probe.CameraCapabilityProbe
 import com.calisthenics.diagnostic.probe.readMarketingName
@@ -17,10 +18,10 @@ import com.calisthenics.diagnostic.live.LiveCaptureCameraObservation
 import com.calisthenics.diagnostic.live.LiveCaptureCounts
 import com.calisthenics.diagnostic.live.LiveCaptureEnvironment
 import com.calisthenics.diagnostic.live.LiveCaptureEvidence
+import com.calisthenics.diagnostic.live.LiveCaptureFailureIdentity
 import com.calisthenics.diagnostic.live.LiveCaptureManifestDevice
 import com.calisthenics.diagnostic.live.renderLiveCaptureEvidence
 import com.calisthenics.diagnostic.session.FinalizationResult
-import java.util.concurrent.TimeUnit
 import org.junit.Test
 
 /**
@@ -33,8 +34,7 @@ class LiveCaptureDeviceGateTest {
     fun runsBoundedTenFpsLiveCaptureAndEmitsExactlyOneSanitizedEvidenceRecord() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
-        var scenario: ActivityScenario<MainActivity>? = null
-        var activity: MainActivity? = null
+        var lifecycleOwner: InstrumentationLifecycleOwner? = null
         var composition: LiveCameraComposition? = null
         var completion: LiveCameraCompletion? = null
         var observation = CameraCapabilityObservation(
@@ -51,10 +51,9 @@ class LiveCaptureDeviceGateTest {
 
         try {
             grantCameraPermission(instrumentation, context.packageName)
-            val launchedScenario = ActivityScenario.launch(MainActivity::class.java)
-            scenario = launchedScenario
-            launchedScenario.onActivity { activity = it }
-            val owner = checkNotNull(activity)
+            val owner = InstrumentationLifecycleOwner()
+            lifecycleOwner = owner
+            instrumentation.runOnMainSync { owner.resume() }
             val probe = CameraCapabilityProbe(
                 context = context,
                 lifecycleOwner = owner,
@@ -107,6 +106,7 @@ class LiveCaptureDeviceGateTest {
             runFailureCode = runFailureCode ?: "live_capture_failed"
         } finally {
             if (completion == null) composition?.abandon()
+            lifecycleOwner?.let { owner -> instrumentation.runOnMainSync { owner.destroy() } }
             val snapshot = completion?.snapshot ?: composition?.snapshot()
             val manifest = composition?.manifest()
             val counts = snapshot?.counts
@@ -145,16 +145,43 @@ class LiveCaptureDeviceGateTest {
                     inferenceFramesSubmitted = counts?.inferenceFramesSubmitted ?: 0L,
                     inferenceRecordsEmitted = counts?.inferenceRecordsEmitted ?: 0L,
                     unclassifiedDeliveredCallbacks = unclassified,
+                    inferenceFailures = counts?.inferenceFailures ?: 0L,
+                    framesSkippedBeforeInference = counts?.framesSkippedBeforeInference ?: 0L,
+                    framesSkippedBeforeInferenceByReason = counts?.framesSkippedBeforeInferenceByReason ?: emptyMap(),
                 ),
                 referenceValidationSucceeded = false,
                 instrumentationSucceeded = instrumentationSucceeded,
                 runFailureCode = runFailureCode,
+                inferenceFailureIdentities = snapshot?.failures?.map {
+                    LiveCaptureFailureIdentity(
+                        submissionIndex = it.submissionIndex,
+                        failureSource = it.failureSource,
+                        classification = it.classification,
+                        sourceErrorCode = it.sourceErrorCode,
+                    )
+                } ?: emptyList(),
             )
             instrumentation.sendStatus(
                 STATUS_CODE,
                 Bundle().apply { putString(STATUS_TAG, renderLiveCaptureEvidence(evidence)) },
             )
-            scenario?.close()
+        }
+    }
+
+    private class InstrumentationLifecycleOwner : LifecycleOwner {
+        private val registry = LifecycleRegistry(this)
+
+        override val lifecycle: Lifecycle
+            get() = registry
+
+        fun resume() {
+            check(android.os.Looper.myLooper() == android.os.Looper.getMainLooper())
+            registry.currentState = Lifecycle.State.RESUMED
+        }
+
+        fun destroy() {
+            check(android.os.Looper.myLooper() == android.os.Looper.getMainLooper())
+            registry.currentState = Lifecycle.State.DESTROYED
         }
     }
 

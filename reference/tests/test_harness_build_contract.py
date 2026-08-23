@@ -235,6 +235,10 @@ def test_live_capture_gate_binds_runtime_manifest_and_runs_instrumentation_contr
     assert "achievedInferenceFpsTimeseries = listOf(CadenceSample(0L, 0.0))" not in composition
     assert "grantRuntimePermission" in live_test
     assert "LiveCameraComposition.fromAndroid" in live_test
+    assert "MainActivity" not in live_test
+    assert "ActivityScenario" not in live_test
+    assert "LifecycleRegistry" in live_test
+    assert "RESUMED" in live_test
     assert "sendStatus(" in live_test and live_test.count("sendStatus(") == 1
     assert "LiveCaptureEvidence" in live_test
     assert "timeout" in live_test.lower() and "live_inference_stalled" in live_test
@@ -249,9 +253,15 @@ def test_live_capture_gate_binds_runtime_manifest_and_runs_instrumentation_contr
     assert "tools/check_live_capture_run.py" in target
     checker = (ROOT / "tools/check_live_capture_run.py").read_text()
     assert "observation_contracts" in checker and "validate-session" in checker
-    assert checker.index("_pull(serial") < checker.index("_validate_export")
+    checker_main = checker.split("def main", 1)[1]
+    assert checker_main.index("_pull(serial") < checker_main.index("_validate_export")
     assert "s25-ultra-live-capture-ledger.json" not in target
     assert "grep -q '^OK ('" not in target
+    assert "pm clear com.calisthenics.diagnostic.android" in target
+    assert target.index("pm clear com.calisthenics.diagnostic.android") < target.index(
+        "am instrument"
+    )
+    assert 'clear_result" != "Success"' in target
 
 
 def test_camera_probe_admission_rule_has_exactly_one_home() -> None:

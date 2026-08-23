@@ -9,6 +9,7 @@ import pytest
 ROOT = Path(__file__).parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 
+import check_live_capture_run as live_checker
 from check_live_capture_run import (
     LiveCaptureCheckError,
     check_transcript,
@@ -55,8 +56,12 @@ def exact_record() -> dict:
             "camera_frames_received": 10,
             "inference_frames_submitted": 2,
             "inference_records_emitted": 2,
+            "inference_failures": 0,
+            "frames_skipped_before_inference": 8,
+            "frames_skipped_before_inference_by_reason": {"cadence_selection": 8},
             "unclassified_delivered_callbacks": 0,
         },
+        "inference_failure_identities": [],
         "reference_validation_succeeded": True,
         "instrumentation_succeeded": True,
         "run_failure_code": None,
@@ -78,13 +83,17 @@ def transcript(record: dict) -> str:
 
 def manifest() -> dict:
     return {
+        "session_id": "session-1",
+        "session_kind": "live_conformance",
         "device": {
             "platform": "android",
             "os_version": "16",
             "device_model": "SM-S938B",
             "chipset": "s5e9955",
         },
+        "pose_pipeline": {"running_mode": "live_stream"},
         "camera": {
+            "requested_camera_fps": 30.0,
             "source_pixel_format": "YUV_420_888",
             "source_color_matrix": "BT601",
             "source_color_range": "FULL",
@@ -95,6 +104,16 @@ def manifest() -> dict:
             "camera_frames_received": 10,
             "inference_frames_submitted": 2,
             "inference_records_emitted": 2,
+            "inference_failures": 0,
+            "frames_skipped_before_inference": 8,
+            "frames_skipped_before_inference_by_reason": {"cadence_selection": 8},
+        },
+        "machine_inference_failures": [],
+        "cadence": {
+            "configured_inference_fps": 10.0,
+            "achieved_inference_fps_timeseries": [
+                {"t_monotonic_ns": 1_000_000_000, "achieved_inference_fps": 1.0}
+            ],
         },
     }
 
@@ -218,6 +237,77 @@ def test_pulled_manifest_identity_is_checked_against_observed_record() -> None:
         assert checked["satisfies_s25_live_capture"] is False
 
 
+@pytest.mark.parametrize(
+    ("path", "value", "expected"),
+    [
+        (("session_id",), "other", "manifest_session_mismatch"),
+        (("session_kind",), "replay", "manifest_session_kind_mismatch"),
+        (("pose_pipeline", "running_mode"), "image", "manifest_running_mode_mismatch"),
+        (("camera", "source_pixel_format"), "RGBA_8888", "manifest_camera_mismatch"),
+        (("camera", "source_color_matrix"), "BT709", "manifest_camera_mismatch"),
+        (("camera", "source_color_range"), "LIMITED", "manifest_camera_mismatch"),
+        (("camera", "source_dataspace_raw"), 0, "manifest_camera_mismatch"),
+        (("camera", "requested_camera_fps"), 15.0, "manifest_camera_fps_mismatch"),
+        (("cadence", "configured_inference_fps"), 30.0, "manifest_configured_fps_mismatch"),
+        (("counts", "inference_failures"), 1, "manifest_counts_mismatch"),
+        (("counts", "frames_skipped_before_inference"), 7, "manifest_counts_mismatch"),
+    ],
+)
+def test_each_pulled_manifest_boundary_mutation_blocks(
+    path: tuple[str, ...], value: object, expected: str
+) -> None:
+    pulled = manifest()
+    target = pulled
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+    checked = check_transcript(transcript(exact_record()), pulled, True, 0)
+    assert expected in checked["blocking_reasons"]
+    assert checked["satisfies_s25_live_capture"] is False
+
+
+def test_manifest_cadence_rejects_synthetic_zero_sample_and_invalid_values() -> None:
+    for timeseries in (
+        [{"t_monotonic_ns": 0, "achieved_inference_fps": 0.0}],
+        [{"t_monotonic_ns": -1, "achieved_inference_fps": 1.0}],
+        [{"t_monotonic_ns": 1, "achieved_inference_fps": -1.0}],
+        [{"t_monotonic_ns": 1, "achieved_inference_fps": float("nan")}],
+    ):
+        pulled = manifest()
+        pulled["cadence"]["achieved_inference_fps_timeseries"] = timeseries
+        checked = check_transcript(transcript(exact_record()), pulled, True, 0)
+        assert "manifest_cadence_invalid" in checked["blocking_reasons"]
+        assert checked["satisfies_s25_live_capture"] is False
+
+
+def test_pulled_manifest_failure_identity_mutation_blocks() -> None:
+    record = exact_record()
+    record["counts"]["inference_failures"] = 1
+    record["inference_failure_identities"] = [
+        {
+            "submission_index": 0,
+            "failure_source": "backend",
+            "classification": "backend_call_failed",
+            "source_error_code": "E1",
+        }
+    ]
+    pulled = manifest()
+    pulled["counts"]["inference_failures"] = 1
+    pulled["machine_inference_failures"] = [
+        {
+            "submission_index": 0,
+            "capture_timestamp_ns": 1,
+            "failure_source": "backend",
+            "classification": "different",
+            "source_error_code": "E1",
+            "detail": None,
+        }
+    ]
+    checked = check_transcript(transcript(record), pulled, True, 0)
+    assert "manifest_failure_identity_mismatch" in checked["blocking_reasons"]
+    assert checked["satisfies_s25_live_capture"] is False
+
+
 def test_exactly_one_record_and_exact_suite_are_required() -> None:
     with pytest.raises(LiveCaptureCheckError, match="exactly one"):
         check_transcript(
@@ -248,3 +338,50 @@ def test_recorded_ledger_opens_exact_evidence_and_verifies_sha(tmp_path: Path) -
     evidence_path.write_text(evidence_path.read_text() + "tampered", encoding="utf-8")
     with pytest.raises(LiveCaptureCheckError, match="sha256"):
         verify_recorded_ledger(tmp_path, "ledger.json")
+
+
+def test_recorded_ledger_recomputes_blocking_reasons_before_accepting_verdict(
+    tmp_path: Path,
+) -> None:
+    evidence_path = tmp_path / "evidence.json"
+    blocked = exact_record()
+    blocked["camera"]["timestamp_source"] = "UNKNOWN"
+    blocked["blocking_reasons"] = ["timestamp_source_not_realtime"]
+    blocked["satisfies_s25_live_capture"] = True
+    payload = json.dumps(blocked, sort_keys=True) + "\n"
+    evidence_path.write_text(payload, encoding="utf-8")
+    ledger_path = tmp_path / "ledger.json"
+    ledger_path.write_text(
+        json.dumps(
+            {
+                "status": "recorded",
+                "evidence_file": "evidence.json",
+                "evidence_sha256": hashlib.sha256(evidence_path.read_bytes()).hexdigest(),
+                "live_admission": "admitted",
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(LiveCaptureCheckError, match="blocking_reasons|verdict|admission"):
+        verify_recorded_ledger(tmp_path, "ledger.json")
+
+
+def test_typed_no_export_is_printed_as_blocked_without_pull(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    record = exact_record()
+    record["session_id"] = "00000000-0000-4000-8000-000000000000"
+    record["run_failure_code"] = "live_capture_timeout"
+    transcript_path = tmp_path / "transcript.txt"
+    transcript_path.write_text(transcript(record), encoding="utf-8")
+
+    def fail_pull(*args, **kwargs):
+        raise AssertionError("blocked no-export evidence must not pull")
+
+    monkeypatch.setattr(live_checker, "_pull", fail_pull)
+    exit_code = live_checker.main(["checker", "serial", "package", str(transcript_path), "0"])
+    assert exit_code == 3
+    output = json.loads(capsys.readouterr().out)
+    assert output["satisfies_s25_live_capture"] is False
+    assert "live_capture_timeout" in output["blocking_reasons"]
+    assert output["reference_validation_succeeded"] is False
