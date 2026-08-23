@@ -3,6 +3,10 @@
   "blocking_reasons": [],
   "camera": {
     "camera_id": "0",
+    "capture_height": 1080,
+    "capture_width": 1440,
+    "mirrored": false,
+    "orientation_degrees": 90,
     "pixel_format": "YUV_420_888",
     "source_color_range": "FULL",
     "source_color_standard": "BT601",
@@ -12,18 +16,28 @@
   },
   "contains_landmark_coordinates": false,
   "counts": {
-    "camera_frames_received": 2,
-    "frames_skipped_before_inference": 1,
+    "cadence_diagnostics": {
+      "delivered_callback_classification_gap": 0,
+      "delivered_callback_count": 24,
+      "first_delivered_capture_timestamp_ns": 955905918,
+      "last_delivered_capture_timestamp_ns": 4221180502,
+      "observed_capture_span_ns": 3265274584,
+      "requested_callback_opportunities": 98,
+      "requested_camera_fps": 30,
+      "upstream_unclassified_cadence_gap_estimate": 74
+    },
+    "camera_frames_received": 24,
+    "delivered_callback_classification_gap": 0,
+    "frames_skipped_before_inference": 17,
     "frames_skipped_before_inference_by_reason": {
-      "backpressure": 1,
+      "backpressure": 16,
       "cadence_selection": 0,
       "preprocessing_failed": 0,
-      "session_stopping": 0
+      "session_stopping": 1
     },
     "inference_failures": 0,
-    "inference_frames_submitted": 1,
-    "inference_records_emitted": 1,
-    "unclassified_delivered_callbacks": 0
+    "inference_frames_submitted": 7,
+    "inference_records_emitted": 7
   },
   "emitted_by": "com.calisthenics.diagnostic.composition.LiveCaptureDeviceGateTest",
   "environment": {
@@ -52,5 +66,19 @@
   "run_failure_detail": null,
   "sanitized": true,
   "satisfies_s25_live_capture": true,
-  "session_id": "00000000-0000-4000-8000-f5274428b246"
+  "session_id": "00000000-0000-4000-8000-fc1a2d459c56",
+  "thermal": {
+    "api_available": true,
+    "samples": [
+      {
+        "status": 0,
+        "t_monotonic_ns": 117187
+      },
+      {
+        "status": 0,
+        "t_monotonic_ns": 404739
+      }
+    ],
+    "unavailable_reason": null
+  }
 }

@@ -4,9 +4,9 @@
   "device_class": "physical_device",
   "device_identity": "samsung/SM-S938B/pa3q/pa3qxins",
   "evidence_file": "docs/evidence/live-capture/s25-ultra-SM-S938B-api36-live-capture.json",
-  "evidence_sha256": "84969ccec390812ec09c591782f1dc73c580f38d230a99983969e2652be17ef0",
+  "evidence_sha256": "81105ec6f16759ba05e683273f84c9f2ead3e62f6f4d49dedd92c28c26b4a809",
   "live_admission": "admitted",
-  "note": "A bounded 10 FPS live CameraX session on a physical Samsung Galaxy S25 Ultra produced a MediaPipe LIVE_STREAM record, no inference failures or unclassified delivered callbacks, an admitted REALTIME/BT601/FULL camera manifest, and an export accepted by the Python reference validator.",
+  "note": "A bounded 10 FPS live CameraX session on a physical Samsung Galaxy S25 Ultra observed 24 analyzer callbacks over 3.265 seconds, classified every callback, emitted 7 MediaPipe LIVE_STREAM records with no inference failures, recorded actual 1440x1080/90-degree camera geometry and thermal samples, preserved admitted REALTIME/BT601/FULL metadata, and produced an export accepted by the Python reference validator.",
   "record_kind": "live_capture_device_gate_observation",
   "recorded_on_utc_date": "2026-08-23",
   "status": "recorded"
