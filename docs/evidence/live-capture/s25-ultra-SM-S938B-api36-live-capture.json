@@ -1,0 +1,56 @@
+{
+  "artifact_schema_version": "1.0.0",
+  "blocking_reasons": [],
+  "camera": {
+    "camera_id": "0",
+    "pixel_format": "YUV_420_888",
+    "source_color_range": "FULL",
+    "source_color_standard": "BT601",
+    "source_dataspace_raw": 146931712,
+    "timestamp_source": "REALTIME",
+    "underlying_image_available": true
+  },
+  "contains_landmark_coordinates": false,
+  "counts": {
+    "camera_frames_received": 2,
+    "frames_skipped_before_inference": 1,
+    "frames_skipped_before_inference_by_reason": {
+      "backpressure": 1,
+      "cadence_selection": 0,
+      "preprocessing_failed": 0,
+      "session_stopping": 0
+    },
+    "inference_failures": 0,
+    "inference_frames_submitted": 1,
+    "inference_records_emitted": 1,
+    "unclassified_delivered_callbacks": 0
+  },
+  "emitted_by": "com.calisthenics.diagnostic.composition.LiveCaptureDeviceGateTest",
+  "environment": {
+    "abi": "arm64-v8a",
+    "android_release": "16",
+    "api_level": 36,
+    "chipset": "SM8750",
+    "device_class": "physical_device",
+    "device_fingerprint": "samsung/pa3qxins/pa3q:16/BP4A.251205.006/S938BXXSBCZG3_OXMBCZG3:user/release-keys",
+    "device_identity": "samsung/SM-S938B/pa3q/pa3qxins",
+    "manufacturer": "samsung",
+    "marketing_name": "",
+    "model": "SM-S938B"
+  },
+  "inference_failure_identities": [],
+  "instrumentation_succeeded": true,
+  "manifest_device": {
+    "chipset": "SM8750",
+    "device_model": "SM-S938B",
+    "os_version": "16",
+    "platform": "android"
+  },
+  "record_kind": "live_capture_device_gate_observation",
+  "reference_validation_succeeded": true,
+  "run_failure_code": null,
+  "run_failure_detail": null,
+  "sanitized": true,
+  "satisfies_s25_live_capture": true,
+  "session_id": "00000000-0000-4000-8000-f5274428b246"
+}

@@ -271,11 +271,11 @@ make verify-harness-jvm
 make verify-harness-ios
 ```
 
-- [ ] **Step 5: Run physical S25 evidence and record separately**
+- [x] **Step 5: Run physical S25 evidence and record separately**
 
 Run `make verify-harness-s25-live-capture`. A successful probe with a blocking observation is recorded honestly and stops the milestone. If admitted, write the sanitized record under `docs/evidence/live-capture/`, record its SHA and result in the ledger, rerun the host verification, and commit the evidence separately.
 
-- [ ] **Step 6: Commit implementation and evidence**
+- [x] **Step 6: Commit implementation and evidence**
 
 ```bash
 git add apps/diagnostic-harness/androidApp/src/androidTest apps/diagnostic-harness/shared/src/commonMain/kotlin/com/calisthenics/diagnostic/live apps/diagnostic-harness/shared/src/commonTest/kotlin/com/calisthenics/diagnostic/live tools/check_live_capture_run.py reference/tests/test_live_capture_run_check.py reference/tests/test_device_evidence_ledger.py reference/tests/test_harness_build_contract.py Makefile docs/evidence/live-capture
