@@ -294,6 +294,41 @@ class LiveCameraCompositionTest {
     }
 
     @Test
+    fun abandonBetweenSourcePublicationAndStartPreventsSourceResurrection() {
+        val sourceStartGateEntered = CountDownLatch(1)
+        val allowSourceStart = CountDownLatch(1)
+        val harness = Harness(
+            beforeSourceStart = {
+                sourceStartGateEntered.countDown()
+                check(allowSourceStart.await(1, TimeUnit.SECONDS))
+            },
+        )
+        val startResult = AtomicReference<LiveCameraStartResult?>(null)
+        val startThread = Thread { startResult.set(harness.composition.start(10)) }
+        try {
+            startThread.start()
+            assertTrue(sourceStartGateEntered.await(1, TimeUnit.SECONDS), "source-start gate was not reached")
+
+            harness.composition.abandon()
+            allowSourceStart.countDown()
+            startThread.join(1_000)
+
+            val unavailable = assertIs<LiveCameraStartResult.Unavailable>(startResult.get())
+            assertEquals("live_session_closed", assertIs<LiveUnavailableReason.Initialization>(unavailable.reason).detail)
+            assertEquals(0, harness.source.startCount)
+            assertEquals(1, harness.source.stopCount)
+            assertTrue(harness.inference.awaitDisposed(), "abandon did not release inference")
+            assertTrue(harness.scheduler.awaitShutdown(), "abandon did not release scheduler")
+            assertEquals(1, harness.inference.disposeCount)
+            assertEquals(1, harness.scheduler.shutdownCount)
+        } finally {
+            allowSourceStart.countDown()
+            startThread.join(1_000)
+            harness.composition.abandon()
+        }
+    }
+
+    @Test
     fun callbackAfterStopCompletesTheDrainWithoutWaitingForDeadline() {
         withHarness(Harness()) { harness ->
             assertIs<LiveCameraStartResult.Started>(harness.start(10))
@@ -344,6 +379,7 @@ class LiveCameraCompositionTest {
         sourceFactoryFailure: Throwable? = null,
         sourceStartFailure: Throwable? = null,
         invokeManifestAtFinalization: Boolean = false,
+        beforeSourceStart: () -> Unit = {},
     ) {
         val events = mutableListOf<String>()
         val inference = FakeInference(events)
@@ -394,6 +430,7 @@ class LiveCameraCompositionTest {
                 },
                 drainTimeoutNs = drainTimeoutNs,
                 registerRunner = { registrationResult },
+                beforeSourceStart = beforeSourceStart,
             ),
         )
 
@@ -422,10 +459,12 @@ class LiveCameraCompositionTest {
     ) : LiveFrameSource {
         private var callback: ((OwnedYuvFrame) -> Unit)? = null
         var stopped = false
+        var startCount = 0
         var stopCount = 0
         var onStopFrame: (() -> OwnedYuvFrame)? = null
 
         override fun start(onFrame: (OwnedYuvFrame) -> Unit, onFailure: (Throwable) -> Unit) {
+            startCount++
             startFailure?.let { throw it }
             callback = onFrame
         }

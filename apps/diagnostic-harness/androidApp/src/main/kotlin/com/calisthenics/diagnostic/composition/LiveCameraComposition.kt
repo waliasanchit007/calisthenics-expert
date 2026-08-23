@@ -56,6 +56,7 @@ import kotlinx.serialization.json.put
 import java.time.Instant
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 private const val LIVE_SESSION_KIND = "live_conformance"
@@ -168,6 +169,7 @@ class LiveCameraComposition internal constructor(
         val registerRunner: (SessionRunner) -> SessionRunnerRegistrationResult = {
             SessionRunnerRegistrationResult.ACCEPTED
         },
+        val beforeSourceStart: () -> Unit = {},
         val onCompletion: (LiveCameraCompletion) -> Unit = {},
     ) {
         init {
@@ -205,6 +207,7 @@ class LiveCameraComposition internal constructor(
     private var finalizationStarted = false
     private var sessionDispatcher: SingleThreadSessionDispatcher? = null
     private var sourceStopped = false
+    private val sourceStartPermit = AtomicBoolean(false)
     private var resourcesReleased = false
     private var abandonRequested = false
 
@@ -314,6 +317,7 @@ class LiveCameraComposition internal constructor(
                 try {
                     liveSource = dependencies.sourceFactory()
                     source = liveSource
+                    sourceStartPermit.set(true)
                     admission = LiveFrameAdmission(configuredInferenceFps)
                     null
                 } catch (error: Throwable) {
@@ -329,6 +333,10 @@ class LiveCameraComposition internal constructor(
 
         val startedSource = checkNotNull(liveSource)
         try {
+            dependencies.beforeSourceStart()
+            if (!sourceStartPermit.compareAndSet(true, false)) {
+                return LiveCameraStartResult.Unavailable(LiveUnavailableReason.Initialization("live_session_closed"))
+            }
             startedSource.start(
                 onFrame = { frame -> handleFrame(frame, onProgress) },
                 onFailure = { failure -> handleSourceFailure(failure, onProgress) },
@@ -355,6 +363,7 @@ class LiveCameraComposition internal constructor(
             stopping = true
             admission?.stop()
             disposeStallHandleLocked()
+            sourceStartPermit.set(false)
             captureResourceReleasePlanLocked(abandonRunner = true)
         }
         if (plan == null) return
