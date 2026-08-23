@@ -207,7 +207,7 @@ Run `reference/tests/test_repository_guard.py`, then `make verify`. Commit with 
 - [x] Run `make verify-kotlin-export`.
 - [x] Run `cd apps/diagnostic-harness && ./gradlew --no-daemon :shared:allTests :androidApp:testDebugUnitTest`.
 - [x] Inspect `git diff --check 4618bfa..HEAD`, changed-file scope, and tracked-tree guard.
-- [ ] Run exactly one scoped re-review against the six Important findings. It must verdict each `ADDRESSED` or `NOT ADDRESSED` and may report new Critical/Important breakage only inside the fix diff.
-- [ ] Record the two existing Minors as deferred debt: zero-frame live finalization disagrees with design; pre-base capture timestamp is collapsed to generic preprocessing failure.
+- [x] Run exactly one scoped re-review against the six Important findings. It must verdict each `ADDRESSED` or `NOT ADDRESSED` and may report new Critical/Important breakage only inside the fix diff.
+- [x] Record the two existing Minors as deferred debt: zero-frame live finalization disagrees with design; pre-base capture timestamp is collapsed to generic preprocessing failure.
 - [ ] Push the branch and open a protected PR only after host gates and scoped re-review pass.
 - [ ] Wait for required `verify` to be green. Merge remains release-owner authority.
