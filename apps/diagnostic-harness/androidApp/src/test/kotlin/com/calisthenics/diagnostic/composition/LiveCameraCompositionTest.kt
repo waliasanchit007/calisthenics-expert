@@ -51,6 +51,7 @@ class LiveCameraCompositionTest {
 
     @Test
     fun partialConstructionFailureReleasesInferenceAndSchedulerExactlyOnce() {
+        val existingDispatchers = liveSessionDispatcherThreads()
         val harness = Harness(finalizerFailure = IllegalStateException("finalizer construction failed"))
 
         val result = harness.composition.start(10)
@@ -59,24 +60,32 @@ class LiveCameraCompositionTest {
         assertEquals(1, harness.inference.disposeCount)
         assertEquals(1, harness.scheduler.shutdownCount)
         assertEquals(0, harness.sourceCreations)
-        assertNoLiveSessionDispatcher()
+        assertNoNewLiveSessionDispatcher(existingDispatchers)
     }
 
     @Test
     fun registrationRejectionReleasesInferenceAndSchedulerExactlyOnce() {
+        val unrelatedDispatcher = SingleThreadSessionDispatcher()
+        unrelatedDispatcher.dispatch { Unit }
+        val existingDispatchers = liveSessionDispatcherThreads()
         val harness = Harness(registrationResult = SessionRunnerRegistrationResult.REJECTED)
 
-        val result = harness.composition.start(10)
+        try {
+            val result = harness.composition.start(10)
 
-        assertIs<LiveCameraStartResult.Unavailable>(result)
-        assertEquals(1, harness.inference.disposeCount)
-        assertEquals(1, harness.scheduler.shutdownCount)
-        assertEquals(0, harness.sourceCreations)
-        assertNoLiveSessionDispatcher()
+            assertIs<LiveCameraStartResult.Unavailable>(result)
+            assertEquals(1, harness.inference.disposeCount)
+            assertEquals(1, harness.scheduler.shutdownCount)
+            assertEquals(0, harness.sourceCreations)
+            assertNoNewLiveSessionDispatcher(existingDispatchers)
+        } finally {
+            unrelatedDispatcher.shutdown()
+        }
     }
 
     @Test
     fun sourceFactoryFailureReleasesPartiallyConstructedResourcesExactlyOnce() {
+        val existingDispatchers = liveSessionDispatcherThreads()
         val harness = Harness(sourceFactoryFailure = IllegalStateException("source construction failed"))
 
         val result = harness.composition.start(10)
@@ -85,11 +94,12 @@ class LiveCameraCompositionTest {
         assertEquals(1, harness.inference.disposeCount)
         assertEquals(1, harness.scheduler.shutdownCount)
         assertEquals(0, harness.sourceCreations)
-        assertNoLiveSessionDispatcher()
+        assertNoNewLiveSessionDispatcher(existingDispatchers)
     }
 
     @Test
     fun sourceStartFailureStopsSourceAndReleasesEveryOwnedResourceExactlyOnce() {
+        val existingDispatchers = liveSessionDispatcherThreads()
         val harness = Harness(sourceStartFailure = IllegalStateException("source start failed"))
 
         val result = runCatching { harness.composition.start(10) }
@@ -101,7 +111,7 @@ class LiveCameraCompositionTest {
         assertEquals(1, harness.scheduler.shutdownCount)
         assertTrue(harness.events.indexOf("source.start.entered") < harness.events.indexOf("source.stop"))
         assertTrue(harness.events.indexOf("source.stop") < harness.events.indexOf("inference.dispose"))
-        assertNoLiveSessionDispatcher()
+        assertNoNewLiveSessionDispatcher(existingDispatchers)
     }
 
     @Test
@@ -897,11 +907,13 @@ class LiveCameraCompositionTest {
             harness.close()
         }
 
-    private fun assertNoLiveSessionDispatcher() {
-        assertFalse(
-            Thread.getAllStackTraces().keys.any { it.name == "replay-session-dispatcher" && it.isAlive },
-            "live session dispatcher worker leaked",
-        )
+    private fun liveSessionDispatcherThreads(): Set<Thread> =
+        Thread.getAllStackTraces().keys
+            .filterTo(mutableSetOf()) { it.name == "replay-session-dispatcher" && it.isAlive }
+
+    private fun assertNoNewLiveSessionDispatcher(existingDispatchers: Set<Thread>) {
+        val leakedDispatchers = liveSessionDispatcherThreads() - existingDispatchers
+        assertTrue(leakedDispatchers.isEmpty(), "live session dispatcher worker leaked")
     }
 
     private class Harness(
