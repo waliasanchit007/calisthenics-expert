@@ -75,9 +75,7 @@ def _admit_recorded_replay_ledger(root: Path, ledger_relative: str) -> None:
     recorded = json.loads((root / ledger["evidence_file"]).read_text())
     assert recorded["runs_completed"] == 5
     assert len(recorded["runs"]) == 5
-    assert all(
-        run["published"] and run["validated_by_reference_cli"] for run in recorded["runs"]
-    )
+    assert all(run["published"] and run["validated_by_reference_cli"] for run in recorded["runs"])
     assert all(run["pose_detected_records"] > 0 for run in recorded["runs"])
     assert all(
         sum(1 for present in run["pose_present_per_frame"] if present)

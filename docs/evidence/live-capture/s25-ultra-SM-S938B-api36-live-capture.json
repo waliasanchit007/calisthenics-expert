@@ -18,19 +18,19 @@
   "counts": {
     "cadence_diagnostics": {
       "delivered_callback_classification_gap": 0,
-      "delivered_callback_count": 22,
-      "first_delivered_capture_timestamp_ns": 961263991,
-      "last_delivered_capture_timestamp_ns": 4226538366,
-      "observed_capture_span_ns": 3265274375,
-      "requested_callback_opportunities": 98,
+      "delivered_callback_count": 24,
+      "first_delivered_capture_timestamp_ns": 979464303,
+      "last_delivered_capture_timestamp_ns": 4311377011,
+      "observed_capture_span_ns": 3331912708,
+      "requested_callback_opportunities": 100,
       "requested_camera_fps": 30,
       "upstream_unclassified_cadence_gap_estimate": 76
     },
-    "camera_frames_received": 22,
+    "camera_frames_received": 24,
     "delivered_callback_classification_gap": 0,
-    "frames_skipped_before_inference": 15,
+    "frames_skipped_before_inference": 17,
     "frames_skipped_before_inference_by_reason": {
-      "backpressure": 14,
+      "backpressure": 16,
       "cadence_selection": 0,
       "preprocessing_failed": 0,
       "session_stopping": 1
@@ -52,7 +52,7 @@
     "marketing_name": "",
     "model": "SM-S938B"
   },
-  "harness_git_sha": "6c84d996c1e8fa9caea33e5d51d6b5b80522f330",
+  "harness_git_sha": "b0efa50391887af490563efb68b920f7568c2a7b",
   "inference_failure_identities": [],
   "instrumentation_succeeded": true,
   "manifest_device": {
@@ -67,17 +67,17 @@
   "run_failure_detail": null,
   "sanitized": true,
   "satisfies_s25_live_capture": true,
-  "session_id": "00000000-0000-4000-8000-15e105355d40",
+  "session_id": "00000000-0000-4000-8000-16deea133bcd",
   "thermal": {
     "api_available": true,
     "samples": [
       {
         "status": 0,
-        "t_monotonic_ns": 292136
+        "t_monotonic_ns": 112708
       },
       {
         "status": 0,
-        "t_monotonic_ns": 858281
+        "t_monotonic_ns": 988906
       }
     ],
     "unavailable_reason": null

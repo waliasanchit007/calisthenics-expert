@@ -4,8 +4,8 @@
   "device_class": "physical_device",
   "device_identity": "samsung/SM-S938B/pa3q/pa3qxins",
   "evidence_file": "docs/evidence/device-probes/s25-ultra-SM-S938B-api36-process-kill.json",
-  "evidence_sha256": "19009c6f5e2a35b5a834346aee9a7afa88a4ad5f2f35b6b74be795a7bfa59984",
-  "note": "Process killed mid-commit at the destinationExists operation on a physical Samsung Galaxy S25 Ultra. No partial entry appeared under the valid exports root, and the single abandoned staging attempt classified as crash residue rather than a deliberate abort. The record is bound to harness producer 6c84d996c1e8fa9caea33e5d51d6b5b80522f330.",
+  "evidence_sha256": "8c64234fcaa29b579944d40aecbea5f39b4e401c65f6841ba5040e8ab66dcdae",
+  "note": "Process killed mid-commit at the destinationExists operation on a physical Samsung Galaxy S25 Ultra. No partial entry appeared under the valid exports root, and the single abandoned staging attempt classified as crash residue rather than a deliberate abort. The record is bound to harness producer b0efa50391887af490563efb68b920f7568c2a7b.",
   "recorded_on_utc_date": "2026-08-24",
   "status": "recorded"
 }
