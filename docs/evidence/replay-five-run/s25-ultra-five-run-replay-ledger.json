@@ -1,4 +1,11 @@
 {
-  "missing_precondition": "rerun the five-run S25 Ultra replay gate after the final harness producer commit SHA is available",
-  "status": "pending"
+  "android_release": "16",
+  "api_level": 36,
+  "device_class": "physical_device",
+  "device_identity": "samsung/SM-S938B/pa3q/pa3qxins",
+  "evidence_file": "docs/evidence/replay-five-run/s25-ultra-SM-S938B-api36-five-run-replay.json",
+  "evidence_sha256": "4be8e5307f102707cfd5089943e9d9b5bee5b2d66d9e4eb9914d5917d0c446f3",
+  "note": "Five complete runs of the same fixture on a physical Samsung Galaxy S25 Ultra, every export published and validated by the Python reference CLI. Five runs are evidence collection, not an assertion that five proves statistical stability. The record is bound to harness producer 6c84d996c1e8fa9caea33e5d51d6b5b80522f330.",
+  "recorded_on_utc_date": "2026-08-24",
+  "status": "recorded"
 }

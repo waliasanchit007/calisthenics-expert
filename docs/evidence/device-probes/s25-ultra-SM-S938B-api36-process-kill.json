@@ -13,6 +13,7 @@
     "marketing_name": "",
     "model": "SM-S938B"
   },
+  "harness_git_sha": "6c84d996c1e8fa9caea33e5d51d6b5b80522f330",
   "observation": {
     "export_root_corruption_count": 0,
     "killed_at_operation": "destinationExists",

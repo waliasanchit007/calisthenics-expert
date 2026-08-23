@@ -200,7 +200,7 @@ Run `reference/tests/test_repository_guard.py`, then `make verify`. Commit with 
 
 ## Slice acceptance and scoped re-review
 
-- [ ] At the final implementation producer SHA, rerun the S25 process-kill, five-run replay, and live-capture gates. Record sanitized outputs exactly as emitted, set each ledger back to `recorded`, compute each evidence SHA-256 from bytes, and keep `harness_git_sha` equal to the producer commit—not the later evidence commit. If the S25 is unavailable, stop with the three ledgers honestly pending; do not weaken the gate.
+- [x] At the final implementation producer SHA, rerun the S25 process-kill, five-run replay, and live-capture gates. Record sanitized outputs exactly as emitted, set each ledger back to `recorded`, compute each evidence SHA-256 from bytes, and keep `harness_git_sha` equal to the producer commit—not the later evidence commit. If the S25 is unavailable, stop with the three ledgers honestly pending; do not weaken the gate.
 - [x] Run `make verify`.
 - [x] Run `make verify-harness-jvm`.
 - [x] Run `make verify-harness-ios`.
