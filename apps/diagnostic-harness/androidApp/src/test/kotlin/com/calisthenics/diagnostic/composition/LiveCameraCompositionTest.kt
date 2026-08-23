@@ -207,6 +207,29 @@ class LiveCameraCompositionTest {
     }
 
     @Test
+    fun androidClockAndCameraTimestampShareElapsedRealtimeDomainBeforeSessionRebasing() {
+        var elapsedRealtimeNs = 9_000_000_000L
+        val clock = LiveCameraComposition.AndroidLiveClock { elapsedRealtimeNs }
+        val harness = Harness(
+            clockOverride = clock,
+            onFrameTimestamp = { timestampNs -> elapsedRealtimeNs = timestampNs + 1_000L },
+        )
+        try {
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+
+            harness.source.emit(frame(timestampNs = 9_000_002_000L))
+            harness.inference.completeSuccess()
+
+            val record = assertNotNull(harness.composition.snapshot()).records.single()
+            assertEquals(2_000L, record.captureTimestampNs)
+            assertEquals(3_000L, record.inferenceStartNs)
+            assertEquals(5_000L, record.inferenceEndNs)
+        } finally {
+            harness.composition.abandon()
+        }
+    }
+
+    @Test
     fun finalizationRecordsObservedSubmissionCadenceInsteadOfPlaceholderZero() {
         withHarness(Harness(invokeManifestAtFinalization = true)) { harness ->
             assertIs<LiveCameraStartResult.Started>(harness.start(10))
@@ -442,6 +465,8 @@ class LiveCameraCompositionTest {
         modelInputWidth: Int = 2,
         modelInputHeight: Int = 2,
         clockNowNs: Long = 1_000_001_000L,
+        clockOverride: LiveClock? = null,
+        onFrameTimestamp: ((Long) -> Unit)? = null,
         drainTimeoutNs: Long = 5_000_000_000L,
         finalizerFailure: Throwable? = null,
         registrationResult: SessionRunnerRegistrationResult = SessionRunnerRegistrationResult.ACCEPTED,
@@ -455,8 +480,16 @@ class LiveCameraCompositionTest {
         val events = mutableListOf<String>()
         val inference = FakeInference(events)
         val scheduler = FakeScheduler(events)
-        val clock = FakeClock(clockNowNs)
-        val source = FakeSource(clock, events, sourceStartFailure, blockSourceStart)
+        private val fallbackClock = FakeClock(clockNowNs)
+        val clock = clockOverride ?: fallbackClock
+        val source = FakeSource(
+            advanceClock = onFrameTimestamp ?: { timestampNs ->
+                fallbackClock.value = maxOf(fallbackClock.value, timestampNs + 1_000L)
+            },
+            events = events,
+            startFailure = sourceStartFailure,
+            blockStart = blockSourceStart,
+        )
         var sourceCreations = 0
         var inferenceCreations = 0
         var finalizerCreated = false
@@ -527,7 +560,7 @@ class LiveCameraCompositionTest {
     }
 
     private class FakeSource(
-        private val clock: FakeClock,
+        private val advanceClock: (Long) -> Unit,
         private val events: MutableList<String>,
         private val startFailure: Throwable?,
         private val blockStart: Boolean,
@@ -561,7 +594,7 @@ class LiveCameraCompositionTest {
         }
 
         fun emit(frame: OwnedYuvFrame) {
-            clock.value = maxOf(clock.value, frame.timestampNs + 1_000L)
+            advanceClock(frame.timestampNs)
             callback!!.invoke(frame)
         }
     }

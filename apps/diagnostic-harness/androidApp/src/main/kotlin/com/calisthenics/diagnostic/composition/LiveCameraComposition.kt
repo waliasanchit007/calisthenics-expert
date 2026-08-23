@@ -903,9 +903,10 @@ class LiveCameraComposition internal constructor(
                 ?: Build.HARDWARE.takeIf { it.isNotBlank() && !it.equals("unknown", ignoreCase = true) }
     }
 
-    private class AndroidLiveClock : LiveClock {
-        private val start = SystemClock.elapsedRealtimeNanos()
-        override fun nowNs(): Long = SystemClock.elapsedRealtimeNanos() - start
+    internal class AndroidLiveClock(
+        private val elapsedRealtimeNanos: () -> Long = { SystemClock.elapsedRealtimeNanos() },
+    ) : LiveClock {
+        override fun nowNs(): Long = elapsedRealtimeNanos()
     }
 
     private class ExecutorLiveScheduler(private val clock: LiveClock) : LiveScheduler {
