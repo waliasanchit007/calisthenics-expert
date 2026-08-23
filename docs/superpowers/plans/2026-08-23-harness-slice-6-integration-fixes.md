@@ -40,7 +40,7 @@
 - Produces: `SessionManifest.availableObservations` derived as `records.any { family != null }` for each family.
 - Produces: `LiveInternalFailure.SourceFailure(code: String)` or an equivalently narrow typed variant, surfaced by both `LiveCameraComposition.internalFailure` and `LiveCameraCompletion.internalFailure`.
 
-- [ ] **Step 1: RED — pose-bearing live export reconciles availability**
+- [x] **Step 1: RED — pose-bearing live export reconciles availability**
 
 Add a focused `LiveCameraCompositionTest` that drives one successful live inference result containing non-null normalized and world landmark lists, stops the session, captures the finalized manifest through the existing fake finalizer, and asserts:
 
@@ -51,7 +51,7 @@ assertTrue(finalizedManifest.availableObservations.worldLandmarksAvailable)
 
 Also retain a no-pose case asserting both remain false. Run the two focused tests and observe the pose-bearing case fail because the manifest currently hardcodes `false, false`.
 
-- [ ] **Step 2: GREEN — derive availability from sealed records**
+- [x] **Step 2: GREEN — derive availability from sealed records**
 
 Inside the existing `manifestAtFinalization` callback, set:
 
@@ -64,15 +64,15 @@ availableObservations = AvailableObservations(
 
 Do not infer availability from construction metadata or from `posePresent` alone. Rerun the focused tests green.
 
-- [ ] **Step 3: RED — CameraX runtime failure remains typed**
+- [x] **Step 3: RED — CameraX runtime failure remains typed**
 
 Add a focused test that starts successfully, supplies source geometry, invokes the source's `onFailure` callback with a stable test exception, completes drain/finalization, and asserts both the composition and completion expose the stable typed code `live_source_failed`. Observe it fail because `handleSourceFailure` currently discards the throwable and requests a normal stop.
 
-- [ ] **Step 4: GREEN — store and publish the source failure identity**
+- [x] **Step 4: GREEN — store and publish the source failure identity**
 
 Add one monitor-confined source-failure field. The first runtime source failure wins; duplicate callbacks do not overwrite it. `handleSourceFailure` records `LiveInternalFailure.SourceFailure("live_source_failed")` before requesting stop. The existing inference-stall identity remains unchanged and no throwable message enters evidence. `internalFailure` and final completion return the recorded source failure, otherwise the existing stall failure, otherwise null.
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 Run the focused Android unit tests, then:
 
@@ -105,11 +105,11 @@ Commit only Task 1 files with subject `fix: make live session outcomes truthful`
 - Produces: top-level `harness_git_sha` in live, five-run replay, and process-kill evidence records.
 - Produces: recorded-ledger verification that recomputes every intrinsic and external gate from persisted fields.
 
-- [ ] **Step 1: RED — recorded live evidence rechecks external gates**
+- [x] **Step 1: RED — recorded live evidence rechecks external gates**
 
 Add two parametrized tests that write an otherwise admitted record with, respectively, `reference_validation_succeeded=false` and `instrumentation_succeeded=false`, recompute the file digest in the ledger, and assert `verify_recorded_ledger` rejects the record because its persisted blocking reasons/verdict no longer match. Observe both fail because recorded verification currently calls only `_intrinsic_blocking_reasons`.
 
-- [ ] **Step 2: GREEN — one persisted-record predicate**
+- [x] **Step 2: GREEN — one persisted-record predicate**
 
 Add a helper that recomputes persisted blocking reasons from `_intrinsic_blocking_reasons(record)` plus:
 
@@ -122,19 +122,19 @@ if record.get("instrumentation_succeeded") is not True:
 
 Use it in `verify_recorded_ledger`; preserve deterministic de-duplication order. Rerun the focused Python tests green.
 
-- [ ] **Step 3: RED — every physical record and ledger is producer-bound**
+- [x] **Step 3: RED — every physical record and ledger is producer-bound**
 
 Add Kotlin render tests requiring `harness_git_sha` in all three evidence records and rejecting values outside `[0-9a-f]{40}`. Add Python tests that reject a recorded evidence file with a missing/malformed SHA. Add ledger tests for replay and process-kill that mutate the referenced evidence bytes without updating `evidence_sha256` and assert failure. Observe the tests fail against the current records/checkers.
 
-- [ ] **Step 4: GREEN — propagate and verify producer SHA**
+- [x] **Step 4: GREEN — propagate and verify producer SHA**
 
 Add `harnessGitSha: String` to the three evidence types, validate it at construction, render `harness_git_sha`, and pass `BuildConfig.PROBE_GIT_SHA` from each instrumentation producer. Make each checker require the exact 40-hex field. Make replay and process-kill ledger tests compute and compare the referenced file's actual SHA-256, matching the already-correct camera/live pattern.
 
-- [ ] **Step 5: Invalidate old unbound observations without inventing provenance**
+- [x] **Step 5: Invalidate old unbound observations without inventing provenance**
 
 Before committing the producer change, change the three affected ledgers to `status: "pending"`, retain a precise `missing_precondition` naming the S25 rerun, and remove recorded-only verdict/hash fields as required by their existing pending schema. Do not edit the old evidence files to insert guessed SHAs.
 
-- [ ] **Step 6: Verify and commit the host-side gate**
+- [x] **Step 6: Verify and commit the host-side gate**
 
 Run the focused Kotlin evidence tests, focused Python evidence/ledger tests, `make verify`, and `make verify-harness-jvm`. Commit with subject `fix: bind device evidence to its producer`.
 
@@ -150,7 +150,7 @@ Run the focused Kotlin evidence tests, focused Python evidence/ledger tests, `ma
 - Consumes: the existing protected job id `verify` and `make verify-harness-jvm` workflow step.
 - Produces: a Linux-compatible JVM/Android gate containing shared JVM tests, shared Android host tests, Android app unit tests, and non-delivery Android assembly.
 
-- [ ] **Step 1: RED — pin protected Kotlin coverage mechanically**
+- [x] **Step 1: RED — pin protected Kotlin coverage mechanically**
 
 Add repository-contract tests asserting that `verify-harness-jvm` invokes all of:
 
@@ -163,11 +163,11 @@ Add repository-contract tests asserting that `verify-harness-jvm` invokes all of
 
 and that `.github/workflows/verify.yml` still runs `make verify-harness-jvm` inside job `verify`. Observe failure for the two missing unit-test tasks.
 
-- [ ] **Step 2: GREEN — expand the existing Make target**
+- [x] **Step 2: GREEN — expand the existing Make target**
 
 Add the two missing Gradle tasks to `verify-harness-jvm`. Do not rename the Make target, workflow, or job. Do not add iOS to Ubuntu. Rerun the contract tests and execute `make verify-harness-jvm` locally.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 Commit Task 3 files with subject `ci: protect Android harness unit tests`.
 
@@ -181,7 +181,7 @@ Commit Task 3 files with subject `ci: protect Android harness unit tests`.
 - Consumes: `_RepositoryContent.iter_bytes(relative_path)`, which already streams tracked files and staged Git blobs in 64 KiB chunks.
 - Produces: bounded-memory prohibited-content scanning over every byte, preserving enough overlap to match a signature split across adjacent chunks.
 
-- [ ] **Step 1: RED — signatures after and across the old cutoff are rejected**
+- [x] **Step 1: RED — signatures after and across the old cutoff are rejected**
 
 Replace the existing test that permits a private-key marker after 64 KiB with two parametrized staged/tracked regression cases:
 
@@ -190,23 +190,23 @@ Replace the existing test that permits a private-key marker after 64 KiB with tw
 
 Assert `REPOSITORY.PROHIBITED_CONTENT` for both. Observe failure against prefix-only scanning.
 
-- [ ] **Step 2: GREEN — stream all content with bounded overlap**
+- [x] **Step 2: GREEN — stream all content with bounded overlap**
 
 Keep `read_prefix` for strict JSON descriptors and symlink targets. For ordinary non-fixture content, add a streaming scanner over `iter_bytes`. Carry a tail at least as long as the longest prohibited literal/regex span needed by `_PRIVATE_KEY_RE`, `_SECRET_CONTENT_RE`, and `_POSE_CONTENT_RE`; scan `tail + chunk`, then retain only that bounded tail. Return on the first finding. Do not accumulate entire files and do not scan admitted raw fixture payloads as secrets.
 
-- [ ] **Step 3: Verify and commit**
+- [x] **Step 3: Verify and commit**
 
 Run `reference/tests/test_repository_guard.py`, then `make verify`. Commit with subject `fix: scan complete repository blobs for secrets`.
 
 ## Slice acceptance and scoped re-review
 
 - [ ] At the final implementation producer SHA, rerun the S25 process-kill, five-run replay, and live-capture gates. Record sanitized outputs exactly as emitted, set each ledger back to `recorded`, compute each evidence SHA-256 from bytes, and keep `harness_git_sha` equal to the producer commit—not the later evidence commit. If the S25 is unavailable, stop with the three ledgers honestly pending; do not weaken the gate.
-- [ ] Run `make verify`.
-- [ ] Run `make verify-harness-jvm`.
-- [ ] Run `make verify-harness-ios`.
-- [ ] Run `make verify-kotlin-export`.
-- [ ] Run `cd apps/diagnostic-harness && ./gradlew --no-daemon :shared:allTests :androidApp:testDebugUnitTest`.
-- [ ] Inspect `git diff --check 4618bfa..HEAD`, changed-file scope, and tracked-tree guard.
+- [x] Run `make verify`.
+- [x] Run `make verify-harness-jvm`.
+- [x] Run `make verify-harness-ios`.
+- [x] Run `make verify-kotlin-export`.
+- [x] Run `cd apps/diagnostic-harness && ./gradlew --no-daemon :shared:allTests :androidApp:testDebugUnitTest`.
+- [x] Inspect `git diff --check 4618bfa..HEAD`, changed-file scope, and tracked-tree guard.
 - [ ] Run exactly one scoped re-review against the six Important findings. It must verdict each `ADDRESSED` or `NOT ADDRESSED` and may report new Critical/Important breakage only inside the fix diff.
 - [ ] Record the two existing Minors as deferred debt: zero-frame live finalization disagrees with design; pre-base capture timestamp is collapsed to generic preprocessing failure.
 - [ ] Push the branch and open a protected PR only after host gates and scoped re-review pass.
