@@ -1,5 +1,6 @@
 import hashlib
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -20,6 +21,76 @@ from check_camera_capability_probe import (
 
 CAMERA_LEDGER = "docs/evidence/device-probes/s25-ultra-camera-capability-ledger.json"
 LIVE_CAPTURE_LEDGER = "docs/evidence/live-capture/s25-ultra-live-capture-ledger.json"
+
+
+def _copy_recorded_ledger(root: Path, ledger_relative: str, destination: Path) -> str:
+    ledger_path = root / ledger_relative
+    ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    assert ledger["status"] == "recorded"
+    evidence_relative = ledger["evidence_file"]
+    evidence_path = root / evidence_relative
+    copied_ledger = destination / ledger_relative
+    copied_evidence = destination / evidence_relative
+    copied_ledger.parent.mkdir(parents=True, exist_ok=True)
+    copied_evidence.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(ledger_path, copied_ledger)
+    shutil.copyfile(evidence_path, copied_evidence)
+    return ledger_relative
+
+
+def _admit_recorded_process_kill_ledger(root: Path, ledger_relative: str) -> None:
+    ledger = json.loads((root / ledger_relative).read_text(encoding="utf-8"))
+    assert ledger["status"] in {"pending", "recorded"}
+    record_process_kill_evidence.verify_recorded_ledger(root, ledger_relative)
+    if ledger["status"] == "pending":
+        assert ledger["missing_precondition"]
+        return
+
+    assert ledger["evidence_file"]
+    recorded = json.loads((root / ledger["evidence_file"]).read_text())
+    observation = recorded["observation"]
+    assert observation["process_crash_confirmed"] is True
+    assert observation["export_root_corruption_count"] == 0
+    assert observation["staging_residue_count"] == 1
+    assert observation["staging_residue_classification"] == "CrashResidue"
+    assert recorded["satisfies_s25_process_kill_gate"] is True
+
+    environment = recorded["environment"]
+    assert environment["device_class"] == "physical_device"
+    assert environment["manufacturer"].lower() == "samsung"
+    assert environment.get("model", "").upper().startswith("SM-S938") or (
+        "S25 Ultra" in environment.get("marketing_name", "")
+    )
+
+
+def _admit_recorded_replay_ledger(root: Path, ledger_relative: str) -> None:
+    ledger = json.loads((root / ledger_relative).read_text(encoding="utf-8"))
+    assert ledger["status"] in {"pending", "recorded"}
+    check_five_run_replay.verify_recorded_ledger(root, ledger_relative)
+    if ledger["status"] == "pending":
+        assert ledger["missing_precondition"]
+        return
+
+    assert ledger["evidence_file"]
+    recorded = json.loads((root / ledger["evidence_file"]).read_text())
+    assert recorded["runs_completed"] == 5
+    assert len(recorded["runs"]) == 5
+    assert all(
+        run["published"] and run["validated_by_reference_cli"] for run in recorded["runs"]
+    )
+    assert all(run["pose_detected_records"] > 0 for run in recorded["runs"])
+    assert all(
+        sum(1 for present in run["pose_present_per_frame"] if present)
+        == run["pose_detected_records"]
+        for run in recorded["runs"]
+    )
+    assert recorded["satisfies_s25_device_gate"] is True
+    assert recorded["environment"]["device_class"] == "physical_device"
+    environment = recorded["environment"]
+    assert environment["manufacturer"].lower() == "samsung"
+    assert environment.get("model", "").upper().startswith("SM-S938") or (
+        "S25 Ultra" in environment.get("marketing_name", "")
+    )
 
 
 def test_recorded_replay_ledger_rejects_mutated_evidence_digest(tmp_path: Path) -> None:
@@ -77,6 +148,38 @@ def test_recorded_process_kill_ledger_rejects_mutated_evidence_digest(tmp_path: 
     assert callable(verifier), "process-kill checker must expose recorded-ledger verification"
     with pytest.raises(record_process_kill_evidence.ProcessKillRecordError, match="sha256"):
         verifier(tmp_path, "ledger.json")
+
+
+def test_committed_process_kill_ledger_admission_rejects_mutated_evidence_digest(
+    tmp_path: Path,
+) -> None:
+    ledger_relative = _copy_recorded_ledger(
+        ROOT,
+        "docs/evidence/device-probes/s25-ultra-process-kill-ledger.json",
+        tmp_path,
+    )
+    ledger = json.loads((tmp_path / ledger_relative).read_text(encoding="utf-8"))
+    evidence_path = tmp_path / ledger["evidence_file"]
+    evidence_path.write_bytes(evidence_path.read_bytes() + b" \n")
+
+    with pytest.raises(record_process_kill_evidence.ProcessKillRecordError, match="sha256"):
+        _admit_recorded_process_kill_ledger(tmp_path, ledger_relative)
+
+
+def test_committed_replay_ledger_admission_rejects_mutated_evidence_digest(
+    tmp_path: Path,
+) -> None:
+    ledger_relative = _copy_recorded_ledger(
+        ROOT,
+        "docs/evidence/replay-five-run/s25-ultra-five-run-replay-ledger.json",
+        tmp_path,
+    )
+    ledger = json.loads((tmp_path / ledger_relative).read_text(encoding="utf-8"))
+    evidence_path = tmp_path / ledger["evidence_file"]
+    evidence_path.write_bytes(evidence_path.read_bytes() + b" \n")
+
+    with pytest.raises(check_five_run_replay.FiveRunReplayCheckError, match="sha256"):
+        _admit_recorded_replay_ledger(tmp_path, ledger_relative)
 
 
 @pytest.mark.parametrize("sha", [None, "not-a-commit-sha"])
@@ -141,38 +244,8 @@ def test_recorded_process_kill_ledger_requires_a_well_formed_harness_git_sha(
 
 
 def test_s25_process_kill_ledger_reports_pending_or_recorded_status() -> None:
-    ledger = json.loads(
-        (ROOT / "docs/evidence/device-probes/s25-ultra-process-kill-ledger.json").read_text()
-    )
-    assert ledger["status"] in {"pending", "recorded"}
-    if ledger["status"] == "pending":
-        assert ledger["missing_precondition"]
-        record_process_kill_evidence.verify_recorded_ledger(
-            ROOT, "docs/evidence/device-probes/s25-ultra-process-kill-ledger.json"
-        )
-        return
-
-    # A recorded ledger must be checked against the record it points at, to the same standard as
-    # the five-run gate. Asserting only that an evidence_file key exists would let a "recorded"
-    # status point at anything at all.
-    assert ledger["evidence_file"]
-    recorded = json.loads((ROOT / ledger["evidence_file"]).read_text())
-    observation = recorded["observation"]
-
-    # Without a real process death every other condition is trivially satisfied by a session that
-    # simply exported cleanly, and the gate would certify crash safety it never tested.
-    assert observation["process_crash_confirmed"] is True
-    assert observation["export_root_corruption_count"] == 0
-    assert observation["staging_residue_count"] == 1
-    # A killed process cannot have written a deliberate abort marker.
-    assert observation["staging_residue_classification"] == "CrashResidue"
-    assert recorded["satisfies_s25_process_kill_gate"] is True
-
-    environment = recorded["environment"]
-    assert environment["device_class"] == "physical_device"
-    assert environment["manufacturer"].lower() == "samsung"
-    assert environment.get("model", "").upper().startswith("SM-S938") or (
-        "S25 Ultra" in environment.get("marketing_name", "")
+    _admit_recorded_process_kill_ledger(
+        ROOT, "docs/evidence/device-probes/s25-ultra-process-kill-ledger.json"
     )
 
 
@@ -180,43 +253,9 @@ def test_s25_five_run_replay_ledger_reports_pending_or_recorded_status() -> None
     # Task 5: the five-run S25 device gate. `make verify` runs this in CI, so an absent physical
     # S25 must always surface as an honest "pending" ledger entry here — never silently omitted,
     # and never a fabricated "recorded" status the CI run itself has no device to have earned.
-    ledger = json.loads(
-        (ROOT / "docs/evidence/replay-five-run/s25-ultra-five-run-replay-ledger.json").read_text()
+    _admit_recorded_replay_ledger(
+        ROOT, "docs/evidence/replay-five-run/s25-ultra-five-run-replay-ledger.json"
     )
-    assert ledger["status"] in {"pending", "recorded"}
-    if ledger["status"] == "pending":
-        assert ledger["missing_precondition"]
-        check_five_run_replay.verify_recorded_ledger(
-            ROOT, "docs/evidence/replay-five-run/s25-ultra-five-run-replay-ledger.json"
-        )
-    else:
-        assert ledger["evidence_file"]
-        recorded = json.loads((ROOT / ledger["evidence_file"]).read_text())
-        assert recorded["runs_completed"] == 5
-        assert len(recorded["runs"]) == 5
-        assert all(
-            run["published"] and run["validated_by_reference_cli"] for run in recorded["runs"]
-        )
-        # A recorded gate must be evidence about a pose pipeline that actually detected something.
-        # Five identical runs of an empty pipeline agree on every input-side field, so without this
-        # a "recorded" ledger could point at evidence of nothing.
-        assert all(run["pose_detected_records"] > 0 for run in recorded["runs"])
-        assert all(
-            sum(1 for present in run["pose_present_per_frame"] if present)
-            == run["pose_detected_records"]
-            for run in recorded["runs"]
-        )
-        assert recorded["satisfies_s25_device_gate"] is True
-        assert recorded["environment"]["device_class"] == "physical_device"
-        # Same authorization rule as isAuthorizedFiveRunGateTarget and
-        # tools/check_five_run_replay.py: model number is authoritative, because retail S25 Ultra
-        # firmware may report ro.config.marketing_name as empty. Asserting marketing name alone
-        # rejected the genuine device.
-        environment = recorded["environment"]
-        assert environment["manufacturer"].lower() == "samsung"
-        assert environment.get("model", "").upper().startswith("SM-S938") or (
-            "S25 Ultra" in environment.get("marketing_name", "")
-        )
 
 
 def test_s25_camera_capability_ledger_reports_pending_or_recorded_status() -> None:
