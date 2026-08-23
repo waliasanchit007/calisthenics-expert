@@ -129,3 +129,21 @@ def test_the_gradle_preparation_step_never_fetches_or_skips_the_model_asset() ->
             f"make {target} assembles a delivery variant, which cannot succeed without the asset; "
             "preparation must use the non-delivery jvmVerification variant"
         )
+
+
+def test_workflow_fetches_the_verified_model_only_after_hermetic_tests_and_before_app_tests() -> (
+    None
+):
+    """Android app unit tests compile debug resources, so the unconditional model gate applies."""
+    steps = workflow_make_steps()
+
+    assert "fetch-model-asset" in steps, (
+        "verify-harness-jvm runs Android app unit tests through the debug resource graph; a clean "
+        "runner must fetch and SHA-verify the pinned model before that protected gate"
+    )
+    assert (
+        steps.index("verify") < steps.index("fetch-model-asset") < steps.index("verify-harness-jvm")
+    ), (
+        "the model must remain absent while make verify proves the missing-asset gate offline, "
+        "then be fetched before Android app unit tests compile debug resources"
+    )
