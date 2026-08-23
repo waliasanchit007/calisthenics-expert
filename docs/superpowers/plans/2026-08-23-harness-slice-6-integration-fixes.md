@@ -209,5 +209,5 @@ Run `reference/tests/test_repository_guard.py`, then `make verify`. Commit with 
 - [x] Inspect `git diff --check 4618bfa..HEAD`, changed-file scope, and tracked-tree guard.
 - [x] Run exactly one scoped re-review against the six Important findings. It must verdict each `ADDRESSED` or `NOT ADDRESSED` and may report new Critical/Important breakage only inside the fix diff.
 - [x] Record the two existing Minors as deferred debt: zero-frame live finalization disagrees with design; pre-base capture timestamp is collapsed to generic preprocessing failure.
-- [ ] Push the branch and open a protected PR only after host gates and scoped re-review pass.
-- [ ] Wait for required `verify` to be green. Merge remains release-owner authority.
+- [x] Push the branch and open a protected PR only after host gates and scoped re-review pass.
+- [x] Wait for required `verify` to be green. Merge remains release-owner authority.
