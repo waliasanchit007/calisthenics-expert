@@ -1,6 +1,7 @@
 package com.calisthenics.diagnostic.composition
 
 import com.calisthenics.diagnostic.camera.OwnedYuvFrame
+import com.calisthenics.diagnostic.contract.Landmark
 import com.calisthenics.diagnostic.mediapipe.PoseLandmarkerConstructionEvidence
 import com.calisthenics.diagnostic.preprocessing.FrameRotation
 import com.calisthenics.diagnostic.preprocessing.YuvColorRange
@@ -194,6 +195,52 @@ class LiveCameraCompositionTest {
             assertEquals(2, samples.size)
             assertEquals(0L, samples.first().jsonObject["t_monotonic_ns"]?.jsonPrimitive?.long)
             assertEquals(2_000L, samples.last().jsonObject["t_monotonic_ns"]?.jsonPrimitive?.long)
+        }
+    }
+
+    @Test
+    fun poseBearingLiveExportMarksAvailableObservationsFromSealedRecords() {
+        withHarness(Harness(invokeManifestAtFinalization = true)) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            harness.source.emit(frame(timestampNs = 1_000_002_000L))
+            val landmarks = listOf(Landmark(0, "nose", 0.5, 0.5, 0.0, null, null))
+            harness.inference.completeSuccess(
+                normalizedImageLandmarks = landmarks,
+                worldLandmarks = landmarks,
+            )
+            harness.composition.stop()
+
+            val available = assertNotNull(harness.finalizedManifest).availableObservations
+            assertTrue(available.normalizedImageLandmarksAvailable)
+            assertTrue(available.worldLandmarksAvailable)
+        }
+    }
+
+    @Test
+    fun noPoseLiveExportLeavesAvailableObservationsFalse() {
+        withHarness(Harness(invokeManifestAtFinalization = true)) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            harness.source.emit(frame(timestampNs = 1_000_002_000L))
+            harness.inference.completeSuccess()
+            harness.composition.stop()
+
+            val available = assertNotNull(harness.finalizedManifest).availableObservations
+            assertFalse(available.normalizedImageLandmarksAvailable)
+            assertFalse(available.worldLandmarksAvailable)
+        }
+    }
+
+    @Test
+    fun runtimeSourceFailureIsPublishedOnCompositionAndCompletion() {
+        withHarness(Harness(invokeManifestAtFinalization = true)) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            harness.source.emit(frame(timestampNs = 1_000_002_000L))
+            harness.source.fail(IllegalStateException("source detail must not enter evidence"))
+            harness.inference.completeSuccess()
+
+            val completion = assertNotNull(harness.composition.completion())
+            assertEquals("live_source_failed", harness.composition.internalFailure?.code)
+            assertEquals("live_source_failed", completion.internalFailure?.code)
         }
     }
 
@@ -946,6 +993,7 @@ class LiveCameraCompositionTest {
         private val callbackOwnedByCurrentThread: ThreadLocal<Boolean> = ThreadLocal.withInitial { false }
         private val callbackReleasedForQuiescence: ThreadLocal<Boolean> = ThreadLocal.withInitial { false }
         private var callback: ((OwnedYuvFrame) -> Unit)? = null
+        private var failureCallback: ((Throwable) -> Unit)? = null
         private var acceptingCallbacks = true
         private var inFlightCallbacks = 0
         private val quiescenceCallbacks = mutableListOf<() -> Unit>()
@@ -972,6 +1020,7 @@ class LiveCameraCompositionTest {
             startFailure?.let { throw it }
             onSourceStarted(sourceResolution)
             callback = onFrame
+            failureCallback = onFailure
             active = true
             events += "source.start.completed"
         }
@@ -1001,6 +1050,10 @@ class LiveCameraCompositionTest {
             } finally {
                 leaveCallback()
             }
+        }
+
+        fun fail(error: Throwable) {
+            checkNotNull(failureCallback).invoke(error)
         }
 
         fun emitInFlight(frame: OwnedYuvFrame): Thread {
@@ -1081,8 +1134,18 @@ class LiveCameraCompositionTest {
             this.callback = callback
         }
 
-        fun completeSuccess() {
-            callback!!.invoke(InferenceResult.Success(callbackNowNs - 1_000_000_000L, posePresent = false))
+        fun completeSuccess(
+            normalizedImageLandmarks: List<Landmark>? = null,
+            worldLandmarks: List<Landmark>? = null,
+        ) {
+            callback!!.invoke(
+                InferenceResult.Success(
+                    callbackNowNs - 1_000_000_000L,
+                    posePresent = normalizedImageLandmarks != null || worldLandmarks != null,
+                    normalizedImageLandmarks = normalizedImageLandmarks,
+                    worldLandmarks = worldLandmarks,
+                ),
+            )
             callback = null
         }
 

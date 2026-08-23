@@ -111,6 +111,8 @@ sealed interface LiveInternalFailure {
     data object LiveInferenceStalled : LiveInternalFailure {
         override val code: String = "live_inference_stalled"
     }
+
+    data class SourceFailure(override val code: String) : LiveInternalFailure
 }
 
 data class LiveCameraCompletion(
@@ -290,6 +292,7 @@ class LiveCameraComposition internal constructor(
     private var stopping = false
     private var stallHandle: Disposable? = null
     private var stalled = false
+    private var sourceFailure: LiveInternalFailure.SourceFailure? = null
     private var completion: LiveCameraCompletion? = null
     private var finalizationStarted = false
     private var sessionDispatcher: SingleThreadSessionDispatcher? = null
@@ -413,6 +416,14 @@ class LiveCameraComposition internal constructor(
                                     captureHeight = geometry.height,
                                     orientationDegrees = geometry.rotation.degrees,
                                     mirrored = geometry.mirrored,
+                                ),
+                                availableObservations = AvailableObservations(
+                                    normalizedImageLandmarksAvailable = sealed.records.any {
+                                        it.normalizedImageLandmarks != null
+                                    },
+                                    worldLandmarksAvailable = sealed.records.any {
+                                        it.worldLandmarks != null
+                                    },
                                 ),
                                 cadence = finalized.cadence.copy(
                                     achievedInferenceFpsTimeseries = achievedInferenceFpsTimeseriesOf(sealed.records),
@@ -623,7 +634,7 @@ class LiveCameraComposition internal constructor(
 
     internal val internalFailure: LiveInternalFailure?
         get() = synchronized(monitor) {
-            if (stalled) LiveInternalFailure.LiveInferenceStalled else null
+            sourceFailure ?: if (stalled) LiveInternalFailure.LiveInferenceStalled else null
         }
 
     private fun handleSourceStarted(resolution: LiveSourceResolution) {
@@ -823,6 +834,9 @@ class LiveCameraComposition internal constructor(
     private fun handleSourceFailure(failure: Throwable, onProgress: (SessionRunnerSnapshot) -> Unit) {
         val stopWork = synchronized(monitor) {
             if (completion != null) return
+            if (sourceFailure == null) {
+                sourceFailure = LiveInternalFailure.SourceFailure("live_source_failed")
+            }
             requestStopLocked()
         }
         performStop(stopWork, onProgress)
@@ -867,7 +881,7 @@ class LiveCameraComposition internal constructor(
                 sessionId = checkNotNull(sessionId),
                 finalization = finalization,
                 snapshot = finalSnapshot,
-                internalFailure = if (stalled) LiveInternalFailure.LiveInferenceStalled else null,
+                internalFailure = sourceFailure ?: if (stalled) LiveInternalFailure.LiveInferenceStalled else null,
                 cadenceDiagnostics = cadenceDiagnostics,
                 thermalObservations = thermalProbe?.observations().orEmpty(),
             )
