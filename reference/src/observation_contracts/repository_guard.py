@@ -20,6 +20,7 @@ GuardMode = Literal["tracked", "staged"]
 
 _MAX_SIGNATURE_BYTES = 64 * 1024
 _HASH_CHUNK_BYTES = 64 * 1024
+_CONTENT_SCAN_TAIL_BYTES = 128
 _MEDIA_SUFFIXES = {
     ".aac",
     ".aiff",
@@ -187,10 +188,7 @@ def guard_repository(root: Path, mode: GuardMode = "tracked") -> list[Validation
                 issues.append(_path_issue_for(relative_path, "prohibited media or key suffix"))
             continue
 
-        content = source.read_prefix(relative_path)
-        if content is None:
-            continue
-        prohibited = _content_issue(relative_path, content)
+        prohibited = _stream_content_issue(source, relative_path)
         if prohibited is not None:
             issues.append(prohibited)
 
@@ -314,6 +312,20 @@ def _content_issue(relative_path: str, content: bytes) -> ValidationIssue | None
         return _path_issue_for(
             relative_path, "raw pose or landmark dump outside synthetic fixtures"
         )
+    return None
+
+
+def _stream_content_issue(source: _RepositoryContent, relative_path: str) -> ValidationIssue | None:
+    tail = b""
+    try:
+        for chunk in source.iter_bytes(relative_path):
+            window = tail + chunk
+            prohibited = _content_issue(relative_path, window)
+            if prohibited is not None:
+                return prohibited
+            tail = window[-_CONTENT_SCAN_TAIL_BYTES:]
+    except OSError:
+        return None
     return None
 
 
