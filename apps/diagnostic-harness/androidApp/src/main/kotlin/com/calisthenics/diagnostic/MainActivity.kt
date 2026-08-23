@@ -24,6 +24,7 @@ import com.calisthenics.diagnostic.capability.requiredLiveCapabilities
 import com.calisthenics.diagnostic.composition.LiveCameraCompletion
 import com.calisthenics.diagnostic.composition.LiveCameraComposition
 import com.calisthenics.diagnostic.composition.LiveCameraStartResult
+import com.calisthenics.diagnostic.composition.LiveInternalFailure
 import com.calisthenics.diagnostic.composition.RealReplayComposition
 import com.calisthenics.diagnostic.composition.RealReplayFixtureSelection
 import com.calisthenics.diagnostic.composition.RealReplayResult
@@ -278,8 +279,12 @@ private fun SessionRunnerSnapshot.toLiveRunning(
     )
 }
 
-private fun LiveCameraCompletion.toLivePhase(): LiveRunPhase = when (val result = finalization) {
-    is FinalizationResult.Published -> LiveRunPhase.Completed(sessionId.value, true, snapshot.counts.inferenceRecordsEmitted, snapshot.counts.framesSkippedBeforeInference, snapshot.counts.inferenceFailures)
+internal fun liveCaptureFailureCodeOr(internalFailure: LiveInternalFailure?, fallback: String?): String? =
+    internalFailure?.code ?: fallback
+
+internal fun LiveCameraCompletion.toLivePhase(): LiveRunPhase = when (val result = finalization) {
+    is FinalizationResult.Published -> internalFailure?.let { LiveRunPhase.Failed(it.code) }
+        ?: LiveRunPhase.Completed(sessionId.value, true, snapshot.counts.inferenceRecordsEmitted, snapshot.counts.framesSkippedBeforeInference, snapshot.counts.inferenceFailures)
     is FinalizationResult.Failed -> LiveRunPhase.Failed(internalFailure?.code ?: result.failureCode)
     is FinalizationResult.Cancelled -> LiveRunPhase.Failed(result.reason)
 }

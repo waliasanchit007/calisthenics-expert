@@ -1,5 +1,7 @@
 package com.calisthenics.diagnostic.composition
 
+import com.calisthenics.diagnostic.liveCaptureFailureCodeOr
+import com.calisthenics.diagnostic.toLivePhase
 import com.calisthenics.diagnostic.camera.OwnedYuvFrame
 import com.calisthenics.diagnostic.contract.Landmark
 import com.calisthenics.diagnostic.mediapipe.PoseLandmarkerConstructionEvidence
@@ -13,6 +15,7 @@ import com.calisthenics.diagnostic.session.InferencePort
 import com.calisthenics.diagnostic.session.InferenceResult
 import com.calisthenics.diagnostic.session.SessionFinalizer
 import com.calisthenics.diagnostic.session.SessionRunnerSnapshot
+import com.calisthenics.diagnostic.ui.LiveRunPhase
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.jsonArray
@@ -241,6 +244,34 @@ class LiveCameraCompositionTest {
             val completion = assertNotNull(harness.composition.completion())
             assertEquals("live_source_failed", harness.composition.internalFailure?.code)
             assertEquals("live_source_failed", completion.internalFailure?.code)
+        }
+    }
+
+    @Test
+    fun sourceFailureCodeIsPreservedInsteadOfFallingBackToTimeout() {
+        assertEquals(
+            "live_source_failed",
+            liveCaptureFailureCodeOr(LiveInternalFailure.SourceFailure("live_source_failed"), "live_capture_timeout"),
+        )
+        assertEquals(
+            "live_inference_stalled",
+            liveCaptureFailureCodeOr(LiveInternalFailure.LiveInferenceStalled, "live_capture_timeout"),
+        )
+    }
+
+    @Test
+    fun publishedCompletionWithInternalFailureIsShownAsFailed() {
+        withHarness(Harness()) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            harness.source.emit(frame(timestampNs = 1_000_002_000L))
+            harness.source.fail(IllegalStateException("source detail must not enter UI"))
+            harness.inference.completeSuccess()
+
+            val completion = assertNotNull(harness.composition.completion())
+            val phase = completion.toLivePhase()
+
+            assertIs<LiveRunPhase.Failed>(phase)
+            assertEquals("live_source_failed", phase.reason)
         }
     }
 
