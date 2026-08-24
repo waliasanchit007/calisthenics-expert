@@ -527,9 +527,9 @@ Run:
 
 ```bash
 .venv/bin/python -m pytest reference/tests/test_study_readiness_repository.py reference/tests/test_study_readiness_contracts.py -v
-.venv/bin/python -m observation_contracts.cli verify-study-readiness docs/protocols/study-readiness.m05.v1.json
+.venv/bin/python -m observation_contracts verify-study-readiness docs/protocols/study-readiness.m05.v1.json
 set +e
-.venv/bin/python -m observation_contracts.cli verify-participant-capture-gate docs/protocols/study-readiness.m05.v1.json
+.venv/bin/python -m observation_contracts verify-participant-capture-gate docs/protocols/study-readiness.m05.v1.json
 participant_gate_status=$?
 set -e
 test "$participant_gate_status" -eq 2
