@@ -6,7 +6,7 @@ done; printf '%s' python3)
 VENV_PYTHON := .venv/bin/python
 CLI := $(VENV_PYTHON) -m observation_contracts
 
-.PHONY: bootstrap verify verify-harness-jvm verify-harness-ios verify-harness-foundation verify-kotlin-export verify-harness-android-export-parity verify-harness-detection-replay verify-harness-s25-process-kill verify-harness-replay-export verify-harness-s25-five-run-replay verify-harness-s25-camera-probe verify-harness-s25-live-capture fetch-model-asset prepare-harness-gradle-dependencies
+.PHONY: bootstrap verify verify-study-readiness verify-harness-jvm verify-harness-ios verify-harness-foundation verify-kotlin-export verify-harness-android-export-parity verify-harness-detection-replay verify-harness-s25-process-kill verify-harness-replay-export verify-harness-s25-five-run-replay verify-harness-s25-camera-probe verify-harness-s25-live-capture fetch-model-asset prepare-harness-gradle-dependencies
 
 bootstrap:
 	@command -v "$(PYTHON)" >/dev/null 2>&1 || { echo "error: Python interpreter '$(PYTHON)' was not found" >&2; exit 1; }
@@ -268,6 +268,18 @@ verify-kotlin-export:
 	cd ../..; \
 	$(CLI) validate-session apps/diagnostic-harness/shared/build/conformance/synthetic-session/manifest.json apps/diagnostic-harness/shared/build/conformance/synthetic-session/frames.ndjson
 
+verify-study-readiness:
+	$(CLI) verify-study-readiness docs/protocols/study-readiness.m05.v1.json
+	@set +e; \
+	$(CLI) verify-participant-capture-gate docs/protocols/study-readiness.m05.v1.json; \
+	participant_gate_status=$$?; \
+	set -e; \
+	if [ "$$participant_gate_status" -ne 2 ]; then \
+		echo "error: participant-capture gate returned $$participant_gate_status; expected policy block status 2" >&2; \
+		exit 1; \
+	fi; \
+	echo "participant-capture gate is blocked as expected (status 2)"
+
 # The S25 camera capability probe (design spec section 8, Slice 5 precondition). Device-gated on
 # exactly the same preamble as verify-harness-s25-process-kill and
 # verify-harness-s25-five-run-replay: exactly one attached authorized target, never an emulator,
@@ -392,3 +404,4 @@ verify:
 	$(VENV_PYTHON) -c 'from pathlib import Path; from observation_contracts.fixture_integrity import discover_negative_fixtures, run_declared_validation; root = Path(".").resolve(); cases = discover_negative_fixtures(root); assert cases; assert all(run_declared_validation(case).codes == [case.expected_error_code] for case in cases)'
 	$(CLI) verify-preprocessing-vector fixtures/synthetic/preprocessing/scale_pad_golden/vector.json
 	$(CLI) guard-repository .
+	$(MAKE) verify-study-readiness

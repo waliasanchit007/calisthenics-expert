@@ -225,3 +225,34 @@ def test_analysis_cohort_is_homogeneous_and_uses_flagship_scope() -> None:
         "observation_contract_version": "1.0.0",
     }
     assert all(item["scope"] == cohort["scope"] for item in cohort["inputs"])
+
+
+def test_tooling_contract_release_1_2_0_records_m05_operating_boundary() -> None:
+    changelog = (REPOSITORY_ROOT / "contracts" / "CHANGELOG.md").read_text(encoding="utf-8")
+
+    assert "## [1.2.0]" in changelog
+    for schema in (
+        "study_readiness_manifest.v1.schema.json",
+        "study_condition_matrix.v1.schema.json",
+    ):
+        assert schema in changelog
+    for code in (
+        "STUDY.ARTIFACT_REFERENCE",
+        "STUDY.PRIVACY_DECISION",
+        "STUDY.CONDITION_MATRIX_DRIFT",
+        "STUDY.PILOT_LOCK",
+        "STUDY.CONDITION_OUTCOME",
+        "STUDY.COHORT_SCOPE_MISMATCH",
+        "STUDY.ADMISSION_SESSION_KIND",
+        "STUDY.ADMISSION_INPUT_CLASS",
+        "STUDY.EMPTY_SCENE_DETECTION",
+        "STUDY.SYNTHETIC_DETECTION_PENDING",
+        "STUDY.LOCATION_REGISTRY",
+    ):
+        assert code in changelog
+    assert "verify-study-readiness" in changelog
+    assert "verify-participant-capture-gate" in changelog
+    assert "ADR-0005" in changelog
+    assert "participant capture is blocked" in changelog.lower()
+    assert "no tag" in changelog.lower()
+    assert "absent `session_kind`" in changelog
