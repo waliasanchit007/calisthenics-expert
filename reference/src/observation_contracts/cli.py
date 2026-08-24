@@ -235,3 +235,7 @@ def _render(issues: list[ValidationIssue], output_format: str, command: str) -> 
         if issue.pointer is not None:
             location += issue.pointer
         print(f"  {location} [{issue.code}] {issue.message}")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

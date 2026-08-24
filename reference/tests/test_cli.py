@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +13,25 @@ import pytest
 from observation_contracts import cli
 from tests.samples import minimal_annotation, minimal_manifest, minimal_pose_frame
 from tests.test_study_readiness_contracts import _semantic_repository
+
+
+def test_cli_module_executes_main_when_invoked_with_python_m() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "observation_contracts.cli",
+            "unknown-command",
+        ],
+        cwd=Path(__file__).parents[2],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "usage:" in result.stderr.lower()
+    assert "unknown-command" in result.stderr
 
 
 def _write_json(path: Path, document: dict[str, Any]) -> None:
