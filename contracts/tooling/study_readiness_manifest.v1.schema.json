@@ -320,11 +320,11 @@
         "device_model",
         "os_build",
         "camera_capability_ref",
-        "model_digest",
+        "model_sha256",
         "runtime_version",
         "delegate",
         "requested_cadence",
-        "preprocessing_version",
+        "preprocessing_contract_version",
         "observation_contract_version",
         "input_class",
         "submitted_frame_count",
@@ -345,7 +345,7 @@
         "camera_capability_ref": {
           "$ref": "#/$defs/artifact_ref"
         },
-        "model_digest": {
+        "model_sha256": {
           "type": "string",
           "pattern": "^[0-9a-f]{64}$"
         },
@@ -361,7 +361,7 @@
           "type": "integer",
           "minimum": 1
         },
-        "preprocessing_version": {
+        "preprocessing_contract_version": {
           "$ref": "#/$defs/semantic_version"
         },
         "observation_contract_version": {
@@ -419,9 +419,9 @@
       "required": [
         "platform",
         "device_model",
-        "model_digest",
+        "model_sha256",
         "delegate",
-        "preprocessing_version",
+        "preprocessing_contract_version",
         "observation_contract_version"
       ],
       "properties": {
@@ -433,7 +433,7 @@
           "type": "string",
           "minLength": 1
         },
-        "model_digest": {
+        "model_sha256": {
           "type": "string",
           "pattern": "^[0-9a-f]{64}$"
         },
@@ -441,7 +441,7 @@
           "type": "string",
           "minLength": 1
         },
-        "preprocessing_version": {
+        "preprocessing_contract_version": {
           "$ref": "#/$defs/semantic_version"
         },
         "observation_contract_version": {

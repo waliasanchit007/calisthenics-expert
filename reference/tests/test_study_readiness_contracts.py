@@ -70,9 +70,9 @@ def cohort_scope() -> dict[str, str]:
     return {
         "platform": "android",
         "device_model": "SM-S938B",
-        "model_digest": SHA256,
+        "model_sha256": SHA256,
         "delegate": "cpu",
-        "preprocessing_version": "1.0.0",
+        "preprocessing_contract_version": "1.0.0",
         "observation_contract_version": "1.0.0",
     }
 
@@ -113,11 +113,11 @@ def readiness_manifest() -> dict[str, Any]:
             "device_model": "SM-S938B",
             "os_build": "UP1A.231005.007.S938BXXU1",
             "camera_capability_ref": artifact_ref("docs/evidence/device-capability.json"),
-            "model_digest": SHA256,
+            "model_sha256": SHA256,
             "runtime_version": "0.10.14",
             "delegate": "cpu",
             "requested_cadence": 30,
-            "preprocessing_version": "1.0.0",
+            "preprocessing_contract_version": "1.0.0",
             "observation_contract_version": "1.0.0",
             "input_class": "empty_scene",
             "submitted_frame_count": 0,
@@ -491,11 +491,11 @@ def _semantic_repository(
             "camera_capability_ref": _write_reference(
                 root, "docs/evidence/camera.json", {"camera": "known"}
             ),
-            "model_digest": SHA256,
+            "model_sha256": SHA256,
             "runtime_version": "0.10.14",
             "delegate": "cpu",
             "requested_cadence": 30,
-            "preprocessing_version": "1.0.0",
+            "preprocessing_contract_version": "1.0.0",
             "observation_contract_version": "1.0.0",
             "input_class": "empty_scene",
             "submitted_frame_count": 0,
@@ -845,3 +845,40 @@ def test_verifier_requires_the_complete_registered_location_set(
     _write_manifest(manifest_path, manifest)
 
     assert "STUDY.LOCATION_REGISTRY" in _issue_codes(verify_study_readiness(manifest_path))
+
+
+def _canonical_readiness_manifest() -> dict[str, Any]:
+    return readiness_manifest()
+
+
+def test_readiness_schema_accepts_canonical_scope_field_names() -> None:
+    assert_valid(study_readiness_schema_validator(), _canonical_readiness_manifest())
+
+
+@pytest.mark.parametrize(
+    "scope_name",
+    ("platform_scope", "analysis_cohorts[0].scope", "analysis_cohorts[0].inputs[0].scope"),
+)
+def test_readiness_schema_rejects_legacy_generic_scope_field_names(scope_name: str) -> None:
+    manifest = _canonical_readiness_manifest()
+    if scope_name == "platform_scope":
+        scope = manifest[scope_name]
+    elif scope_name == "analysis_cohorts[0].scope":
+        scope = manifest["analysis_cohorts"][0]["scope"]
+    else:
+        scope = manifest["analysis_cohorts"][0]["inputs"][0]["scope"]
+    scope["model_digest"] = scope.pop("model_sha256")
+    scope["preprocessing_version"] = scope.pop("preprocessing_contract_version")
+
+    assert not study_readiness_schema_validator().is_valid(manifest)
+
+
+def test_scope_tuple_returns_the_exact_canonical_six_field_order() -> None:
+    assert scope_tuple(cohort_scope()) == (
+        "android",
+        "SM-S938B",
+        SHA256,
+        "cpu",
+        "1.0.0",
+        "1.0.0",
+    )

@@ -22,9 +22,9 @@ from observation_contracts.structural import json_pointer
 _SCOPE_KEYS = (
     "platform",
     "device_model",
-    "model_digest",
+    "model_sha256",
     "delegate",
-    "preprocessing_version",
+    "preprocessing_contract_version",
     "observation_contract_version",
 )
 _PRIVACY_KEYS = (
