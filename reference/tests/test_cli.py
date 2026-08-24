@@ -10,6 +10,7 @@ import pytest
 
 from observation_contracts import cli
 from tests.samples import minimal_annotation, minimal_manifest, minimal_pose_frame
+from tests.test_study_readiness_contracts import _semantic_repository
 
 
 def _write_json(path: Path, document: dict[str, Any]) -> None:
@@ -265,3 +266,62 @@ def test_unexpected_exception_is_internal_failure_not_invalid_data(
     assert result == 3
     assert "internal failure" in captured.err.lower()
     assert "invalid data" not in captured.err.lower()
+
+
+@pytest.mark.parametrize(
+    ("command", "locked", "accepted_privacy"),
+    (
+        ("verify-study-readiness", False, False),
+        ("verify-participant-capture-gate", True, True),
+    ),
+)
+def test_study_readiness_commands_accept_valid_input(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    command: str,
+    locked: bool,
+    accepted_privacy: bool,
+) -> None:
+    _root, manifest_path, _manifest, _matrix = _semantic_repository(
+        tmp_path, locked=locked, accepted_privacy=accepted_privacy
+    )
+
+    result = cli.main(["--format", "json", command, str(manifest_path)])
+
+    assert result == 0
+    assert json.loads(capsys.readouterr().out) == []
+
+
+@pytest.mark.parametrize("command", ("verify-study-readiness", "verify-participant-capture-gate"))
+def test_study_readiness_commands_return_validation_failure_for_invalid_input(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], command: str
+) -> None:
+    _root, manifest_path, manifest, _matrix = _semantic_repository(
+        tmp_path,
+        locked=command == "verify-participant-capture-gate",
+        accepted_privacy=command == "verify-participant-capture-gate",
+    )
+    manifest["artifact_locations"] = ["unregistered"]
+    _write_json(manifest_path, manifest)
+
+    result = cli.main(["--format", "json", command, str(manifest_path)])
+
+    assert result == 2
+    issues = json.loads(capsys.readouterr().out)
+    assert [issue["code"] for issue in issues] == ["STUDY.LOCATION_REGISTRY"]
+
+
+def test_study_readiness_command_maps_unexpected_exception_to_internal_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _root, manifest_path, _manifest, _matrix = _semantic_repository(tmp_path)
+
+    def explode(*args: object, **kwargs: object) -> list[object]:
+        raise RuntimeError("injected failure")
+
+    monkeypatch.setattr(cli, "verify_study_readiness", explode)
+
+    result = cli.main(["verify-study-readiness", str(manifest_path)])
+
+    assert result == 3
+    assert "internal failure" in capsys.readouterr().err.lower()

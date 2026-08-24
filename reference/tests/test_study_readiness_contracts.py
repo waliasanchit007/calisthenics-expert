@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,12 @@ from observation_contracts.schema_loader import (
     study_condition_matrix_schema_validator,
     study_readiness_schema_path,
     study_readiness_schema_validator,
+)
+from observation_contracts.study_readiness import (
+    ConditionOutcomeSummary,
+    scope_tuple,
+    summarize_condition_outcomes,
+    verify_study_readiness,
 )
 
 SHA256 = "a" * 64
@@ -355,3 +362,486 @@ def test_valid_accepted_privacy_decision_has_a_decision_record() -> None:
     decision["state"] = "ACCEPTED"
     decision["decision_record"] = artifact_ref("docs/privacy/storage-location.json")
     assert_valid(study_readiness_schema_validator(), manifest)
+
+
+_REGISTERED_LOCATIONS = {
+    "device_export",
+    "device_staging",
+    "device_transfer_staging",
+    "study_store_source",
+    "study_store_derived",
+    "study_store_report",
+    "tombstone",
+}
+
+
+def _write_json(path: Path, document: object) -> bytes:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    serialized = json.dumps(document, sort_keys=True).encode("utf-8")
+    path.write_bytes(serialized)
+    return serialized
+
+
+def _write_reference(root: Path, relative: str, document: object) -> dict[str, str]:
+    content = _write_json(root / relative, document)
+    return {"path": relative, "sha256": hashlib.sha256(content).hexdigest()}
+
+
+def _semantic_matrix(*, include_exploratory: bool = False) -> dict[str, object]:
+    conditions: list[dict[str, object]] = [
+        {
+            "condition_id": "anchor-required",
+            "classification": "required",
+            "set_count": 1,
+            "required_artifact_cells": ["session_manifest"],
+            "required_metric_cells": ["detection_rate_curve"],
+            "source": "test",
+        }
+    ]
+    if include_exploratory:
+        conditions.append(
+            {
+                "condition_id": "exploratory-angle",
+                "classification": "exploratory",
+                "set_count": 1,
+                "required_artifact_cells": ["session_manifest"],
+                "required_metric_cells": ["detection_rate_curve"],
+                "source": "test",
+            }
+        )
+    return {
+        "condition_matrix_schema_version": "1.0.0",
+        "matrix_id": "semantic-test-matrix",
+        "conditions": conditions,
+    }
+
+
+def _write_manifest(path: Path, manifest: dict[str, object]) -> None:
+    _write_json(path, manifest)
+
+
+def _semantic_repository(
+    tmp_path: Path,
+    *,
+    locked: bool = False,
+    accepted_privacy: bool = False,
+    include_exploratory: bool = False,
+) -> tuple[Path, Path, dict[str, object], dict[str, object]]:
+    root = tmp_path / "repository"
+    root.mkdir()
+    (root / ".git").mkdir()
+    matrix = _semantic_matrix(include_exploratory=include_exploratory)
+    current = _write_reference(root, "docs/conditions/current.json", matrix)
+    scope = cohort_scope()
+    protocols = {
+        name: _write_reference(root, f"docs/protocols/{name}.json", {"name": name})
+        for name in ("capture", "annotation", "privacy")
+    }
+    privacy_decisions: dict[str, object] = {
+        key: {"state": "UNDECIDED", "decision_record": None} for key in PRIVACY_KEYS
+    }
+    if accepted_privacy:
+        privacy_decisions = {
+            key: {
+                "state": "ACCEPTED",
+                "decision_record": _write_reference(
+                    root, f"docs/privacy-decisions/{key}.json", {"decision": key}
+                ),
+            }
+            for key in PRIVACY_KEYS
+        }
+    pilot_lock: dict[str, object] = {
+        "state": "UNLOCKED",
+        "locked_matrix": None,
+        "resource_availability_confirmation": None,
+    }
+    if locked:
+        pilot_lock = {
+            "state": "LOCKED",
+            "locked_matrix": _write_reference(root, "docs/conditions/locked.json", matrix),
+            "resource_availability_confirmation": _write_reference(
+                root, "docs/resources/confirmed.json", {"confirmed": True}
+            ),
+        }
+    outcomes = [
+        {
+            "condition_id": condition["condition_id"],
+            "status": "planned",
+            "inadmissibility_reason": None,
+        }
+        for condition in matrix["conditions"]
+    ]
+    manifest: dict[str, object] = {
+        "study_readiness_schema_version": "1.0.0",
+        "readiness_id": "semantic-test-readiness",
+        "phase_scope": "m0_5_non_participant",
+        "protocols": protocols,
+        "condition_matrix": {
+            "current": current,
+            "pilot_lock": pilot_lock,
+            "prior": None,
+            "matrix_revision_reason": None,
+        },
+        "condition_outcomes": outcomes,
+        "privacy_decisions": privacy_decisions,
+        "platform_scope": {
+            "platform": "android",
+            "device_model": "SM-S938B",
+            "os_build": "UP1A.231005.007.S938BXXU1",
+            "camera_capability_ref": _write_reference(
+                root, "docs/evidence/camera.json", {"camera": "known"}
+            ),
+            "model_digest": SHA256,
+            "runtime_version": "0.10.14",
+            "delegate": "cpu",
+            "requested_cadence": 30,
+            "preprocessing_version": "1.0.0",
+            "observation_contract_version": "1.0.0",
+            "input_class": "empty_scene",
+            "submitted_frame_count": 0,
+            "detection_active_frame_fraction": "UNMEASURED",
+            "rendered_scope_statement": "synthetic-only test scope",
+        },
+        "artifact_locations": sorted(_REGISTERED_LOCATIONS),
+        "analysis_cohorts": [
+            {
+                "cohort_id": "synthetic-test-cohort",
+                "scope": scope,
+                "inputs": [
+                    {
+                        "artifact": _write_reference(
+                            root, "exports/session-manifest.json", {"session": "synthetic"}
+                        ),
+                        "scope": scope,
+                    }
+                ],
+            }
+        ],
+    }
+    manifest_path = root / "study" / "readiness.json"
+    _write_manifest(manifest_path, manifest)
+    return root, manifest_path, manifest, matrix
+
+
+def _issue_codes(issues: list[object]) -> set[str]:
+    return {issue.code for issue in issues if hasattr(issue, "code")}
+
+
+@pytest.mark.parametrize(
+    ("relative", "pointer"),
+    [
+        ("docs/protocols/capture.json", "/protocols/capture"),
+        ("docs/protocols/annotation.json", "/protocols/annotation"),
+        ("docs/protocols/privacy.json", "/protocols/privacy"),
+        ("docs/conditions/current.json", "/condition_matrix/current"),
+        ("docs/evidence/camera.json", "/platform_scope/camera_capability_ref"),
+        ("exports/session-manifest.json", "/analysis_cohorts/0/inputs/0/artifact"),
+    ],
+)
+def test_verify_study_readiness_rejects_each_mutated_reference(
+    tmp_path: Path, relative: str, pointer: str
+) -> None:
+    root, manifest_path, _manifest, _matrix = _semantic_repository(tmp_path)
+
+    (root / relative).write_text("mutated", encoding="utf-8")
+
+    issues = verify_study_readiness(manifest_path)
+
+    assert [(issue.code, issue.pointer) for issue in issues] == [
+        ("STUDY.ARTIFACT_REFERENCE", pointer)
+    ]
+
+
+@pytest.mark.parametrize("bad_path", ("../outside.json", "/outside.json"))
+def test_verify_study_readiness_never_opens_escaping_reference(
+    tmp_path: Path, bad_path: str
+) -> None:
+    root, manifest_path, manifest, _matrix = _semantic_repository(tmp_path)
+    outside = tmp_path / "outside.json"
+    outside.write_text("must not be read", encoding="utf-8")
+    capture = manifest["protocols"]["capture"]
+    capture["path"] = str(outside) if bad_path.startswith("/") else bad_path
+    _write_manifest(manifest_path, manifest)
+
+    issues = verify_study_readiness(manifest_path)
+
+    assert [(issue.code, issue.pointer) for issue in issues if issue.code.startswith("STUDY.")] == [
+        ("STUDY.ARTIFACT_REFERENCE", "/protocols/capture")
+    ]
+    assert outside.read_text(encoding="utf-8") == "must not be read"
+    assert root.is_dir()
+
+
+def test_verify_study_readiness_requires_a_repository_marker(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "readiness.json"
+    _write_json(manifest_path, {})
+
+    issues = verify_study_readiness(manifest_path)
+
+    assert [(issue.code, issue.pointer) for issue in issues] == [("STUDY.ARTIFACT_REFERENCE", None)]
+
+
+def test_participant_gate_allows_undecided_privacy_for_non_participant_readiness(
+    tmp_path: Path,
+) -> None:
+    _root, manifest_path, _manifest, _matrix = _semantic_repository(tmp_path, locked=True)
+
+    assert verify_study_readiness(manifest_path) == []
+    issues = verify_study_readiness(manifest_path, require_participant_ready=True)
+
+    assert {issue.code for issue in issues} == {"STUDY.PRIVACY_DECISION"}
+    assert len(issues) == 8
+
+
+def test_participant_gate_rejects_a_rejected_privacy_decision(tmp_path: Path) -> None:
+    _root, manifest_path, manifest, _matrix = _semantic_repository(tmp_path, locked=True)
+    manifest["privacy_decisions"]["face_handling"]["state"] = "REJECTED"
+    manifest["privacy_decisions"]["face_handling"]["decision_record"] = _write_reference(
+        manifest_path.parents[1], "docs/privacy-decisions/face.json", {"decision": "rejected"}
+    )
+    _write_manifest(manifest_path, manifest)
+
+    issues = verify_study_readiness(manifest_path, require_participant_ready=True)
+
+    assert "STUDY.PRIVACY_DECISION" in _issue_codes(issues)
+
+
+def test_participant_gate_accepts_digest_valid_accepted_privacy_decisions(tmp_path: Path) -> None:
+    _root, manifest_path, _manifest, _matrix = _semantic_repository(
+        tmp_path, locked=True, accepted_privacy=True
+    )
+
+    assert verify_study_readiness(manifest_path, require_participant_ready=True) == []
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("missing_prior", "missing_reason"),
+)
+def test_unlocked_matrix_revision_requires_prior_and_reason(tmp_path: Path, mutation: str) -> None:
+    root, manifest_path, manifest, matrix = _semantic_repository(tmp_path)
+    prior = _write_reference(root, "docs/conditions/prior.json", matrix)
+    binding = manifest["condition_matrix"]
+    binding["prior"] = prior
+    binding["matrix_revision_reason"] = "clarify allocation"
+    if mutation == "missing_prior":
+        binding["prior"] = None
+    else:
+        binding["matrix_revision_reason"] = None
+    _write_manifest(manifest_path, manifest)
+
+    assert "STUDY.CONDITION_MATRIX_DRIFT" in _issue_codes(verify_study_readiness(manifest_path))
+
+
+def test_unlocked_matrix_revision_with_digest_valid_prior_and_reason_is_valid(
+    tmp_path: Path,
+) -> None:
+    root, manifest_path, manifest, matrix = _semantic_repository(tmp_path)
+    manifest["condition_matrix"]["prior"] = _write_reference(
+        root, "docs/conditions/prior.json", matrix
+    )
+    manifest["condition_matrix"]["matrix_revision_reason"] = "clarify allocation"
+    _write_manifest(manifest_path, manifest)
+
+    assert verify_study_readiness(manifest_path) == []
+
+
+def test_condition_matrix_duplicate_id_fails_closed(tmp_path: Path) -> None:
+    root, manifest_path, manifest, matrix = _semantic_repository(tmp_path)
+    matrix["conditions"].append(dict(matrix["conditions"][0]))
+    manifest["condition_matrix"]["current"] = _write_reference(
+        root, "docs/conditions/current.json", matrix
+    )
+    _write_manifest(manifest_path, manifest)
+
+    assert "STUDY.CONDITION_MATRIX_DRIFT" in _issue_codes(verify_study_readiness(manifest_path))
+
+
+def test_locked_matrix_requires_both_lock_artifacts(tmp_path: Path) -> None:
+    _root, manifest_path, manifest, _matrix = _semantic_repository(tmp_path)
+    manifest["condition_matrix"]["pilot_lock"] = {
+        "state": "LOCKED",
+        "locked_matrix": None,
+        "resource_availability_confirmation": None,
+    }
+    _write_manifest(manifest_path, manifest)
+
+    assert "STUDY.PILOT_LOCK" in _issue_codes(verify_study_readiness(manifest_path))
+
+
+@pytest.mark.parametrize("change", ("removed", "demoted"))
+def test_locked_matrix_cannot_remove_or_demote_required_conditions(
+    tmp_path: Path, change: str
+) -> None:
+    root, manifest_path, manifest, _matrix = _semantic_repository(tmp_path, locked=True)
+    current = _semantic_matrix()
+    if change == "removed":
+        current["conditions"] = [
+            {
+                "condition_id": "replacement-required",
+                "classification": "required",
+                "set_count": 1,
+                "required_artifact_cells": ["session_manifest"],
+                "required_metric_cells": ["detection_rate_curve"],
+                "source": "test",
+            }
+        ]
+    else:
+        current["conditions"].append(
+            {
+                "condition_id": "replacement-required",
+                "classification": "required",
+                "set_count": 1,
+                "required_artifact_cells": ["session_manifest"],
+                "required_metric_cells": ["detection_rate_curve"],
+                "source": "test",
+            }
+        )
+        current["conditions"][0]["classification"] = "exploratory"
+    manifest["condition_matrix"]["current"] = _write_reference(
+        root, "docs/conditions/current.json", current
+    )
+    manifest["condition_outcomes"] = [
+        {"condition_id": item["condition_id"], "status": "planned", "inadmissibility_reason": None}
+        for item in current["conditions"]
+    ]
+    _write_manifest(manifest_path, manifest)
+
+    assert "STUDY.CONDITION_MATRIX_DRIFT" in _issue_codes(verify_study_readiness(manifest_path))
+
+
+def test_participant_gate_requires_a_locked_pilot(tmp_path: Path) -> None:
+    _root, manifest_path, _manifest, _matrix = _semantic_repository(tmp_path, accepted_privacy=True)
+
+    assert "STUDY.PILOT_LOCK" in _issue_codes(
+        verify_study_readiness(manifest_path, require_participant_ready=True)
+    )
+
+
+@pytest.mark.parametrize(
+    ("status", "reason"),
+    (
+        ("inadmissible", None),
+        ("planned", "instrument_failure"),
+        ("admissible", "instrument_failure"),
+    ),
+)
+def test_verifier_enforces_condition_outcome_reason_contract(
+    tmp_path: Path, status: str, reason: str | None
+) -> None:
+    _root, manifest_path, manifest, _matrix = _semantic_repository(tmp_path)
+    manifest["condition_outcomes"][0]["status"] = status
+    manifest["condition_outcomes"][0]["inadmissibility_reason"] = reason
+    _write_manifest(manifest_path, manifest)
+
+    assert "STUDY.CONDITION_OUTCOME" in _issue_codes(verify_study_readiness(manifest_path))
+
+
+def test_condition_summary_treats_required_instrument_failure_as_viability_failure() -> None:
+    manifest = readiness_manifest()
+    manifest["condition_outcomes"][0] = {
+        "condition_id": "anchor-45deg-3m-chest-indoor-bright-normal",
+        "status": "inadmissible",
+        "inadmissibility_reason": "instrument_failure",
+    }
+
+    summary = summarize_condition_outcomes(manifest, condition_matrix())
+
+    assert summary == ConditionOutcomeSummary(0, 1, 0, 0, "NO-GO")
+
+
+def test_required_resource_gap_yields_incomplete_coverage() -> None:
+    manifest = readiness_manifest()
+    manifest["condition_outcomes"][0] = {
+        "condition_id": "anchor-45deg-3m-chest-indoor-bright-normal",
+        "status": "inadmissible",
+        "inadmissibility_reason": "not_executed_resource",
+    }
+
+    summary = summarize_condition_outcomes(manifest, condition_matrix())
+
+    assert summary == ConditionOutcomeSummary(0, 0, 1, 0, "INCOMPLETE_COVERAGE")
+
+
+def test_exploratory_inadmissibility_does_not_affect_required_decision_state() -> None:
+    matrix = _semantic_matrix(include_exploratory=True)
+    manifest = readiness_manifest()
+    manifest["condition_outcomes"] = [
+        {"condition_id": "anchor-required", "status": "admissible", "inadmissibility_reason": None},
+        {
+            "condition_id": "exploratory-angle",
+            "status": "inadmissible",
+            "inadmissibility_reason": "instrument_failure",
+        },
+    ]
+
+    summary = summarize_condition_outcomes(manifest, matrix)
+
+    assert summary == ConditionOutcomeSummary(1, 0, 0, 0, "GO")
+
+
+def test_scope_tuple_uses_the_canonical_order() -> None:
+    assert scope_tuple(cohort_scope()) == (
+        "android",
+        "SM-S938B",
+        SHA256,
+        "cpu",
+        "1.0.0",
+        "1.0.0",
+    )
+
+
+def test_verifier_rejects_mixed_scope_within_a_pooled_cohort(tmp_path: Path) -> None:
+    root, manifest_path, manifest, _matrix = _semantic_repository(tmp_path)
+    different_scope = cohort_scope()
+    different_scope["delegate"] = "gpu"
+    manifest["analysis_cohorts"][0]["inputs"].append(
+        {
+            "artifact": _write_reference(root, "exports/other-session.json", {"session": "other"}),
+            "scope": different_scope,
+        }
+    )
+    _write_manifest(manifest_path, manifest)
+
+    assert "STUDY.COHORT_SCOPE_MISMATCH" in _issue_codes(verify_study_readiness(manifest_path))
+
+
+def test_verifier_allows_separate_cohorts_with_different_scopes(tmp_path: Path) -> None:
+    root, manifest_path, manifest, _matrix = _semantic_repository(tmp_path)
+    different_scope = cohort_scope()
+    different_scope["delegate"] = "gpu"
+    manifest["analysis_cohorts"].append(
+        {
+            "cohort_id": "separate-gpu-cohort",
+            "scope": different_scope,
+            "inputs": [
+                {
+                    "artifact": _write_reference(
+                        root, "exports/gpu-session.json", {"session": "gpu"}
+                    ),
+                    "scope": different_scope,
+                }
+            ],
+        }
+    )
+    _write_manifest(manifest_path, manifest)
+
+    assert verify_study_readiness(manifest_path) == []
+
+
+@pytest.mark.parametrize(
+    "locations",
+    (
+        sorted(_REGISTERED_LOCATIONS - {"tombstone"}),
+        [*sorted(_REGISTERED_LOCATIONS), "device_export"],
+        ["unregistered"],
+    ),
+)
+def test_verifier_requires_the_complete_registered_location_set(
+    tmp_path: Path, locations: list[str]
+) -> None:
+    _root, manifest_path, manifest, _matrix = _semantic_repository(tmp_path)
+    manifest["artifact_locations"] = locations
+    _write_manifest(manifest_path, manifest)
+
+    assert "STUDY.LOCATION_REGISTRY" in _issue_codes(verify_study_readiness(manifest_path))
