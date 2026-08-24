@@ -114,8 +114,13 @@ class LiveCameraCompositionTest {
 
     @Test
     fun registrationRejectionReleasesInferenceAndSchedulerExactlyOnce() {
+        val unrelatedDispatcherStarted = CountDownLatch(1)
         val unrelatedDispatcher = SingleThreadSessionDispatcher()
-        unrelatedDispatcher.dispatch { Unit }
+        unrelatedDispatcher.dispatch { unrelatedDispatcherStarted.countDown() }
+        assertTrue(
+            unrelatedDispatcherStarted.await(1, TimeUnit.SECONDS),
+            "unrelated dispatcher worker did not start before the leak baseline",
+        )
         val existingDispatchers = liveSessionDispatcherThreads()
         val harness = Harness(registrationResult = SessionRunnerRegistrationResult.REJECTED)
 
