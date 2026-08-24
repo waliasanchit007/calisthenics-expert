@@ -24,7 +24,7 @@ The governing documents are:
 - `AGENTS.md`;
 - `docs/central-handoff.md`;
 - `docs/superpowers/specs/2026-08-24-m0-5-study-readiness-design.md`;
-- `docs/adr/ADR-0003-privacy-and-data-governance-before-human-data.md`;
+- `docs/adr/ADR-0003-contract-evolution-and-data-guard.md`;
 - `docs/adr/ADR-0005-android-scoped-phase-0-evidence.md`;
 - `docs/protocols/capture-protocol.v1.md`;
 - `docs/protocols/privacy-retention-withdrawal.v1.md`.
@@ -38,8 +38,10 @@ contract only. It does not accept a retention, withdrawal, deletion, backup, or 
 
 The design is grounded in the merged implementation rather than an assumed future architecture.
 
-1. `SessionLedger` holds every `RawPoseFrame` and inference failure in memory until finalization.
-   A 20–30 minute run therefore scales heap use with emitted records.
+1. `SessionLedger` holds every `RawPoseFrame`, inference failure, and completed submission identity
+   in memory until finalization. `SessionRunner` duplicates the terminal map, while
+   `LiveCameraComposition` retains every admitted callback timestamp and terminal submission index.
+   A sustained run therefore scales multiple heap collections with delivered or emitted frames.
 2. `SessionExporter` creates a staging directory only at finalization, then serializes the complete
    in-memory record list. It publishes `frames.ndjson` and `manifest.json` with a single final rename.
 3. `StorageRoots` contains only app-private staging and export roots. The M0.5 location names are
@@ -93,7 +95,7 @@ These are prerequisites, not defects in the completed replay/live-capture milest
 - rep counting, movement interpretation, form scoring, thresholds, coaching, or product UI;
 - network/cloud upload, paid services, or automated external storage;
 - changing camera cadence from the already admitted 30 FPS;
-- video during the 20–30 minute sustained characterization runs.
+- video during the 25-minute sustained characterization runs.
 
 ## 4. System invariants
 
@@ -103,8 +105,9 @@ These are prerequisites, not defects in the completed replay/live-capture milest
 2. **One root registry.** Code, backup configuration generation/verification, purge, post-purge scan,
    and readiness validation consume one canonical registry. A new app-controlled artifact root that
    is absent from the registry fails the build.
-3. **No whole-session pose buffering.** Emitted records are durably streamed. In-memory state may
-   retain counters, pending submissions, and a bounded tail/checkpoint only.
+3. **Bound every session collection.** Emitted records are durably streamed. In-memory state may
+   retain counters, the single in-flight submission, one failure, fixed-window aggregates, and a
+   bounded tail/checkpoint only. No collection grows with delivered or emitted frame count.
 4. **One attempt, one atomic publication.** Required pose, media, synchronization, telemetry, and
    manifest artifacts are staged under one attempt and become visible together through one rename.
 5. **Manifest last.** The manifest is written only after all required content is finalized, hashed,
@@ -114,7 +117,7 @@ These are prerequisites, not defects in the completed replay/live-capture milest
    matching digests.
 7. **Purge is fail-closed.** A partial delete, unknown root, traversal, symlink escape, post-scan
    residue, or durability failure is `PURGE_INCOMPLETE`; it is never reported as withdrawal success.
-8. **Tombstones block reuse.** Once a synthetic session ID has a durable tombstone intent, export or
+8. **Tombstones block reuse.** Once a reserved-namespace synthetic session ID has a durable tombstone intent, export or
    admission under that session ID fails even if purge later remains incomplete.
 9. **Tombstone is not policy.** The proposal carries no participant identity and no precise completion
    timestamp. Its existence cannot make `withdrawal_and_deletion` accepted.
@@ -156,16 +159,21 @@ The initial registry contains all seven locations already declared by M0.5A:
 | `study_store_report` | external synthetic store | host rehearsal only in M0.5B |
 | `tombstone` | Android app | excluded from artifact purge; backup/D2D excluded; host-store mirroring is deferred |
 
-App-relative directory names are generated from or mechanically checked against this registry. The
-Kotlin `StorageRoots`, Android XML exclusions, purge scanner, and Python study-readiness validator may
-have language-native representations, but tests prove exact set equality with the canonical file.
-Independent hand-maintained lists are prohibited.
+All Android roots sit below one app-private `diagnostic-harness` parent. App-relative directory names
+are constructed only through a registry-backed factory. The Kotlin `StorageRoots`, purge scanner, and
+Python study-readiness validator may have language-native representations, but tests prove exact set
+equality with the canonical file. A static architecture guard rejects direct `filesDir`, `getDir`, or
+`diagnostic-harness` path construction outside the factory, and a post-run scan rejects an
+unregistered top-level child. Independent hand-maintained lists are prohibited.
 
 ### 5.2 Backup and transfer behavior
 
 The Android application sets `android:allowBackup="false"` and references an Android 12+
-`android:dataExtractionRules` resource. Both `<cloud-backup>` and `<device-transfer>` exclude every
-registered Android-app root. `allowBackup=false` is defense in depth, not the D2D control.
+`android:dataExtractionRules` resource. Both `<cloud-backup>` and `<device-transfer>` exclude the
+single `diagnostic-harness` parent recursively, so a mistakenly unregistered future child remains
+excluded by construction. Tests additionally project every registered Android child beneath that
+parent and prove per-root registry equality. `allowBackup=false` is defense in depth, not the D2D
+control.
 
 Because minSdk is 33, a legacy `fullBackupContent` file is not added merely to satisfy historical
 guidance. If the supported minimum is later lowered to Android 11 or below, legacy rules become a
@@ -174,9 +182,9 @@ required registry-generated or registry-verified projection in that change.
 The gate proves:
 
 - manifest attributes are present;
-- cloud and device-transfer exclusions resolve to the complete Android-app registry set;
-- deleting either domain, omitting any root, adding an unregistered root, or changing a path makes
-  the test fail;
+- cloud and device-transfer exclusions each cover the complete `diagnostic-harness` parent;
+- deleting either domain, narrowing the parent exclusion, bypassing the root factory, or creating an
+  unregistered top-level child makes the test fail;
 - `adb shell bmgr`/transport behavior is not treated as the oracle for OEM D2D behavior;
 - the device is wiped with `pm clear` before exclusion evidence is recorded so pre-rule state cannot
   be mistaken for post-rule protection.
@@ -195,69 +203,113 @@ NEW -> OPEN -> SEALING -> PUBLISHED
               +-> FAILED
 ```
 
-- `OPEN` accepts ordered pose records, video samples, and telemetry samples.
+- `OPEN` accepts ordered pose records, encoded-video bytes/frame-pairing records, and telemetry
+  samples from separately fenced producers.
 - Pose records are encoded and appended immediately; the writer never waits for finalization to
   receive the entire session.
-- Flush policy is deterministic and versioned: a bounded record count and a bounded elapsed interval
-  each trigger channel flush plus `fsync` as configured. The exact constants are part of writer
-  provenance and tests, not runtime tuning knobs.
+- Flush policy is deterministic and versioned: 150 pose records or five session-clock seconds,
+  whichever arrives first, triggers channel flush plus `fsync`. The constants are writer provenance,
+  apply identically at 10/15/30 inference cadence, and are not runtime tuning knobs.
 - A compact checkpoint records last durable record index, counts, and digest state. Checkpoint
   replacement is temp-write, fsync, rename, parent-fsync.
 - On process restart, residue is classified; it is never silently resumed or published.
 - `SessionLedger` remains authoritative for state transitions and counters, but releases an emitted
-  record to the writer and retains no unbounded `records` list. Tests prove bounded memory by record
-  count rather than relying on a heap observation.
+  record to the writer and retains no `records` list. The streaming replacement also preserves the
+  released manifest semantics:
+  - normalized/world availability become monotone latches updated per emitted record;
+  - achieved cadence uses a single-pass session-relative one-second-window accumulator, including
+    zero-valued completed windows, omitting the final partial window, and returning an empty list when
+    no full window completed, byte-identical to `achievedInferenceFpsTimeseriesOf`;
+  - M0.5B aborts on the first inference failure, so the required inline
+    `machine_inference_failures` array is bounded to one and remains count-consistent;
+  - the one-in-flight invariant replaces `completedSubmissionIndices`, `terminalMap`, and
+    `terminalSubmissionIndices` with a current submission plus monotone submitted/terminal
+    high-water marks; duplicate or out-of-order terminal callbacks still fail;
+  - admitted callback diagnostics retain first, last, count, and completed one-second buckets rather
+    than every timestamp; all window lists are bounded by the fixed maximum session duration.
+
+Tests compare old and incremental availability/cadence output byte-for-byte on the existing fixtures,
+then prove constant collection cardinality across increasing synthetic frame counts. Changing the
+released cadence-window semantics is a contract revision, not a streaming refactor.
 
 ### 6.2 Finalization sequence
 
 Finalization executes exactly:
 
 1. fence new camera callbacks;
-2. drain or classify pending inference;
+2. drain or classify the single pending inference;
 3. stop and finalize the video encoder for a video-enabled short run;
-4. append final pose/telemetry records and flush;
-5. fsync the finalized pose, video, and telemetry files;
-6. independently stream-read and reconcile pose line/count identities, video sample counts, and
+4. cancel the fixed-interval sampler, join its writer thread, then synchronously capture and append
+   one terminal telemetry sample;
+5. transition the writer to `SEALING`, after which every producer append is rejected;
+6. append final aggregate records and flush;
+7. fsync the finalized pose, video, frame-pairing, and telemetry files;
+8. independently stream-read and reconcile pose line/count identities, video sample counts, and
    telemetry sequence/timestamps;
-7. compute SHA-256 digests from finalized bytes;
-8. create synchronization evidence from observed clocks and sample boundaries;
-9. validate all required artifact relations;
-10. write and fsync the synchronization-evidence file;
-11. write manifest with digests and final counts;
-12. fsync manifest and attempt directory;
-13. verify destination absence;
-14. rename the attempt once into the committed export root;
-15. fsync the committed-root parent directory.
+9. compute SHA-256 digests and byte lengths from finalized bytes;
+10. create synchronization evidence from observed clocks and sample boundaries;
+11. validate all required artifact relations;
+12. write and fsync the synchronization-evidence file;
+13. re-read every payload byte length after fsync and require it to equal the value at digest time;
+14. write manifest with digests and final counts;
+15. fsync manifest and attempt directory;
+16. verify destination absence;
+17. rename the attempt once into the committed export root;
+18. fsync the committed-root parent directory.
 
 Any failure before rename leaves classified staging residue and no committed session. A failure after
 rename but before parent fsync is `uncertain_durability`; it does not retry under the same session ID.
+A regression holds a live telemetry sampler across finalization and must fail until the stop/join
+fence prevents every post-seal append.
 
 ## 7. Synchronized non-participant video
 
 ### 7.1 Recording boundary
 
 Video is enabled only for short `live_conformance` runs used to prove synchronization and purge. The
-camera image feeding MediaPipe and the encoder originates from the same CameraX session. The video
-writer is owned by the live composition and shares its lifecycle fence; it cannot outlive the camera
-source or publish independently.
+implementation uses in-app `MediaCodec`/`MediaMuxer` encoding from the same `ImageAnalysis` frames
+that feed preprocessing; CameraX `VideoCapture`/`Recorder` is not used. The muxer writes directly into
+the session staging attempt. Encoder presentation time is
+`floor(rebased_camera_capture_timestamp_ns / 1_000)` microseconds. The video writer is owned by the
+live composition and shares its lifecycle fence; it cannot outlive the camera source or publish
+independently. Task 4 therefore includes `CameraXFrameSource`, `CameraXSourceLifecycle`, and the owned
+frame fan-out contract in its write scope.
 
-Video is excluded from 20–30 minute sustained characterization because encoding load would confound
+Video is excluded from 25-minute sustained characterization because encoding load would confound
 the thermal, battery, and cadence question. The sustained records explicitly state
 `video_enabled=false` and cite the separately admitted short-run synchronization evidence.
 
 ### 7.2 Additive contract
 
-The released v1 schema remains backward compatible. Additive v1 fields define a
-`synchronization_evidence` artifact and strengthen semantic rules for `session_kind=live_conformance`
-only when the run declares `media_required=true`.
+The released major-v1 schema remains backward compatible. `SessionManifest 1.2.0` adds three optional
+top-level properties without extending the closed `media_reference.role` enum:
+
+- `raw_pose_stream`: `{path_ref, sha256, schema_version}`;
+- `synchronization_evidence`: `{path_ref, sha256, schema_version}`;
+- `media_required`: boolean.
+
+The error-code registry advances to `1.3.0`, and `contracts/CHANGELOG.md` records both changes. New
+M0.5B producers always emit `raw_pose_stream`. A short synchronization run emits
+`media_required=true`, exactly one existing-role `session_video`, and one top-level
+`synchronization_evidence` reference. A sustained run emits `media_required=false`, no video, and no
+synchronization reference.
+
+`media_required` is not authoritative. Any `live_conformance` manifest containing a `session_video`
+reference, any synchronization reference, or any published video bytes enters the full validation
+path regardless of the flag. `true` without the required artifacts fails; false/absent with any video
+or synchronization artifact also fails. The final instrument-readiness validator identifies the
+short synchronization artifact by its evidence type and requires the media-enabled form; a producer
+cannot skip the gate by changing the flag.
 
 The record contains:
 
 - schema version, session ID, video role/path/digest/byte count/container/codec;
 - pose-stream digest and manifest session ID;
 - camera timestamp domain and encoder timestamp domain;
-- monotonic mapping method/version;
-- offset in nanoseconds and drift in nanoseconds per second;
+- mapping method fixed to `camera_capture_ts_to_encoder_pts_identity_v1`;
+- exact offset `0 ns` and exact drift `0 ns/s`, because encoder PTS is derived from capture time;
+- a frame-index, rebased-capture-nanosecond, expected-PTS-microsecond, and demuxed-PTS-microsecond
+  pairing sidecar bound by digest;
 - first and last camera-frame timestamps;
 - first and last encoded-frame presentation timestamps;
 - first and last pose capture timestamps;
@@ -270,13 +322,22 @@ Admission computes consistency; callers cannot declare a success boolean. Requir
 - all session IDs match;
 - manifest media digest equals the finalized video bytes;
 - pose digest equals the finalized NDJSON bytes;
-- offset and drift appear together and are finite;
+- offset and drift appear together and equal the identity mapping constants;
 - first/last ordering is monotonic in each domain;
-- mapped endpoints fall within the versioned tolerance recorded by the contract;
+- every demuxed encoder PTS equals `floor(rebased_capture_ns / 1_000)` for its paired frame, and the
+  first/last pairs match the observed first/last encoded samples;
 - callback, encoded, dropped, submitted, skipped, emitted, and failed counts reconcile through named
   identities rather than one ambiguous total;
-- a media-required `live_conformance` session has exactly one `session_video` and exactly one
-  synchronization-evidence reference.
+- `delivered_callbacks = encoded_video_frames + dropped_before_encoder + encoder_failures`;
+- a media-required `live_conformance` session has exactly one `session_video`, one top-level
+  `synchronization_evidence` reference, and one top-level `raw_pose_stream` reference.
+
+Identity mapping is not presented as an estimated clock-quality claim. Non-vacuity comes from
+demuxing the published video, checking every frame-index/PTS pair against the independently recorded
+camera event stream, and reconciling all delivered frames. Estimated offset/drift remains deferred
+until a genuinely independent capture clock exists, such as the later second-device slate protocol.
+No residual-magnitude acceptance threshold is introduced in M0.5B; any measured quantization detail
+is reported as an observation.
 
 The host transfer command uses binary-safe `adb exec-out`, writes to a temporary host file, verifies
 byte count and SHA-256 against the manifest, then renames. Text-mode shell capture is prohibited.
@@ -286,13 +347,15 @@ byte count and SHA-256 against the manifest, then renames. Text-mode shell captu
 Register at least these stable failures before implementation code consumes them:
 
 - `SESSION.MEDIA_REQUIRED_MISSING`;
+- `SESSION.MEDIA_REQUIREMENT_CONTRADICTED`;
 - `SESSION.MEDIA_DIGEST_MISMATCH`;
 - `SESSION.SYNC_EVIDENCE_MISSING`;
 - `SESSION.SYNC_CLOCK_MAPPING`;
 - `SESSION.SYNC_ENDPOINT_MISMATCH`;
 - `SESSION.VIDEO_COUNT_MISMATCH`.
 
-Each rule ships with a negative fixture and a mutation that makes its behavioral test fail.
+Each rule ships with a negative fixture and a mutation that makes its behavioral test fail, including
+the specific case where video bytes/reference exist while `media_required` is absent or false.
 
 ## 8. Synthetic purge and tombstone proposal
 
@@ -308,7 +371,8 @@ reject any claim that this proposal settles it.
 The tombstone is outside purge-eligible artifact roots and contains only:
 
 - tombstone schema version and explicit `policy_status: proposal`;
-- synthetic session ID;
+- reserved-namespace synthetic session ID;
+- pseudonym class fixed to `synthetic_m05`, never the pseudonym value;
 - random purge operation ID;
 - state: `INTENT_RECORDED`, `PURGE_INCOMPLETE`, or `PURGE_COMPLETE`;
 - registry version/digest;
@@ -325,7 +389,8 @@ must approve a coarse representation and update the schema; precise timestamps a
 
 Purge is idempotent and ordered:
 
-1. validate session ID and require the reserved synthetic namespace;
+1. validate the session ID against the reserved synthetic UUID namespace
+   `^00000000-0000-4000-8000-[0-9a-f]{12}$`;
 2. resolve every target exclusively through the registry;
 3. reject traversal, path-prefix partial matches, unknown roots, symlinks, and escapes;
 4. atomically write and fsync `INTENT_RECORDED` tombstone before deleting data;
@@ -336,6 +401,14 @@ Purge is idempotent and ordered:
 9. write and fsync `PURGE_COMPLETE` only when all post-scans are empty; otherwise write
    `PURGE_INCOMPLETE` with typed per-location results;
 10. reject any future staging, export, transfer, or admission under that session ID.
+
+M0.5B session generation uses cryptographically random 48-bit suffixes in that namespace and retains
+the existing destination/no-replace collision check. `M05Admission` rejects any non-matching session
+ID before capture. For a committed export, purge also reads and validates the manifest before any
+deletion and requires `session_kind=live_conformance` plus the `synthetic-m05-` pseudonym class. A
+crash residue with no manifest remains purgeable only because its directory name is in the reserved
+UUID namespace and it is under a registry-resolved staging root. Participant-mode UUIDs are expressly
+outside this namespace in any future implementation.
 
 Required stable results include `PURGE.INVALID_SESSION_ID`, `PURGE.UNKNOWN_ROOT`,
 `PURGE.PATH_ESCAPE`, `PURGE.SYMLINK_REJECTED`, `PURGE.DELETE_FAILED`,
@@ -367,7 +440,7 @@ cadence changes admission while camera request remains 30 FPS. A mismatch blocks
 
 ### 9.2 Telemetry
 
-A versioned fixed interval samples, from one scheduler and monotonic clock:
+A versioned one-second fixed interval samples, from one scheduler and monotonic clock:
 
 - Android thermal status;
 - battery temperature;
@@ -399,6 +472,9 @@ sustained run. It contains:
 - cooldown admission rule;
 - camera cadence fixed to 30 FPS;
 - inference-cadence set `{10,15,30}`;
+- sustained run duration fixed to 1,500 session-clock seconds (25 minutes);
+- stop-request overshoot limited to one telemetry interval (one second), with actual capture span
+  always recorded;
 - pre-registered execution order and order-artifact digest.
 
 No threshold is chosen after seeing a sustained result. The envelope is derived once from the fixed
@@ -411,8 +487,10 @@ a new attempt linked to the original condition and reason; it does not overwrite
 
 ## 11. Sustained S25 characterization
 
-Run exactly one 20–30 minute non-participant session for each configured inference cadence in the
-pre-registered order. All use:
+Run exactly one 25-minute non-participant session for each configured inference cadence in the
+pre-registered order. The controller requests stop at exactly 1,500 seconds on the session-relative
+monotonic clock. A stop request later than 1,501 seconds is a typed blocking observation rather than a
+shorter/longer accepted run. All use:
 
 - the same authorised physical S25 identity;
 - camera cadence 30 FPS;
@@ -424,8 +502,9 @@ pre-registered order. All use:
 - `empty_scene` or an admitted displayed synthetic figure, never a person.
 
 Each run records the envelope/admission/order digests, start/end device identity, full stage counts,
-achieved cadence time series, latency distribution inputs and percentiles, fixed-interval telemetry,
-thermal events, battery delta, source/process outcome, and typed blocking observations.
+target and actual monotonic duration, achieved cadence time series, latency distribution inputs and
+percentiles, fixed-interval telemetry, thermal events, battery delta, source/process outcome, and
+typed blocking observations.
 
 A zero-detection empty-scene run is valid for performance characterization but proves nothing about
 detection. A displayed-figure run with no detection leaves detection-dependent cells pending. The
@@ -463,17 +542,22 @@ automatic second-model review; privacy, synchronization, and final boundary cont
    Write scope: registry schema/data, Android manifest/resources, registry validators/tests.
    Delivers canonical roots, generated/verified exclusions, and pre-exclusion wipe evidence contract.
 2. **Durable streaming writer**
-   Depends on 1. Write scope: common export/session core and storage conformance tests.
-   Removes unbounded pose buffering and preserves crash/process-kill semantics.
+   Depends on 1. Write scope: `SessionLedger`, `SessionRunner`, `LiveAchievedCadence`,
+   `LiveCameraComposition`, common export/session core, Kotlin manifest derivation, and storage
+   conformance tests. Removes every unbounded per-frame/per-submission collection, introduces the
+   abort-on-first-failure rule, and preserves crash/process-kill and byte-identical cadence semantics.
 3. **Synchronization contract**
-   May overlap 2 after 1 if write scopes stay disjoint. Write scope: observation schemas, Python
-   semantic validator, Kotlin contract model/codec, error registry, synthetic fixtures/tests.
+   Depends on 2 because it extends the streamed publication contract. Write scope: SessionManifest
+   1.2 additions (`raw_pose_stream`, `synchronization_evidence`, `media_required`), Python semantic
+   validator, Kotlin contract model/codec, error registry 1.3, changelog, synthetic fixtures/tests.
 4. **Android video and atomic publication**
-   Depends on 2 and 3. Write scope: Android camera/encoder adapter, storage binary primitives,
-   composition/finalization, short device gate and transfer verifier.
+   Depends on 2 and 3. Write scope: `CameraXFrameSource`, `CameraXSourceLifecycle`, owned-frame
+   fan-out, Android in-app encoder/muxer adapter, storage binary primitives,
+   composition/finalization, pairing sidecar, short device gate, demux verifier, and transfer verifier.
 5. **Synthetic purge and tombstone proposal**
-   Depends on 1 and 2. Write scope: purge/tombstone contracts, Android storage purge, host rehearsal,
-   device and repository tests. `withdrawal_and_deletion` remains `UNDECIDED`.
+   Depends on 1, 2, and 4 so the rehearsal purges a complete short video-enabled session. Write
+   scope: purge/tombstone contracts, Android storage purge, host rehearsal, device and repository
+   tests. `withdrawal_and_deletion` remains `UNDECIDED`.
 6. **Stage attribution and fixed telemetry**
    Depends on 2. Write scope: live pipeline event model, Android probes, telemetry stream and tests.
 7. **Frozen envelope and order admission**
@@ -498,14 +582,17 @@ Required evidence includes:
 
 - registry set-equality and unknown-root negative tests;
 - manifest/XML parser tests for cloud and D2D exclusions;
-- bounded-memory streaming tests with large synthetic record counts;
+- bounded-memory streaming tests that inspect every named record, failure, callback, submission, and
+  terminal collection at two large synthetic frame counts;
 - crash points before/after each durable publication step;
-- media digest, mapping, endpoint, and count negative fixtures;
+- identity-clock, frame-pairing, media digest, endpoint, and count negative fixtures;
+- a live-sampler finalization race proving telemetry is stopped and joined before sealing/digest;
 - binary transfer/re-hash of a short device video;
 - purge traversal, prefix, symlink, unknown-root, partial-delete, fsync, post-scan, idempotency, and
   tombstoned-ID re-admission negatives;
 - stage-count and fixed-sample cadence mutations;
 - envelope-conjunct and pre-registered-order mutations;
+- fixed 1,500-second duration and one-second stop-overshoot mutations;
 - physical S25 gate refusing emulators, unauthorized devices, charging, fake-unplug evidence,
   connectivity drift, and envelope mismatch;
 - a repeated process-kill test after streaming changes;
@@ -549,8 +636,9 @@ M0.5B is complete only when Tasks 1–9 are merged through protected CI and:
 - `withdrawal_and_deletion` is still visibly `UNDECIDED` and participant capture is still blocked;
 - fixed-interval telemetry and stage attribution reconcile;
 - the envelope and cadence order were frozen before sustained data existed;
-- 10/15/30 inference-cadence S25 runs exist under one unchanged start-state envelope, with camera at
-  30 FPS, unplugged Wi-Fi ADB, no video, and no participant;
+- 10/15/30 inference-cadence S25 runs each target exactly 1,500 session-clock seconds under one
+  unchanged start-state envelope, with camera at 30 FPS, unplugged Wi-Fi ADB, no video, and no
+  participant;
 - the final readiness record verifies every evidence digest and renders flagship-only scope plus
   mid-range/iOS gaps;
 - no tracked participant artifact, model binary, credential, precise tombstone timestamp, or network
