@@ -113,7 +113,8 @@ def readiness_manifest() -> dict[str, Any]:
             "preprocessing_version": "1.0.0",
             "observation_contract_version": "1.0.0",
             "input_class": "empty_scene",
-            "detection_active_frame_fraction": 0,
+            "submitted_frame_count": 0,
+            "detection_active_frame_fraction": "UNMEASURED",
             "rendered_scope_statement": (
                 "scope: flagship Android only, non-participant empty_scene; no cross-device, "
                 "cross-platform, or participant-workload claim"
@@ -135,6 +136,15 @@ def readiness_manifest() -> dict[str, Any]:
 def assert_valid(validator: Draft202012Validator, document: dict[str, Any]) -> None:
     errors = list(validator.iter_errors(document))
     assert errors == []
+
+
+def assert_invalid_at(
+    validator: Draft202012Validator,
+    document: dict[str, Any],
+    pointer: tuple[str, ...],
+) -> None:
+    errors = list(validator.iter_errors(document))
+    assert any(tuple(error.absolute_path) == pointer for error in errors)
 
 
 def test_study_tooling_schemas_are_draft_2020_12_and_have_dedicated_paths() -> None:
@@ -191,11 +201,21 @@ def test_missing_required_properties_are_rejected() -> None:
     assert not study_readiness_schema_validator().is_valid(manifest)
 
 
-@pytest.mark.parametrize("bad_path", ["/absolute/ref.json", "../outside/ref.json"])
+@pytest.mark.parametrize(
+    "bad_path",
+    [
+        "/absolute/ref.json",
+        "../outside/ref.json",
+        r"\rooted\ref.json",
+        r"\\server\share\ref.json",
+    ],
+)
 def test_artifact_reference_rejects_absolute_and_parent_paths(bad_path: str) -> None:
     manifest = readiness_manifest()
     manifest["protocols"]["capture"]["path"] = bad_path
-    assert not study_readiness_schema_validator().is_valid(manifest)
+    assert_invalid_at(
+        study_readiness_schema_validator(), manifest, ("protocols", "capture", "path")
+    )
 
 
 def test_artifact_reference_rejects_non_sha256_digest() -> None:
@@ -271,6 +291,47 @@ def test_readiness_manifest_rejects_non_unmeasured_fraction_outside_range() -> N
     manifest = readiness_manifest()
     manifest["platform_scope"]["detection_active_frame_fraction"] = 1.1
     assert not study_readiness_schema_validator().is_valid(manifest)
+
+
+def test_platform_scope_rejects_participant_input_class() -> None:
+    manifest = readiness_manifest()
+    manifest["platform_scope"]["input_class"] = "participant"
+    assert_invalid_at(
+        study_readiness_schema_validator(), manifest, ("platform_scope", "input_class")
+    )
+
+
+def test_unmeasured_detection_fraction_requires_zero_submitted_frames() -> None:
+    manifest = readiness_manifest()
+    manifest["platform_scope"]["detection_active_frame_fraction"] = "UNMEASURED"
+    manifest["platform_scope"]["submitted_frame_count"] = 1
+    assert_invalid_at(
+        study_readiness_schema_validator(),
+        manifest,
+        ("platform_scope", "detection_active_frame_fraction"),
+    )
+
+
+def test_numeric_detection_fraction_requires_positive_submitted_frames() -> None:
+    manifest = readiness_manifest()
+    manifest["platform_scope"]["detection_active_frame_fraction"] = 0
+    manifest["platform_scope"]["submitted_frame_count"] = 1
+    assert_valid(study_readiness_schema_validator(), manifest)
+
+    manifest["platform_scope"]["submitted_frame_count"] = 0
+    assert_invalid_at(
+        study_readiness_schema_validator(),
+        manifest,
+        ("platform_scope", "detection_active_frame_fraction"),
+    )
+
+
+def test_submitted_frame_count_is_non_negative() -> None:
+    manifest = readiness_manifest()
+    manifest["platform_scope"]["submitted_frame_count"] = -1
+    assert_invalid_at(
+        study_readiness_schema_validator(), manifest, ("platform_scope", "submitted_frame_count")
+    )
 
 
 def test_readiness_manifest_rejects_cohort_input_with_wrong_scope_shape() -> None:

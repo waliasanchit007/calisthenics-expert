@@ -129,7 +129,7 @@
       "minLength": 1,
       "allOf": [
         {
-          "pattern": "^(?!/)(?![A-Za-z]:)[^\\u0000]+$"
+          "pattern": "^(?![/\\\\])(?![A-Za-z]:)[^\\u0000]+$"
         },
         {
           "pattern": "^(?!.*(?:^|[/\\\\])\\.\\.(?:[/\\\\]|$))"
@@ -327,6 +327,7 @@
         "preprocessing_version",
         "observation_contract_version",
         "input_class",
+        "submitted_frame_count",
         "detection_active_frame_fraction",
         "rendered_scope_statement"
       ],
@@ -370,9 +371,12 @@
           "enum": [
             "synthetic_fixture",
             "displayed_synthetic_figure",
-            "empty_scene",
-            "participant"
+            "empty_scene"
           ]
+        },
+        "submitted_frame_count": {
+          "type": "integer",
+          "minimum": 0
         },
         "detection_active_frame_fraction": {
           "anyOf": [
@@ -384,7 +388,30 @@
           "type": "string",
           "minLength": 1
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "submitted_frame_count": {"const": 0}
+            }
+          },
+          "then": {
+            "properties": {
+              "detection_active_frame_fraction": {"const": "UNMEASURED"}
+            }
+          },
+          "else": {
+            "properties": {
+              "detection_active_frame_fraction": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              }
+            }
+          }
+        }
+      ]
     },
     "cohort_scope": {
       "type": "object",
