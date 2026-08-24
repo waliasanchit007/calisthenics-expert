@@ -19,12 +19,12 @@
     "cadence_diagnostics": {
       "delivered_callback_classification_gap": 0,
       "delivered_callback_count": 24,
-      "first_delivered_capture_timestamp_ns": 955905918,
-      "last_delivered_capture_timestamp_ns": 4221180502,
-      "observed_capture_span_ns": 3265274584,
-      "requested_callback_opportunities": 98,
+      "first_delivered_capture_timestamp_ns": 979464303,
+      "last_delivered_capture_timestamp_ns": 4311377011,
+      "observed_capture_span_ns": 3331912708,
+      "requested_callback_opportunities": 100,
       "requested_camera_fps": 30,
-      "upstream_unclassified_cadence_gap_estimate": 74
+      "upstream_unclassified_cadence_gap_estimate": 76
     },
     "camera_frames_received": 24,
     "delivered_callback_classification_gap": 0,
@@ -52,6 +52,7 @@
     "marketing_name": "",
     "model": "SM-S938B"
   },
+  "harness_git_sha": "b0efa50391887af490563efb68b920f7568c2a7b",
   "inference_failure_identities": [],
   "instrumentation_succeeded": true,
   "manifest_device": {
@@ -66,17 +67,17 @@
   "run_failure_detail": null,
   "sanitized": true,
   "satisfies_s25_live_capture": true,
-  "session_id": "00000000-0000-4000-8000-fc1a2d459c56",
+  "session_id": "00000000-0000-4000-8000-16deea133bcd",
   "thermal": {
     "api_available": true,
     "samples": [
       {
         "status": 0,
-        "t_monotonic_ns": 117187
+        "t_monotonic_ns": 112708
       },
       {
         "status": 0,
-        "t_monotonic_ns": 404739
+        "t_monotonic_ns": 988906
       }
     ],
     "unavailable_reason": null

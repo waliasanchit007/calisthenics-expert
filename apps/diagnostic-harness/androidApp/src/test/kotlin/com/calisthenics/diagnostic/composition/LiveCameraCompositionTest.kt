@@ -1,6 +1,9 @@
 package com.calisthenics.diagnostic.composition
 
+import com.calisthenics.diagnostic.liveCaptureFailureCodeOr
+import com.calisthenics.diagnostic.toLivePhase
 import com.calisthenics.diagnostic.camera.OwnedYuvFrame
+import com.calisthenics.diagnostic.contract.Landmark
 import com.calisthenics.diagnostic.mediapipe.PoseLandmarkerConstructionEvidence
 import com.calisthenics.diagnostic.preprocessing.FrameRotation
 import com.calisthenics.diagnostic.preprocessing.YuvColorRange
@@ -12,6 +15,7 @@ import com.calisthenics.diagnostic.session.InferencePort
 import com.calisthenics.diagnostic.session.InferenceResult
 import com.calisthenics.diagnostic.session.SessionFinalizer
 import com.calisthenics.diagnostic.session.SessionRunnerSnapshot
+import com.calisthenics.diagnostic.ui.LiveRunPhase
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.jsonArray
@@ -47,6 +51,7 @@ class LiveCameraCompositionTest {
 
     @Test
     fun partialConstructionFailureReleasesInferenceAndSchedulerExactlyOnce() {
+        val existingDispatchers = liveSessionDispatcherThreads()
         val harness = Harness(finalizerFailure = IllegalStateException("finalizer construction failed"))
 
         val result = harness.composition.start(10)
@@ -55,24 +60,32 @@ class LiveCameraCompositionTest {
         assertEquals(1, harness.inference.disposeCount)
         assertEquals(1, harness.scheduler.shutdownCount)
         assertEquals(0, harness.sourceCreations)
-        assertNoLiveSessionDispatcher()
+        assertNoNewLiveSessionDispatcher(existingDispatchers)
     }
 
     @Test
     fun registrationRejectionReleasesInferenceAndSchedulerExactlyOnce() {
+        val unrelatedDispatcher = SingleThreadSessionDispatcher()
+        unrelatedDispatcher.dispatch { Unit }
+        val existingDispatchers = liveSessionDispatcherThreads()
         val harness = Harness(registrationResult = SessionRunnerRegistrationResult.REJECTED)
 
-        val result = harness.composition.start(10)
+        try {
+            val result = harness.composition.start(10)
 
-        assertIs<LiveCameraStartResult.Unavailable>(result)
-        assertEquals(1, harness.inference.disposeCount)
-        assertEquals(1, harness.scheduler.shutdownCount)
-        assertEquals(0, harness.sourceCreations)
-        assertNoLiveSessionDispatcher()
+            assertIs<LiveCameraStartResult.Unavailable>(result)
+            assertEquals(1, harness.inference.disposeCount)
+            assertEquals(1, harness.scheduler.shutdownCount)
+            assertEquals(0, harness.sourceCreations)
+            assertNoNewLiveSessionDispatcher(existingDispatchers)
+        } finally {
+            unrelatedDispatcher.shutdown()
+        }
     }
 
     @Test
     fun sourceFactoryFailureReleasesPartiallyConstructedResourcesExactlyOnce() {
+        val existingDispatchers = liveSessionDispatcherThreads()
         val harness = Harness(sourceFactoryFailure = IllegalStateException("source construction failed"))
 
         val result = harness.composition.start(10)
@@ -81,11 +94,12 @@ class LiveCameraCompositionTest {
         assertEquals(1, harness.inference.disposeCount)
         assertEquals(1, harness.scheduler.shutdownCount)
         assertEquals(0, harness.sourceCreations)
-        assertNoLiveSessionDispatcher()
+        assertNoNewLiveSessionDispatcher(existingDispatchers)
     }
 
     @Test
     fun sourceStartFailureStopsSourceAndReleasesEveryOwnedResourceExactlyOnce() {
+        val existingDispatchers = liveSessionDispatcherThreads()
         val harness = Harness(sourceStartFailure = IllegalStateException("source start failed"))
 
         val result = runCatching { harness.composition.start(10) }
@@ -97,7 +111,7 @@ class LiveCameraCompositionTest {
         assertEquals(1, harness.scheduler.shutdownCount)
         assertTrue(harness.events.indexOf("source.start.entered") < harness.events.indexOf("source.stop"))
         assertTrue(harness.events.indexOf("source.stop") < harness.events.indexOf("inference.dispose"))
-        assertNoLiveSessionDispatcher()
+        assertNoNewLiveSessionDispatcher(existingDispatchers)
     }
 
     @Test
@@ -194,6 +208,80 @@ class LiveCameraCompositionTest {
             assertEquals(2, samples.size)
             assertEquals(0L, samples.first().jsonObject["t_monotonic_ns"]?.jsonPrimitive?.long)
             assertEquals(2_000L, samples.last().jsonObject["t_monotonic_ns"]?.jsonPrimitive?.long)
+        }
+    }
+
+    @Test
+    fun poseBearingLiveExportMarksAvailableObservationsFromSealedRecords() {
+        withHarness(Harness(invokeManifestAtFinalization = true)) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            harness.source.emit(frame(timestampNs = 1_000_002_000L))
+            val landmarks = listOf(Landmark(0, "nose", 0.5, 0.5, 0.0, null, null))
+            harness.inference.completeSuccess(
+                normalizedImageLandmarks = landmarks,
+                worldLandmarks = landmarks,
+            )
+            harness.composition.stop()
+
+            val available = assertNotNull(harness.finalizedManifest).availableObservations
+            assertTrue(available.normalizedImageLandmarksAvailable)
+            assertTrue(available.worldLandmarksAvailable)
+        }
+    }
+
+    @Test
+    fun noPoseLiveExportLeavesAvailableObservationsFalse() {
+        withHarness(Harness(invokeManifestAtFinalization = true)) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            harness.source.emit(frame(timestampNs = 1_000_002_000L))
+            harness.inference.completeSuccess()
+            harness.composition.stop()
+
+            val available = assertNotNull(harness.finalizedManifest).availableObservations
+            assertFalse(available.normalizedImageLandmarksAvailable)
+            assertFalse(available.worldLandmarksAvailable)
+        }
+    }
+
+    @Test
+    fun runtimeSourceFailureIsPublishedOnCompositionAndCompletion() {
+        withHarness(Harness(invokeManifestAtFinalization = true)) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            harness.source.emit(frame(timestampNs = 1_000_002_000L))
+            harness.source.fail(IllegalStateException("source detail must not enter evidence"))
+            harness.inference.completeSuccess()
+
+            val completion = assertNotNull(harness.composition.completion())
+            assertEquals("live_source_failed", harness.composition.internalFailure?.code)
+            assertEquals("live_source_failed", completion.internalFailure?.code)
+        }
+    }
+
+    @Test
+    fun sourceFailureCodeIsPreservedInsteadOfFallingBackToTimeout() {
+        assertEquals(
+            "live_source_failed",
+            liveCaptureFailureCodeOr(LiveInternalFailure.SourceFailure("live_source_failed"), "live_capture_timeout"),
+        )
+        assertEquals(
+            "live_inference_stalled",
+            liveCaptureFailureCodeOr(LiveInternalFailure.LiveInferenceStalled, "live_capture_timeout"),
+        )
+    }
+
+    @Test
+    fun publishedCompletionWithInternalFailureIsShownAsFailed() {
+        withHarness(Harness()) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            harness.source.emit(frame(timestampNs = 1_000_002_000L))
+            harness.source.fail(IllegalStateException("source detail must not enter UI"))
+            harness.inference.completeSuccess()
+
+            val completion = assertNotNull(harness.composition.completion())
+            val phase = completion.toLivePhase()
+
+            assertIs<LiveRunPhase.Failed>(phase)
+            assertEquals("live_source_failed", phase.reason)
         }
     }
 
@@ -819,11 +907,13 @@ class LiveCameraCompositionTest {
             harness.close()
         }
 
-    private fun assertNoLiveSessionDispatcher() {
-        assertFalse(
-            Thread.getAllStackTraces().keys.any { it.name == "replay-session-dispatcher" && it.isAlive },
-            "live session dispatcher worker leaked",
-        )
+    private fun liveSessionDispatcherThreads(): Set<Thread> =
+        Thread.getAllStackTraces().keys
+            .filterTo(mutableSetOf()) { it.name == "replay-session-dispatcher" && it.isAlive }
+
+    private fun assertNoNewLiveSessionDispatcher(existingDispatchers: Set<Thread>) {
+        val leakedDispatchers = liveSessionDispatcherThreads() - existingDispatchers
+        assertTrue(leakedDispatchers.isEmpty(), "live session dispatcher worker leaked")
     }
 
     private class Harness(
@@ -946,6 +1036,7 @@ class LiveCameraCompositionTest {
         private val callbackOwnedByCurrentThread: ThreadLocal<Boolean> = ThreadLocal.withInitial { false }
         private val callbackReleasedForQuiescence: ThreadLocal<Boolean> = ThreadLocal.withInitial { false }
         private var callback: ((OwnedYuvFrame) -> Unit)? = null
+        private var failureCallback: ((Throwable) -> Unit)? = null
         private var acceptingCallbacks = true
         private var inFlightCallbacks = 0
         private val quiescenceCallbacks = mutableListOf<() -> Unit>()
@@ -972,6 +1063,7 @@ class LiveCameraCompositionTest {
             startFailure?.let { throw it }
             onSourceStarted(sourceResolution)
             callback = onFrame
+            failureCallback = onFailure
             active = true
             events += "source.start.completed"
         }
@@ -1001,6 +1093,10 @@ class LiveCameraCompositionTest {
             } finally {
                 leaveCallback()
             }
+        }
+
+        fun fail(error: Throwable) {
+            checkNotNull(failureCallback).invoke(error)
         }
 
         fun emitInFlight(frame: OwnedYuvFrame): Thread {
@@ -1081,8 +1177,18 @@ class LiveCameraCompositionTest {
             this.callback = callback
         }
 
-        fun completeSuccess() {
-            callback!!.invoke(InferenceResult.Success(callbackNowNs - 1_000_000_000L, posePresent = false))
+        fun completeSuccess(
+            normalizedImageLandmarks: List<Landmark>? = null,
+            worldLandmarks: List<Landmark>? = null,
+        ) {
+            callback!!.invoke(
+                InferenceResult.Success(
+                    callbackNowNs - 1_000_000_000L,
+                    posePresent = normalizedImageLandmarks != null || worldLandmarks != null,
+                    normalizedImageLandmarks = normalizedImageLandmarks,
+                    worldLandmarks = worldLandmarks,
+                ),
+            )
             callback = null
         }
 

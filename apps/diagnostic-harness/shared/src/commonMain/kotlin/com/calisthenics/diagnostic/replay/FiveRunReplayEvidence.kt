@@ -152,11 +152,20 @@ data class FiveRunReplayRunRecord(
  */
 data class FiveRunReplayEvidence(
     val emittedBy: String,
+    val harnessGitSha: String,
     val environment: FiveRunReplayEnvironment,
     val provenance: FiveRunReplayProvenanceBinding,
     val fixture: FiveRunReplayFixtureBinding,
     val runs: List<FiveRunReplayRunRecord>,
-)
+) {
+    init {
+        require(HARNESS_GIT_SHA_PATTERN.matches(harnessGitSha)) {
+            "harness_git_sha must be a lowercase 40-hex commit SHA"
+        }
+    }
+}
+
+private val HARNESS_GIT_SHA_PATTERN = Regex("^[0-9a-f]{40}$")
 
 /**
  * Renders [evidence] as one deterministic line of JSON, computing `satisfies_s25_device_gate`
@@ -240,6 +249,7 @@ private fun buildRecord(evidence: FiveRunReplayEvidence, runsCompleted: Int, sat
         put("sanitized", true)
         put("contains_landmark_coordinates", false)
         put("emitted_by", evidence.emittedBy)
+        put("harness_git_sha", evidence.harnessGitSha)
         putJsonObject("environment") {
             put("device_class", evidence.environment.deviceClass)
             put("device_identity", evidence.environment.deviceIdentity)

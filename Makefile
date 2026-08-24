@@ -46,7 +46,7 @@ prepare-harness-gradle-dependencies:
 	cd apps/diagnostic-harness && ./gradlew --no-daemon :androidApp:assembleJvmVerification
 
 verify-harness-jvm:
-	cd apps/diagnostic-harness && ./gradlew --no-daemon :shared:jvmTest :androidApp:assembleJvmVerification
+	cd apps/diagnostic-harness && ./gradlew --no-daemon :shared:jvmTest :shared:testAndroidHostTest :androidApp:testDebugUnitTest :androidApp:assembleJvmVerification
 
 verify-harness-ios:
 	cd apps/diagnostic-harness && ./gradlew --no-daemon :shared:linkDebugTestIosArm64 :shared:iosSimulatorArm64Test :composeApp:linkDebugTestIosArm64 :composeApp:iosSimulatorArm64Test :composeApp:linkDebugFrameworkIosArm64 :composeApp:linkDebugFrameworkIosSimulatorArm64

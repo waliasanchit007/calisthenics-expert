@@ -64,6 +64,14 @@ def _private_key_marker() -> str:
     return "-----BEGIN " + "PRIVATE KEY-----"
 
 
+def _client_secret_marker() -> bytes:
+    return b'"client_' + b'secret": "redacted"'
+
+
+def _long_whitespace_json_signature(key: bytes, value: bytes) -> bytes:
+    return b"a" * (64 * 1024 - len(key) - 256) + key + b" " * 272 + b": " + value + b"\n"
+
+
 def _json(document: dict[str, Any]) -> str:
     return json.dumps(document, indent=2, sort_keys=True) + "\n"
 
@@ -521,16 +529,70 @@ def test_does_not_follow_symlink_outside_repository(tmp_path: Path) -> None:
     assert _codes(root, mode="tracked") == [("docs/linked.txt", "REPOSITORY.PROHIBITED_PATH")]
 
 
-def test_signature_scan_is_bounded_to_64_kibibytes(tmp_path: Path) -> None:
+@pytest.mark.parametrize("mode", ["staged", "tracked"])
+def test_rejects_private_key_after_64_kibibytes(tmp_path: Path, mode: str) -> None:
     root = _repository(tmp_path)
     _write(
         root,
         "docs/large.txt",
-        b"a" * (64 * 1024) + b"\n-----BEGIN " + b"PRIVATE KEY-----\n",
+        b"a" * (64 * 1024 + 1) + b"\n" + _private_key_marker().encode() + b"\n",
     )
     _stage(root)
 
-    assert guard_repository(root, mode="staged") == []
+    assert _codes(root, mode=mode) == [("docs/large.txt", "REPOSITORY.PROHIBITED_CONTENT")]
+
+
+@pytest.mark.parametrize("mode", ["staged", "tracked"])
+@pytest.mark.parametrize(
+    "marker",
+    [_private_key_marker().encode(), _client_secret_marker()],
+)
+def test_rejects_signature_split_across_64_kibibyte_boundary(
+    tmp_path: Path, mode: str, marker: bytes
+) -> None:
+    root = _repository(tmp_path)
+    split_at = len(marker) // 2
+    _write(
+        root,
+        "docs/large.txt",
+        b"a" * (64 * 1024 - split_at) + marker,
+    )
+    _stage(root)
+
+    assert _codes(root, mode=mode) == [("docs/large.txt", "REPOSITORY.PROHIBITED_CONTENT")]
+
+
+@pytest.mark.parametrize("mode", ["staged", "tracked"])
+@pytest.mark.parametrize(
+    ("relative_path", "key", "value", "expected_code"),
+    [
+        (
+            "docs/large.txt",
+            b'"client_' + b'secret"',
+            b'"redacted"',
+            "REPOSITORY.PROHIBITED_CONTENT",
+        ),
+        (
+            "exports/data.json",
+            b'"normalized_image_' + b'landmarks"',
+            b"[]",
+            "REPOSITORY.PROHIBITED_PATH",
+        ),
+    ],
+)
+def test_rejects_json_signature_with_long_cross_chunk_whitespace(
+    tmp_path: Path,
+    mode: str,
+    relative_path: str,
+    key: bytes,
+    value: bytes,
+    expected_code: str,
+) -> None:
+    root = _repository(tmp_path)
+    _write(root, relative_path, _long_whitespace_json_signature(key, value))
+    _stage(root)
+
+    assert _codes(root, mode=mode) == [(relative_path, expected_code)]
 
 
 def test_returns_issues_in_deterministic_path_then_code_order(tmp_path: Path) -> None:

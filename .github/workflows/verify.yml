@@ -30,5 +30,9 @@ jobs:
       # reference/tests/test_ci_gradle_cache_ordering.py.
       - run: make prepare-harness-gradle-dependencies
       - run: make verify
+      # Android app unit tests compile the debug resource graph, whose unconditional delivery
+      # model gate must remain intact. Fetch only after the hermetic missing-asset tests above,
+      # and verify the pinned SHA-256 before the protected Android test gate runs.
+      - run: make fetch-model-asset
       - run: make verify-harness-jvm
       - run: make verify-kotlin-export

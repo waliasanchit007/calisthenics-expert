@@ -20,6 +20,7 @@ GuardMode = Literal["tracked", "staged"]
 
 _MAX_SIGNATURE_BYTES = 64 * 1024
 _HASH_CHUNK_BYTES = 64 * 1024
+_CONTENT_SCAN_TAIL_BYTES = 128
 _MEDIA_SUFFIXES = {
     ".aac",
     ".aiff",
@@ -68,8 +69,17 @@ _SECRET_CONTENT_RE = re.compile(
     rb"(?i)(?:\"(?:private_key|client_secret|access_token|refresh_token|api_key|password)\"\s*:|"
     rb"(?:AWS_SECRET_ACCESS_KEY|PRIVATE_KEY|CLIENT_SECRET|ACCESS_TOKEN|API_KEY)\s*=)"
 )
+_SECRET_JSON_KEY_AT_END_RE = re.compile(
+    rb'(?i)"(?:private_key|client_secret|access_token|refresh_token|api_key|password)"\s*$'
+)
+_SECRET_ASSIGNMENT_KEY_AT_END_RE = re.compile(
+    rb"(?i)(?:AWS_SECRET_ACCESS_KEY|PRIVATE_KEY|CLIENT_SECRET|ACCESS_TOKEN|API_KEY)\s*$"
+)
 _POSE_CONTENT_RE = re.compile(
     rb'"(?:normalized_image_landmarks|world_landmarks|pose_present|capture_timestamp_ns)"\s*:'
+)
+_POSE_JSON_KEY_AT_END_RE = re.compile(
+    rb'"(?:normalized_image_landmarks|world_landmarks|pose_present|capture_timestamp_ns)"\s*$'
 )
 _SEMVER_RE = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -187,10 +197,7 @@ def guard_repository(root: Path, mode: GuardMode = "tracked") -> list[Validation
                 issues.append(_path_issue_for(relative_path, "prohibited media or key suffix"))
             continue
 
-        content = source.read_prefix(relative_path)
-        if content is None:
-            continue
-        prohibited = _content_issue(relative_path, content)
+        prohibited = _stream_content_issue(source, relative_path)
         if prohibited is not None:
             issues.append(prohibited)
 
@@ -300,12 +307,17 @@ def _content_issue(relative_path: str, content: bytes) -> ValidationIssue | None
     if _PRIVATE_KEY_RE.search(content) or _SECRET_CONTENT_RE.search(content):
         return _content_issue_for(relative_path, "private-key or credential signature")
 
+    return _pose_content_issue(relative_path, _POSE_CONTENT_RE.search(content) is not None)
+
+
+def _pose_content_issue(
+    relative_path: str, looks_like_pose_content: bool
+) -> ValidationIssue | None:
     path = PurePosixPath(relative_path)
     lower_path = relative_path.lower()
     is_schema = lower_path.startswith("contracts/schema/") or path.name.endswith(".schema.json")
     path_tokens = set(filter(None, re.split(r"[^a-z0-9]+", path.stem.lower())))
     looks_like_pose_path = bool(path_tokens & {"pose", "poses", "landmark", "landmarks"})
-    looks_like_pose_content = _POSE_CONTENT_RE.search(content) is not None
     if (
         path.suffix.lower() in _POSE_SUFFIXES
         and not is_schema
@@ -314,6 +326,43 @@ def _content_issue(relative_path: str, content: bytes) -> ValidationIssue | None
         return _path_issue_for(
             relative_path, "raw pose or landmark dump outside synthetic fixtures"
         )
+    return None
+
+
+def _stream_content_issue(source: _RepositoryContent, relative_path: str) -> ValidationIssue | None:
+    tail = b""
+    pending_secret_delimiter: bytes | None = None
+    pending_pose_key = False
+    try:
+        for chunk in source.iter_bytes(relative_path):
+            window = tail + chunk
+            prohibited = _content_issue(relative_path, window)
+            if prohibited is not None:
+                return prohibited
+
+            remainder = chunk.lstrip()
+            if pending_secret_delimiter is not None:
+                if remainder.startswith(pending_secret_delimiter):
+                    return _content_issue_for(relative_path, "private-key or credential signature")
+                if remainder:
+                    pending_secret_delimiter = None
+            if pending_pose_key:
+                if remainder.startswith(b":"):
+                    prohibited = _pose_content_issue(relative_path, True)
+                    if prohibited is not None:
+                        return prohibited
+                if remainder:
+                    pending_pose_key = False
+
+            if _SECRET_JSON_KEY_AT_END_RE.search(window):
+                pending_secret_delimiter = b":"
+            elif _SECRET_ASSIGNMENT_KEY_AT_END_RE.search(window):
+                pending_secret_delimiter = b"="
+            if _POSE_JSON_KEY_AT_END_RE.search(window):
+                pending_pose_key = True
+            tail = window[-_CONTENT_SCAN_TAIL_BYTES:]
+    except OSError:
+        return None
     return None
 
 

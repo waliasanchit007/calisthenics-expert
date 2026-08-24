@@ -119,6 +119,7 @@ data class LiveCaptureFailureIdentity(
 data class LiveCaptureEvidence(
     val emittedBy: String,
     val sessionId: String,
+    val harnessGitSha: String,
     val environment: LiveCaptureEnvironment,
     val manifestDevice: LiveCaptureManifestDevice,
     val camera: LiveCaptureCameraObservation,
@@ -129,9 +130,16 @@ data class LiveCaptureEvidence(
     val runFailureCode: String? = null,
     val runFailureDetail: String? = null,
     val inferenceFailureIdentities: List<LiveCaptureFailureIdentity> = emptyList(),
-)
+) {
+    init {
+        require(HARNESS_GIT_SHA_PATTERN.matches(harnessGitSha)) {
+            "harness_git_sha must be a lowercase 40-hex commit SHA"
+        }
+    }
+}
 
 private val ABSOLUTE_PATH = Regex("""(?:file://)?(?:/|[A-Za-z]:[\\/])\S+""")
+private val HARNESS_GIT_SHA_PATTERN = Regex("^[0-9a-f]{40}$")
 
 /** Keeps device evidence single-line, bounded, and free of local paths or stack-trace text. */
 fun sanitizeLiveCaptureFailureDetail(detail: String?): String? {
@@ -190,14 +198,7 @@ fun liveCaptureBlockingReasons(evidence: LiveCaptureEvidence): List<String> {
         reasons += LIVE_CAPTURE_BLOCK_CADENCE_DIAGNOSTICS
     }
     if (!evidence.referenceValidationSucceeded) reasons += LIVE_CAPTURE_BLOCK_VALIDATOR
-    when (evidence.runFailureCode) {
-        LIVE_CAPTURE_BLOCK_TIMEOUT -> reasons += LIVE_CAPTURE_BLOCK_TIMEOUT
-        LIVE_CAPTURE_BLOCK_STALL -> reasons += LIVE_CAPTURE_BLOCK_STALL
-        LIVE_CAPTURE_BLOCK_FAILURE -> reasons += LIVE_CAPTURE_BLOCK_FAILURE
-        LIVE_CAPTURE_BLOCK_CAMERA_CAPABILITY -> reasons += LIVE_CAPTURE_BLOCK_CAMERA_CAPABILITY
-        LIVE_CAPTURE_BLOCK_PERMISSION -> reasons += LIVE_CAPTURE_BLOCK_PERMISSION
-        LIVE_CAPTURE_BLOCK_INITIALIZATION -> reasons += LIVE_CAPTURE_BLOCK_INITIALIZATION
-    }
+    evidence.runFailureCode?.let { reasons += it }
     if (!evidence.instrumentationSucceeded) reasons += LIVE_CAPTURE_BLOCK_INSTRUMENTATION
     return reasons
 }
@@ -213,6 +214,7 @@ fun renderLiveCaptureEvidence(evidence: LiveCaptureEvidence): String {
         put("contains_landmark_coordinates", false)
         put("emitted_by", evidence.emittedBy)
         put("session_id", evidence.sessionId)
+        put("harness_git_sha", evidence.harnessGitSha)
         putJsonObject("environment") {
             put("device_class", evidence.environment.deviceClass)
             put("device_identity", evidence.environment.deviceIdentity)

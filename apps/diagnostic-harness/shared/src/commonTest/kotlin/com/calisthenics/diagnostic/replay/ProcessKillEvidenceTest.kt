@@ -1,6 +1,7 @@
 package com.calisthenics.diagnostic.replay
 
 import kotlin.test.Test
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -40,6 +41,7 @@ private fun render(
 ) = renderProcessKillEvidence(
     ProcessKillEvidence(
         emittedBy = "com.calisthenics.diagnostic.export.ProcessKillDuringExportTest",
+        harnessGitSha = "0123456789abcdef0123456789abcdef01234567",
         environment = env,
         sessionId = "00000000-0000-4000-8000-000000000001",
         observation = obs,
@@ -50,6 +52,26 @@ private const val GATE_TRUE = """"satisfies_s25_process_kill_gate":true"""
 private const val GATE_FALSE = """"satisfies_s25_process_kill_gate":false"""
 
 class ProcessKillEvidenceTest {
+    @Test
+    fun rejectsMalformedHarnessGitSha() {
+        assertFailsWith<IllegalArgumentException> {
+            renderProcessKillEvidence(
+                ProcessKillEvidence(
+                    emittedBy = "test",
+                    harnessGitSha = "not-a-sha",
+                    environment = environment(),
+                    sessionId = "session",
+                    observation = observation(),
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun renderedEvidenceCarriesTheProducerHarnessGitSha() {
+        assertTrue(render().contains("\"harness_git_sha\""))
+    }
+
     @Test
     fun aCrashWithNoPartialEntryAndCrashResidueSatisfiesTheGate() {
         assertTrue(render().contains(GATE_TRUE))

@@ -44,10 +44,19 @@ data class ProcessKillObservation(
 /** One complete sanitized process-kill observation, addressed at the section 14 Android check. */
 data class ProcessKillEvidence(
     val emittedBy: String,
+    val harnessGitSha: String,
     val environment: ProcessKillEnvironment,
     val sessionId: String,
     val observation: ProcessKillObservation,
-)
+) {
+    init {
+        require(HARNESS_GIT_SHA_PATTERN.matches(harnessGitSha)) {
+            "harness_git_sha must be a lowercase 40-hex commit SHA"
+        }
+    }
+}
+
+private val HARNESS_GIT_SHA_PATTERN = Regex("^[0-9a-f]{40}$")
 
 /**
  * Renders [evidence] as one deterministic line of JSON, computing
@@ -90,6 +99,7 @@ fun renderProcessKillEvidence(evidence: ProcessKillEvidence): String {
         put("sanitized", true)
         put("contains_landmark_coordinates", false)
         put("emitted_by", evidence.emittedBy)
+        put("harness_git_sha", evidence.harnessGitSha)
         put("session_id", evidence.sessionId)
         put(
             "environment",

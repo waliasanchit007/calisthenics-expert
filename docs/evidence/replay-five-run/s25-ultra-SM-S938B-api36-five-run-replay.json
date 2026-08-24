@@ -34,6 +34,7 @@
     ],
     "frame_width": 256
   },
+  "harness_git_sha": "b0efa50391887af490563efb68b920f7568c2a7b",
   "provenance": {
     "delegate": "CPU",
     "model_asset_name": "pose_landmarker_full.task",
@@ -62,8 +63,8 @@
         "cbdd85322a6efcee1cf577585e2ab2e2d555154546485304e4d31a281dcbff06",
         "a619365459e4c0cc746cb88b1599f5adfa53fa7039294915c430e20dd68fa4f0"
       ],
-      "frames_sha256": "5e420d8c52356bbb6bef51b22571d923575f6e841f9061a1ee76431158863f58",
-      "manifest_sha256": "6274632e9eb2aa964e548925dba2b9fe36b13fbdec6a7d83766da70682832c85",
+      "frames_sha256": "66cab121539ff46c98db1de3b2eb1761f5fe93b07b205e3841ffddb803bcf0c4",
+      "manifest_sha256": "800bf6e346ae1ef7037b8517c2183f1f508f8d4496c1a858bd26c4bba1b39105",
       "normalized_landmark_count_per_frame": [
         33,
         33,
@@ -83,7 +84,7 @@
       ],
       "published": true,
       "run_index": 1,
-      "session_id": "00000000-0000-4000-8000-8ae5b64e7dae",
+      "session_id": "00000000-0000-4000-8000-16d89db0a59f",
       "submitted_indices": [
         0,
         1,
@@ -119,8 +120,8 @@
         "cbdd85322a6efcee1cf577585e2ab2e2d555154546485304e4d31a281dcbff06",
         "a619365459e4c0cc746cb88b1599f5adfa53fa7039294915c430e20dd68fa4f0"
       ],
-      "frames_sha256": "aaaa654d76a39de523fc48a6a7d9e7f41fe0c555a20e06207571de2f661757a9",
-      "manifest_sha256": "a4a2b2a1fd31f36927bcc6444134d9055e118a68e31b069e90a3f85a9513de90",
+      "frames_sha256": "119b3a9ae242e83ec52bcf13013931347fb024157a23304fc8d3e3b7bbc085d7",
+      "manifest_sha256": "426628ef09102467416d384165bd5082bbd9a798e962aa601277fb529d85ca5b",
       "normalized_landmark_count_per_frame": [
         33,
         33,
@@ -140,7 +141,7 @@
       ],
       "published": true,
       "run_index": 2,
-      "session_id": "00000000-0000-4000-8000-8ae64afe61c1",
+      "session_id": "00000000-0000-4000-8000-16d938d3b74d",
       "submitted_indices": [
         0,
         1,
@@ -176,8 +177,8 @@
         "cbdd85322a6efcee1cf577585e2ab2e2d555154546485304e4d31a281dcbff06",
         "a619365459e4c0cc746cb88b1599f5adfa53fa7039294915c430e20dd68fa4f0"
       ],
-      "frames_sha256": "7df82cc77f62559ae937f932b81bdf9acc459009638ea3f66ee3817de5e1779d",
-      "manifest_sha256": "3caab587cdc61e83380d4691bd501c9555ef9273578dd017a4b5d295f26e86cf",
+      "frames_sha256": "162fea70f1a3edf83c66b2a9c39ebc353e5d85977255ebd8c678217d87dc8906",
+      "manifest_sha256": "6443bab135485e39374da0c5f211d958ec5077e26c088e0b34af5dc3a20391cb",
       "normalized_landmark_count_per_frame": [
         33,
         33,
@@ -197,7 +198,7 @@
       ],
       "published": true,
       "run_index": 3,
-      "session_id": "00000000-0000-4000-8000-8ae6ce66bd86",
+      "session_id": "00000000-0000-4000-8000-16d9bf053a9e",
       "submitted_indices": [
         0,
         1,
@@ -233,8 +234,8 @@
         "cbdd85322a6efcee1cf577585e2ab2e2d555154546485304e4d31a281dcbff06",
         "a619365459e4c0cc746cb88b1599f5adfa53fa7039294915c430e20dd68fa4f0"
       ],
-      "frames_sha256": "974b8d005b568595b24b6fb63c62439676b717d8f5289d2992eef55f81890feb",
-      "manifest_sha256": "e70ab103d07647e9cb8ddf6448e74c77d222af87329b2ad8420b5bb6f0ae1dbd",
+      "frames_sha256": "2aa5f2b6be37affef841618cca766c41b4ea1bcb71071b5daf3b3fdfc0978119",
+      "manifest_sha256": "85a02bb205a870727c6528ec7ef1d8e18652ec55bf06f618aa82f743dd639029",
       "normalized_landmark_count_per_frame": [
         33,
         33,
@@ -254,7 +255,7 @@
       ],
       "published": true,
       "run_index": 4,
-      "session_id": "00000000-0000-4000-8000-8ae74d7b4d12",
+      "session_id": "00000000-0000-4000-8000-16da46b6c755",
       "submitted_indices": [
         0,
         1,
@@ -290,8 +291,8 @@
         "cbdd85322a6efcee1cf577585e2ab2e2d555154546485304e4d31a281dcbff06",
         "a619365459e4c0cc746cb88b1599f5adfa53fa7039294915c430e20dd68fa4f0"
       ],
-      "frames_sha256": "dc1a27bacaa07541415cff2981560037ce02bd8eeb64f746e1c9e4dbd5817d20",
-      "manifest_sha256": "55d70e9cdf89b2ce656449ac90fccaa9f1e6cd7c29fa40a011df7d2f8f793216",
+      "frames_sha256": "f346d7b3e078f65829a67051e13150c6b9dd3f20e7e300cf30d12fac29749ab2",
+      "manifest_sha256": "0ee73ca9fa329c877cded214663908ff2233224b2777ffe344e6478ff98021fe",
       "normalized_landmark_count_per_frame": [
         33,
         33,
@@ -311,7 +312,7 @@
       ],
       "published": true,
       "run_index": 5,
-      "session_id": "00000000-0000-4000-8000-8ae7cdb1ab8d",
+      "session_id": "00000000-0000-4000-8000-16dace191eb3",
       "submitted_indices": [
         0,
         1,

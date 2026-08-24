@@ -1,6 +1,7 @@
 package com.calisthenics.diagnostic.composition
 
 import com.calisthenics.diagnostic.probe.readMarketingName
+import com.calisthenics.diagnostic.android.BuildConfig
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -133,6 +134,7 @@ class FiveRunReplayDeviceGateTest {
         val record = renderFiveRunReplayEvidence(
             FiveRunReplayEvidence(
                 emittedBy = "com.calisthenics.diagnostic.composition.FiveRunReplayDeviceGateTest",
+                harnessGitSha = BuildConfig.PROBE_GIT_SHA,
                 environment = FiveRunReplayEnvironment(
                     deviceClass = androidDeviceClassOf(Build.FINGERPRINT, Build.HARDWARE),
                     deviceIdentity = "${Build.MANUFACTURER}/${Build.MODEL}/${Build.DEVICE}/${Build.PRODUCT}",

@@ -101,16 +101,16 @@ class LiveCaptureDeviceGateTest {
                         snapshot.counts.inferenceRecordsEmitted <= 0L ||
                         composition!!.observedCaptureSpanNs()?.let { it >= MINIMUM_CAPTURE_SPAN_NANOS } != true
                     ) {
-                        runFailureCode = if (composition!!.internalFailure?.code == "live_inference_stalled") {
-                            "live_inference_stalled"
-                        } else {
-                            "live_capture_timeout"
-                        }
+                        runFailureCode = com.calisthenics.diagnostic.liveCaptureFailureCodeOr(
+                            composition!!.internalFailure,
+                            "live_capture_timeout",
+                        )
                     }
                     completion = composition!!.stop()
-                    if (completion!!.internalFailure?.code == "live_inference_stalled") {
-                        runFailureCode = "live_inference_stalled"
-                    }
+                    runFailureCode = com.calisthenics.diagnostic.liveCaptureFailureCodeOr(
+                        completion!!.internalFailure,
+                        runFailureCode,
+                    )
                     if (completion!!.finalization !is FinalizationResult.Published && runFailureCode == null) {
                         runFailureCode = "live_capture_failed"
                     }
@@ -138,6 +138,7 @@ class LiveCaptureDeviceGateTest {
             val evidence = LiveCaptureEvidence(
                 emittedBy = EMITTED_BY,
                 sessionId = completion?.sessionId?.value ?: manifest?.sessionId?.value ?: UNKNOWN_SESSION_ID,
+                harnessGitSha = BuildConfig.PROBE_GIT_SHA,
                 environment = LiveCaptureEnvironment(
                     deviceClass = androidDeviceClassOf(Build.FINGERPRINT, Build.HARDWARE),
                     deviceIdentity = "${Build.MANUFACTURER}/${Build.MODEL}/${Build.DEVICE}/${Build.PRODUCT}",

@@ -2,15 +2,32 @@ package com.calisthenics.diagnostic.live
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class LiveCaptureEvidenceTest {
     @Test
+    fun rejectsMalformedHarnessGitSha() {
+        assertFailsWith<IllegalArgumentException> {
+            renderLiveCaptureEvidence(admittedEvidence().copy(harnessGitSha = "not-a-sha"))
+        }
+    }
+
+    @Test
+    fun renderedEvidenceCarriesTheProducerHarnessGitSha() {
+        assertTrue(renderLiveCaptureEvidence(admittedEvidence()).contains("\"harness_git_sha\""))
+    }
+
+    @Test
     fun exactObservedS25EvidenceRendersOneSanitizedAdmittedRecord() {
         val rendered = renderLiveCaptureEvidence(admittedEvidence())
 
-        assertEquals(EXACT_ADMITTED_RECORD, rendered)
+        val expected = EXACT_ADMITTED_RECORD.replace(
+            "\"session_id\":\"00000000-0000-4000-8000-000000000001\",",
+            "\"session_id\":\"00000000-0000-4000-8000-000000000001\",\"harness_git_sha\":\"0123456789abcdef0123456789abcdef01234567\",",
+        )
+        assertEquals(expected, rendered)
         assertTrue(rendered.contains("\"sanitized\":true"))
         assertTrue(rendered.contains("\"delivered_callback_classification_gap\":0"))
         assertTrue(rendered.contains("\"upstream_unclassified_cadence_gap_estimate\":0"))
@@ -129,9 +146,18 @@ class LiveCaptureEvidenceTest {
         )
     }
 
+    @Test
+    fun everyNonNullRunFailureBlocksLiveAdmission() {
+        val evidence = admittedEvidence().copy(runFailureCode = "live_source_failed")
+
+        assertTrue("live_source_failed" in liveCaptureBlockingReasons(evidence))
+        assertFalse(liveCaptureIsAdmitted(evidence))
+    }
+
     private fun admittedEvidence() = LiveCaptureEvidence(
         emittedBy = "com.calisthenics.diagnostic.composition.LiveCaptureDeviceGateTest",
         sessionId = "00000000-0000-4000-8000-000000000001",
+        harnessGitSha = "0123456789abcdef0123456789abcdef01234567",
         environment = LiveCaptureEnvironment(
             deviceClass = "physical_device",
             deviceIdentity = "samsung/SM-S938B/pa3q/pa3qxins",

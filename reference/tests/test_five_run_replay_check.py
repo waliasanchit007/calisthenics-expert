@@ -77,6 +77,7 @@ def _record(
     runs=None,
 ) -> dict:
     return {
+        "harness_git_sha": "0123456789abcdef0123456789abcdef01234567",
         "runs_completed": 5,
         "runs": runs if runs is not None else [_run(i) for i in range(1, 6)],
         "environment": {
