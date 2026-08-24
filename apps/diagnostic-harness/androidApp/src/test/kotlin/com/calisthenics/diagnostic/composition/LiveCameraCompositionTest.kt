@@ -18,6 +18,7 @@ import com.calisthenics.diagnostic.session.SessionRunnerSnapshot
 import com.calisthenics.diagnostic.ui.LiveRunPhase
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.double
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -38,10 +39,58 @@ import kotlin.system.measureTimeMillis
 
 class LiveCameraCompositionTest {
     @Test
+    fun liveManifestDoesNotEmitACallerSelectedParticipantIdentity() {
+        withHarness(Harness()) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+
+            assertEquals(
+                "synthetic-m05-${harness.manifest.sessionId.value}",
+                harness.manifest.participantPseudonymId,
+            )
+        }
+    }
+
+    @Test
+    fun finalizedManifestAndM05AdmissionShareTheDerivedIdentityAndDetectionEvidence() {
+        withHarness(Harness(invokeManifestAtFinalization = true)) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            harness.source.emit(frame(timestampNs = 1_000_002_000L))
+            harness.inference.completeSuccess()
+            harness.composition.stop()
+
+            val admission = assertNotNull(harness.composition.m05Admission())
+            val finalized = assertNotNull(harness.finalizedManifest)
+            val marker = assertIs<JsonObject>(finalized.studyContext.getValue("m05_admission"))
+            assertEquals(admission.sessionKind, finalized.sessionKind)
+            assertEquals(admission.participantPseudonymId, finalized.participantPseudonymId)
+            assertEquals(admission.participantPseudonymId, marker["participant_pseudonym_id"]?.jsonPrimitive?.content)
+            assertEquals(admission.inputClass.wireValue, marker["input_class"]?.jsonPrimitive?.content)
+            assertEquals(admission.detectionActiveFrameFraction, marker["detection_active_frame_fraction"]?.jsonPrimitive?.double)
+            assertEquals(admission.detectionEvidenceState.wireValue, marker["detection_evidence_state"]?.jsonPrimitive?.content)
+            assertEquals(admission.operatorAttestedNoPerson, marker["operator_attested_no_person"]?.jsonPrimitive?.boolean)
+        }
+    }
+
+    @Test
+    fun falseOperatorAttestationBlocksBeforeAnyCameraResourceIsCreated() {
+        val harness = Harness()
+
+        val result = harness.composition.start(
+            configuredInferenceFps = 10,
+            operatorAttestedNoPerson = false,
+        )
+
+        val unavailable = assertIs<LiveCameraStartResult.Unavailable>(result)
+        assertIs<LiveUnavailableReason.OperatorAttestationRequired>(unavailable.reason)
+        assertEquals(0, harness.inferenceCreations)
+        assertEquals(0, harness.sourceCreations)
+    }
+
+    @Test
     fun unsupportedFpsReleasesOwnedSchedulerBeforeAnySessionResourceIsCreated() {
         val harness = Harness()
 
-        val result = harness.composition.start(5)
+        val result = harness.composition.start(5, operatorAttestedNoPerson = true)
 
         assertIs<LiveCameraStartResult.Unavailable>(result)
         assertEquals(1, harness.scheduler.shutdownCount)
@@ -54,7 +103,7 @@ class LiveCameraCompositionTest {
         val existingDispatchers = liveSessionDispatcherThreads()
         val harness = Harness(finalizerFailure = IllegalStateException("finalizer construction failed"))
 
-        val result = harness.composition.start(10)
+        val result = harness.composition.start(10, operatorAttestedNoPerson = true)
 
         assertIs<LiveCameraStartResult.Unavailable>(result)
         assertEquals(1, harness.inference.disposeCount)
@@ -71,7 +120,7 @@ class LiveCameraCompositionTest {
         val harness = Harness(registrationResult = SessionRunnerRegistrationResult.REJECTED)
 
         try {
-            val result = harness.composition.start(10)
+            val result = harness.composition.start(10, operatorAttestedNoPerson = true)
 
             assertIs<LiveCameraStartResult.Unavailable>(result)
             assertEquals(1, harness.inference.disposeCount)
@@ -88,7 +137,7 @@ class LiveCameraCompositionTest {
         val existingDispatchers = liveSessionDispatcherThreads()
         val harness = Harness(sourceFactoryFailure = IllegalStateException("source construction failed"))
 
-        val result = harness.composition.start(10)
+        val result = harness.composition.start(10, operatorAttestedNoPerson = true)
 
         assertIs<LiveCameraStartResult.Unavailable>(result)
         assertEquals(1, harness.inference.disposeCount)
@@ -102,7 +151,7 @@ class LiveCameraCompositionTest {
         val existingDispatchers = liveSessionDispatcherThreads()
         val harness = Harness(sourceStartFailure = IllegalStateException("source start failed"))
 
-        val result = runCatching { harness.composition.start(10) }
+        val result = runCatching { harness.composition.start(10, operatorAttestedNoPerson = true) }
             .getOrElse { fail("source-start failure must become typed unavailability", it) }
 
         assertIs<LiveCameraStartResult.Unavailable>(result)
@@ -158,7 +207,7 @@ class LiveCameraCompositionTest {
     fun deniedCameraPermissionFailsClosedBeforeSourceOrSessionCreation() {
         val harness = Harness(permissionGranted = false)
 
-        val result = assertIs<LiveCameraStartResult.Unavailable>(harness.composition.start(10))
+        val result = assertIs<LiveCameraStartResult.Unavailable>(harness.composition.start(10, operatorAttestedNoPerson = true))
 
         assertEquals("camera_permission_denied", result.reason.code)
         assertEquals(1, harness.scheduler.shutdownCount)
@@ -170,7 +219,7 @@ class LiveCameraCompositionTest {
     fun exactCameraCapabilityIsValidatedBeforeSourceOrSessionCreation() {
         val harness = Harness(capability = admittedCapability.copy(sourceColorStandard = "BT709"))
 
-        val result = harness.composition.start(10)
+        val result = harness.composition.start(10, operatorAttestedNoPerson = true)
 
         val unavailable = assertIs<LiveCameraStartResult.Unavailable>(result)
         assertEquals("camera_capability_not_admitted", unavailable.reason.code)
@@ -184,7 +233,7 @@ class LiveCameraCompositionTest {
     fun unavailableThermalApiFailsClosedBeforeSourceOrSessionCreation() {
         val harness = Harness(thermalAvailable = false)
 
-        val result = assertIs<LiveCameraStartResult.Unavailable>(harness.composition.start(10))
+        val result = assertIs<LiveCameraStartResult.Unavailable>(harness.composition.start(10, operatorAttestedNoPerson = true))
 
         assertEquals("thermal_api_unavailable", result.reason.code)
         assertEquals(1, harness.scheduler.shutdownCount)
@@ -739,7 +788,7 @@ class LiveCameraCompositionTest {
             },
         )
         val startResult = AtomicReference<LiveCameraStartResult?>(null)
-        val startThread = Thread { startResult.set(harness.composition.start(10)) }
+        val startThread = Thread { startResult.set(harness.composition.start(10, operatorAttestedNoPerson = true)) }
         try {
             startThread.start()
             assertTrue(sourceStartGateEntered.await(1, TimeUnit.SECONDS), "source-start gate was not reached")
@@ -767,7 +816,7 @@ class LiveCameraCompositionTest {
     fun abandonDuringExternalSourceStartStopsAfterStartCompletes() {
         val harness = Harness(blockSourceStart = true)
         val startResult = AtomicReference<LiveCameraStartResult?>(null)
-        val startThread = Thread { startResult.set(harness.composition.start(10)) }
+        val startThread = Thread { startResult.set(harness.composition.start(10, operatorAttestedNoPerson = true)) }
         try {
             startThread.start()
             assertTrue(harness.source.startEntered.await(1, TimeUnit.SECONDS), "source.start was not entered")
@@ -1007,7 +1056,11 @@ class LiveCameraCompositionTest {
         fun start(
             fps: Int,
             onProgress: (SessionRunnerSnapshot) -> Unit = {},
-        ): LiveCameraStartResult = composition.start(fps, onProgress).also { result ->
+        ): LiveCameraStartResult = composition.start(
+            fps,
+            operatorAttestedNoPerson = true,
+            onProgress = onProgress,
+        ).also { result ->
             if (result is LiveCameraStartResult.Started) started = true
         }
 

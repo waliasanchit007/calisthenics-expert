@@ -4,6 +4,45 @@ This changelog records releases of the observation schemas and their supporting
 tooling contracts. Application, harness, model, and analysis-package versions
 are independent of these contracts.
 
+## [1.2.0] - 2026-08-24
+
+Tooling-contract release for the synthetic-only M0.5A study-readiness operating gate. This
+release adds [`study_readiness_manifest.v1.schema.json`](tooling/study_readiness_manifest.v1.schema.json)
+and [`study_condition_matrix.v1.schema.json`](tooling/study_condition_matrix.v1.schema.json), plus
+the following eleven stable validator errors:
+
+- `STUDY.ARTIFACT_REFERENCE`
+- `STUDY.PRIVACY_DECISION`
+- `STUDY.CONDITION_MATRIX_DRIFT`
+- `STUDY.PILOT_LOCK`
+- `STUDY.CONDITION_OUTCOME`
+- `STUDY.COHORT_SCOPE_MISMATCH`
+- `STUDY.ADMISSION_SESSION_KIND`
+- `STUDY.ADMISSION_INPUT_CLASS`
+- `STUDY.EMPTY_SCENE_DETECTION`
+- `STUDY.SYNTHETIC_DETECTION_PENDING`
+- `STUDY.LOCATION_REGISTRY`
+
+### Operating gate
+
+The canonical commands are:
+
+```text
+.venv/bin/python -m observation_contracts verify-study-readiness docs/protocols/study-readiness.m05.v1.json
+.venv/bin/python -m observation_contracts verify-participant-capture-gate docs/protocols/study-readiness.m05.v1.json
+```
+
+M0.5 admission is fail-closed and synthetic-only. The committed readiness manifest is valid for
+non-participant readiness; participant capture is blocked until all eight privacy
+decisions are `ACCEPTED` with digest-valid records, matrix resources are confirmed, the selected
+matrix digest is pilot-locked, and the digest-valid participant gate passes. M0.5B and M0.5C are
+separate slices; this release makes no participant, numeric reliability, rep/form, production,
+mid-range, or iOS-equivalence claim. See [`ADR-0005`](../docs/adr/ADR-0005-android-scoped-phase-0-evidence.md).
+
+Observation schemas remain at their released versions. In particular, an absent `session_kind`
+retains its schema-level default and compatibility semantics. This is a tooling-contract release,
+not an observation-schema rewrite. No tag is created by this plan.
+
 ## [1.1.0] - 2026-08-16
 
 Backward-compatible minor release of the observation contracts required by the

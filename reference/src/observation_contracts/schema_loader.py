@@ -71,6 +71,16 @@ def preprocessing_vector_schema_path() -> Path:
     return repository_root() / "contracts" / "tooling" / "preprocessing_vector.v1.schema.json"
 
 
+def study_readiness_schema_path() -> Path:
+    """Return the released study-readiness tooling schema path."""
+    return repository_root() / "contracts" / "tooling" / "study_readiness_manifest.v1.schema.json"
+
+
+def study_condition_matrix_schema_path() -> Path:
+    """Return the released study-condition-matrix tooling schema path."""
+    return repository_root() / "contracts" / "tooling" / "study_condition_matrix.v1.schema.json"
+
+
 @cache
 def load_schema(kind: ArtifactKind, major: int = SUPPORTED_MAJOR) -> Mapping[str, object]:
     """Return the parsed Draft 2020-12 schema for one artifact kind and major version."""
@@ -91,6 +101,26 @@ def load_preprocessing_vector_schema() -> Mapping[str, object]:
     return schema
 
 
+def _load_tooling_schema(path: Path) -> Mapping[str, object]:
+    """Return one parsed tooling schema, preserving the loader's object contract."""
+    schema = load_strict_json(path.read_text(encoding="utf-8"))
+    if not isinstance(schema, Mapping):
+        raise TypeError(f"schema is not a JSON object: {path}")
+    return schema
+
+
+@cache
+def load_study_readiness_schema() -> Mapping[str, object]:
+    """Return the parsed released study-readiness tooling schema."""
+    return _load_tooling_schema(study_readiness_schema_path())
+
+
+@cache
+def load_study_condition_matrix_schema() -> Mapping[str, object]:
+    """Return the parsed released study-condition-matrix tooling schema."""
+    return _load_tooling_schema(study_condition_matrix_schema_path())
+
+
 @cache
 def schema_validator(kind: ArtifactKind, major: int = SUPPORTED_MAJOR) -> Draft202012Validator:
     """Return a cached Draft 2020-12 validator for one artifact kind and major version."""
@@ -101,3 +131,15 @@ def schema_validator(kind: ArtifactKind, major: int = SUPPORTED_MAJOR) -> Draft2
 def preprocessing_vector_schema_validator() -> Draft202012Validator:
     """Return a cached validator for the released preprocessing-vector tooling schema."""
     return Draft202012Validator(load_preprocessing_vector_schema())
+
+
+@cache
+def study_readiness_schema_validator() -> Draft202012Validator:
+    """Return a cached validator for the released study-readiness tooling schema."""
+    return Draft202012Validator(load_study_readiness_schema())
+
+
+@cache
+def study_condition_matrix_schema_validator() -> Draft202012Validator:
+    """Return a cached validator for the released study-condition-matrix tooling schema."""
+    return Draft202012Validator(load_study_condition_matrix_schema())

@@ -19,6 +19,9 @@ _SUITE_MARKER = (
     "class=com.calisthenics.diagnostic.composition.LiveCaptureDeviceGateTest"
 )
 _EXPECTED_RECORD_KIND = "live_capture_device_gate_observation"
+M05_ADMISSION_PATHS = ("live_transcript", "recorded_live_ledger")
+_LEGACY_SCHEMA_VERSION = "1.0.0"
+_M05_SCHEMA_VERSION = "1.1.0"
 _S25_MODEL_PREFIX = "SM-S938"
 _S25_MARKER = "S25 Ultra"
 _AUTHORIZED_MANUFACTURER = "samsung"
@@ -71,6 +74,7 @@ def extract_record(transcript: str) -> dict:
         raise LiveCaptureCheckError(
             "LiveCaptureEvidence record_kind is not the live-capture gate kind"
         )
+    _require_record_schema_marker_consistency(record)
     if (
         record.get("sanitized") is not True
         or record.get("contains_landmark_coordinates") is not False
@@ -87,6 +91,62 @@ def extract_record(transcript: str) -> dict:
             "LiveCaptureEvidence harness_git_sha must be a lowercase 40-hex commit SHA"
         )
     return record
+
+
+def _require_record_schema_marker_consistency(record: dict) -> None:
+    has_m05_admission = "m05_admission" in record
+    expected_schema_version = (
+        _M05_SCHEMA_VERSION if has_m05_admission else _LEGACY_SCHEMA_VERSION
+    )
+    if record.get("artifact_schema_version") != expected_schema_version:
+        raise LiveCaptureCheckError(
+            "LiveCaptureEvidence schema version does not match its explicit M0.5 admission marker"
+        )
+
+
+def _m05_admission_blocking_codes(record: dict) -> list[str]:
+    admission = record.get("m05_admission")
+    if admission is None:
+        return []
+    if not isinstance(admission, dict):
+        return ["STUDY.ADMISSION_INPUT_CLASS"]
+
+    codes: list[str] = []
+    if admission.get("session_kind") != "live_conformance":
+        codes.append("STUDY.ADMISSION_SESSION_KIND")
+    pseudonym = admission.get("participant_pseudonym_id")
+    input_class = admission.get("input_class")
+    session_id = record.get("session_id")
+    if (
+        not isinstance(pseudonym, str)
+        or not isinstance(session_id, str)
+        or pseudonym != f"synthetic-m05-{session_id}"
+        or input_class not in {"empty_scene", "displayed_synthetic_figure"}
+        or admission.get("operator_attested_no_person") is not True
+    ):
+        codes.append("STUDY.ADMISSION_INPUT_CLASS")
+
+    fraction = admission.get("detection_active_frame_fraction")
+    if input_class == "empty_scene":
+        if (
+            not isinstance(fraction, (int, float))
+            or isinstance(fraction, bool)
+            or not math.isfinite(fraction)
+            or fraction != 0
+            or admission.get("detection_evidence_state") != "not_applicable"
+        ):
+            codes.append("STUDY.EMPTY_SCENE_DETECTION")
+    elif input_class == "displayed_synthetic_figure":
+        if (
+            not isinstance(fraction, (int, float))
+            or isinstance(fraction, bool)
+            or not math.isfinite(fraction)
+            or fraction <= 0
+            or fraction > 1
+            or admission.get("detection_evidence_state") != "active"
+        ):
+            codes.append("STUDY.SYNTHETIC_DETECTION_PENDING")
+    return list(dict.fromkeys(codes))
 
 
 def _intrinsic_blocking_reasons(record: dict) -> list[str]:
@@ -264,6 +324,14 @@ def _manifest_blocking_reasons(record: dict, manifest: dict) -> list[str]:
         reasons.append("manifest_session_mismatch")
     if manifest.get("session_kind") != "live_conformance":
         reasons.append("manifest_session_kind_mismatch")
+    admission = record.get("m05_admission")
+    if isinstance(admission, dict):
+        if manifest.get("participant_pseudonym_id") != admission.get(
+            "participant_pseudonym_id"
+        ):
+            reasons.append("manifest_participant_pseudonym_mismatch")
+        if manifest.get("study_context", {}).get("m05_admission") != admission:
+            reasons.append("manifest_m05_admission_mismatch")
     if manifest.get("pose_pipeline", {}).get("running_mode") != "live_stream":
         reasons.append("manifest_running_mode_mismatch")
 
@@ -373,6 +441,7 @@ def _blocking_reasons(
     no_export: bool = False,
 ) -> list[str]:
     reasons = _intrinsic_blocking_reasons(record)
+    reasons.extend(_m05_admission_blocking_codes(record))
     if manifest is not None:
         reasons.extend(_manifest_blocking_reasons(record, manifest))
     if not validation_succeeded:
@@ -386,6 +455,7 @@ def _blocking_reasons(
 
 def _recorded_blocking_reasons(record: dict) -> list[str]:
     reasons = _intrinsic_blocking_reasons(record)
+    reasons.extend(_m05_admission_blocking_codes(record))
     if record.get("reference_validation_succeeded") is not True:
         reasons.append("reference_validation_failed")
     if record.get("instrumentation_succeeded") is not True:
@@ -469,6 +539,7 @@ def verify_recorded_ledger(root: Path, ledger_relative: str) -> dict:
             "recorded evidence_sha256 does not match evidence file sha256"
         )
     record = json.loads(payload)
+    _require_record_schema_marker_consistency(record)
     harness_git_sha = record.get("harness_git_sha")
     if (
         not isinstance(harness_git_sha, str)

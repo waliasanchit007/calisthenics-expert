@@ -1,0 +1,486 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://calisthenics-movement-intelligence.local/contracts/tooling/study_readiness_manifest.v1.schema.json",
+  "title": "StudyReadinessManifest v1",
+  "description": "Closed governance metadata for synthetic-only M0.5A study readiness.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "study_readiness_schema_version",
+    "readiness_id",
+    "phase_scope",
+    "protocols",
+    "condition_matrix",
+    "condition_outcomes",
+    "privacy_decisions",
+    "platform_scope",
+    "artifact_locations",
+    "analysis_cohorts"
+  ],
+  "properties": {
+    "study_readiness_schema_version": {
+      "const": "1.0.0"
+    },
+    "readiness_id": {
+      "$ref": "#/$defs/lowercase_slug"
+    },
+    "phase_scope": {
+      "const": "m0_5_non_participant"
+    },
+    "protocols": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capture", "annotation", "privacy"],
+      "properties": {
+        "capture": {
+          "$ref": "#/$defs/artifact_ref"
+        },
+        "annotation": {
+          "$ref": "#/$defs/artifact_ref"
+        },
+        "privacy": {
+          "$ref": "#/$defs/artifact_ref"
+        }
+      }
+    },
+    "condition_matrix": {
+      "$ref": "#/$defs/condition_matrix_binding"
+    },
+    "condition_outcomes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/condition_outcome"
+      }
+    },
+    "privacy_decisions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "storage_administrator",
+        "storage_location",
+        "access_matrix",
+        "retention_period",
+        "withdrawal_and_deletion",
+        "backup_handling",
+        "incident_response",
+        "face_handling"
+      ],
+      "properties": {
+        "storage_administrator": {
+          "$ref": "#/$defs/privacy_decision"
+        },
+        "storage_location": {
+          "$ref": "#/$defs/privacy_decision"
+        },
+        "access_matrix": {
+          "$ref": "#/$defs/privacy_decision"
+        },
+        "retention_period": {
+          "$ref": "#/$defs/privacy_decision"
+        },
+        "withdrawal_and_deletion": {
+          "$ref": "#/$defs/privacy_decision"
+        },
+        "backup_handling": {
+          "$ref": "#/$defs/privacy_decision"
+        },
+        "incident_response": {
+          "$ref": "#/$defs/privacy_decision"
+        },
+        "face_handling": {
+          "$ref": "#/$defs/privacy_decision"
+        }
+      }
+    },
+    "platform_scope": {
+      "$ref": "#/$defs/platform_scope"
+    },
+    "artifact_locations": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/lowercase_registry_slug"
+      }
+    },
+    "analysis_cohorts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/analysis_cohort"
+      }
+    }
+  },
+  "$defs": {
+    "lowercase_slug": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "lowercase_registry_slug": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:[-_][a-z0-9]+)*$"
+    },
+    "semantic_version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    },
+    "artifact_path": {
+      "type": "string",
+      "minLength": 1,
+      "allOf": [
+        {
+          "pattern": "^(?![/\\\\])(?![A-Za-z]:)[^\\u0000]+$"
+        },
+        {
+          "pattern": "^(?!.*(?:^|[/\\\\])\\.\\.(?:[/\\\\]|$))"
+        }
+      ]
+    },
+    "artifact_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/artifact_path"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "privacy_decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "decision_record"],
+      "properties": {
+        "state": {
+          "enum": ["UNDECIDED", "ACCEPTED", "REJECTED"]
+        },
+        "decision_record": {
+          "anyOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/artifact_ref"}
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {"const": "UNDECIDED"}
+            }
+          },
+          "then": {
+            "properties": {
+              "decision_record": {"type": "null"}
+            }
+          },
+          "else": {
+            "properties": {
+              "decision_record": {"$ref": "#/$defs/artifact_ref"}
+            }
+          }
+        }
+      ]
+    },
+    "condition_matrix_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["current", "pilot_lock", "prior", "matrix_revision_reason"],
+      "properties": {
+        "current": {
+          "$ref": "#/$defs/artifact_ref"
+        },
+        "pilot_lock": {
+          "$ref": "#/$defs/pilot_lock"
+        },
+        "prior": {
+          "anyOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/artifact_ref"}
+          ]
+        },
+        "matrix_revision_reason": {
+          "anyOf": [
+            {"type": "null"},
+            {"type": "string", "minLength": 1}
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "prior": {"type": "null"}
+            }
+          },
+          "then": {
+            "properties": {
+              "matrix_revision_reason": {"type": "null"}
+            }
+          },
+          "else": {
+            "properties": {
+              "matrix_revision_reason": {"type": "string", "minLength": 1}
+            }
+          }
+        }
+      ]
+    },
+    "pilot_lock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "locked_matrix", "resource_availability_confirmation"],
+      "properties": {
+        "state": {
+          "enum": ["UNLOCKED", "LOCKED"]
+        },
+        "locked_matrix": {
+          "anyOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/artifact_ref"}
+          ]
+        },
+        "resource_availability_confirmation": {
+          "anyOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/artifact_ref"}
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {"const": "UNLOCKED"}
+            }
+          },
+          "then": {
+            "properties": {
+              "locked_matrix": {"type": "null"},
+              "resource_availability_confirmation": {"type": "null"}
+            }
+          },
+          "else": {
+            "properties": {
+              "locked_matrix": {"$ref": "#/$defs/artifact_ref"},
+              "resource_availability_confirmation": {"$ref": "#/$defs/artifact_ref"}
+            }
+          }
+        }
+      ]
+    },
+    "condition_outcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["condition_id", "status", "inadmissibility_reason"],
+      "properties": {
+        "condition_id": {
+          "$ref": "#/$defs/lowercase_slug"
+        },
+        "status": {
+          "enum": ["planned", "admissible", "inadmissible"]
+        },
+        "inadmissibility_reason": {
+          "anyOf": [
+            {"type": "null"},
+            {"enum": ["instrument_failure", "not_executed_resource"]}
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {"const": "inadmissible"}
+            }
+          },
+          "then": {
+            "properties": {
+              "inadmissibility_reason": {
+                "enum": ["instrument_failure", "not_executed_resource"]
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "inadmissibility_reason": {"type": "null"}
+            }
+          }
+        }
+      ]
+    },
+    "platform_scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "platform",
+        "device_model",
+        "os_build",
+        "camera_capability_ref",
+        "model_sha256",
+        "runtime_version",
+        "delegate",
+        "requested_cadence",
+        "preprocessing_contract_version",
+        "observation_contract_version",
+        "input_class",
+        "submitted_frame_count",
+        "detection_active_frame_fraction",
+        "rendered_scope_statement"
+      ],
+      "properties": {
+        "platform": {
+          "const": "android"
+        },
+        "device_model": {
+          "const": "SM-S938B"
+        },
+        "os_build": {
+          "type": "string",
+          "minLength": 1
+        },
+        "camera_capability_ref": {
+          "$ref": "#/$defs/artifact_ref"
+        },
+        "model_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "runtime_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "delegate": {
+          "type": "string",
+          "minLength": 1
+        },
+        "requested_cadence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "preprocessing_contract_version": {
+          "$ref": "#/$defs/semantic_version"
+        },
+        "observation_contract_version": {
+          "$ref": "#/$defs/semantic_version"
+        },
+        "input_class": {
+          "enum": [
+            "synthetic_fixture",
+            "displayed_synthetic_figure",
+            "empty_scene"
+          ]
+        },
+        "submitted_frame_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "detection_active_frame_fraction": {
+          "anyOf": [
+            {"const": "UNMEASURED"},
+            {"type": "number", "minimum": 0, "maximum": 1}
+          ]
+        },
+        "rendered_scope_statement": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "submitted_frame_count": {"const": 0}
+            }
+          },
+          "then": {
+            "properties": {
+              "detection_active_frame_fraction": {"const": "UNMEASURED"}
+            }
+          },
+          "else": {
+            "properties": {
+              "detection_active_frame_fraction": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "cohort_scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "platform",
+        "device_model",
+        "model_sha256",
+        "delegate",
+        "preprocessing_contract_version",
+        "observation_contract_version"
+      ],
+      "properties": {
+        "platform": {
+          "type": "string",
+          "minLength": 1
+        },
+        "device_model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "delegate": {
+          "type": "string",
+          "minLength": 1
+        },
+        "preprocessing_contract_version": {
+          "$ref": "#/$defs/semantic_version"
+        },
+        "observation_contract_version": {
+          "$ref": "#/$defs/semantic_version"
+        }
+      }
+    },
+    "analysis_cohort": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cohort_id", "scope", "inputs"],
+      "properties": {
+        "cohort_id": {
+          "$ref": "#/$defs/lowercase_slug"
+        },
+        "scope": {
+          "$ref": "#/$defs/cohort_scope"
+        },
+        "inputs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/cohort_input"
+          }
+        }
+      }
+    },
+    "cohort_input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact", "scope"],
+      "properties": {
+        "artifact": {
+          "$ref": "#/$defs/artifact_ref"
+        },
+        "scope": {
+          "$ref": "#/$defs/cohort_scope"
+        }
+      }
+    }
+  }
+}

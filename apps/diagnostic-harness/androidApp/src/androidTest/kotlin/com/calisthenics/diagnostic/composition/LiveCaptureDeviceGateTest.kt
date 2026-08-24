@@ -70,7 +70,7 @@ class LiveCaptureDeviceGateTest {
                 cameraCapability = observation,
                 permissionGranted = true,
             )
-            when (val started = composition!!.start(10)) {
+            when (val started = composition!!.start(10, operatorAttestedNoPerson = true)) {
                 is LiveCameraStartResult.Unavailable -> {
                     runFailureCode = started.reason.code
                     runFailureDetail = when (val reason = started.reason) {
@@ -79,6 +79,7 @@ class LiveCaptureDeviceGateTest {
                         is LiveUnavailableReason.CameraCapability ->
                             reason.blockingReasons.joinToString(",")
                         LiveUnavailableReason.CameraPermissionDenied -> null
+                        LiveUnavailableReason.OperatorAttestationRequired -> null
                         is LiveUnavailableReason.ThermalApi -> sanitizeLiveCaptureFailureDetail(reason.detail)
                     }
                 }
@@ -190,6 +191,7 @@ class LiveCaptureDeviceGateTest {
                         sourceErrorCode = it.sourceErrorCode,
                     )
                 } ?: emptyList(),
+                m05Admission = composition?.m05Admission(),
             )
             instrumentation.sendStatus(
                 STATUS_CODE,

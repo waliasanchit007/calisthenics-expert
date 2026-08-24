@@ -1,0 +1,129 @@
+{
+  "study_readiness_schema_version": "1.0.0",
+  "readiness_id": "m05-synthetic-study-readiness-v1",
+  "phase_scope": "m0_5_non_participant",
+  "protocols": {
+    "capture": {
+      "path": "docs/protocols/capture-protocol.v1.md",
+      "sha256": "77d0d0d5466521b82dfb4b69a541432634ea0172f7fa3d9e075a0eb2c3183147"
+    },
+    "annotation": {
+      "path": "docs/protocols/annotation-protocol.v1.md",
+      "sha256": "7841414758b24005ba3a54930d402ccc61c07d465319630c2120d86148e32dc7"
+    },
+    "privacy": {
+      "path": "docs/protocols/privacy-retention-withdrawal.v1.md",
+      "sha256": "c54fea6a356371a8dfd3112c47fcd6581a749ce3a10b12e0cc0f5b08a8152c7d"
+    }
+  },
+  "condition_matrix": {
+    "current": {
+      "path": "docs/protocols/condition-matrix.m05.v1.json",
+      "sha256": "0c3335da9f7002b48528f7d55702cc9d9a92a568eea07391ce131952c219717e"
+    },
+    "pilot_lock": {
+      "state": "UNLOCKED",
+      "locked_matrix": null,
+      "resource_availability_confirmation": null
+    },
+    "prior": null,
+    "matrix_revision_reason": null
+  },
+  "condition_outcomes": [
+    {"condition_id": "angle-frontal", "status": "planned", "inadmissibility_reason": null},
+    {"condition_id": "angle-thirty-degrees", "status": "planned", "inadmissibility_reason": null},
+    {"condition_id": "angle-forty-five-degrees-anchor", "status": "planned", "inadmissibility_reason": null},
+    {"condition_id": "angle-sixty-degrees", "status": "planned", "inadmissibility_reason": null},
+    {"condition_id": "angle-side-biased", "status": "planned", "inadmissibility_reason": null},
+    {"condition_id": "distance-two-metres", "status": "planned", "inadmissibility_reason": null},
+    {"condition_id": "distance-four-metres", "status": "planned", "inadmissibility_reason": null},
+    {"condition_id": "height-floor-low", "status": "planned", "inadmissibility_reason": null},
+    {"condition_id": "height-waist", "status": "planned", "inadmissibility_reason": null},
+    {"condition_id": "anchor-replication-day-one", "status": "planned", "inadmissibility_reason": null},
+    {"condition_id": "anchor-replication-day-two", "status": "planned", "inadmissibility_reason": null},
+    {"condition_id": "anchor-replication-day-three", "status": "planned", "inadmissibility_reason": null},
+    {"condition_id": "clothing-tight", "status": "planned", "inadmissibility_reason": null},
+    {"condition_id": "clothing-baggy", "status": "planned", "inadmissibility_reason": null},
+    {"condition_id": "environment-outdoor-bright", "status": "planned", "inadmissibility_reason": null},
+    {"condition_id": "environment-outdoor-dusk-low", "status": "planned", "inadmissibility_reason": null},
+    {"condition_id": "environment-indoor-low-light", "status": "planned", "inadmissibility_reason": null},
+    {"condition_id": "athlete-b-anchor", "status": "planned", "inadmissibility_reason": null},
+    {"condition_id": "athlete-b-thirty-degrees", "status": "planned", "inadmissibility_reason": null},
+    {"condition_id": "athlete-b-baggy", "status": "planned", "inadmissibility_reason": null},
+    {"condition_id": "athlete-c-anchor", "status": "planned", "inadmissibility_reason": null},
+    {"condition_id": "athlete-c-sixty-degrees", "status": "planned", "inadmissibility_reason": null},
+    {"condition_id": "failure-body-partly-out-of-frame", "status": "planned", "inadmissibility_reason": null},
+    {"condition_id": "failure-strong-backlight", "status": "planned", "inadmissibility_reason": null},
+    {"condition_id": "low-fps-configured-fifteen", "status": "planned", "inadmissibility_reason": null},
+    {"condition_id": "low-fps-configured-ten", "status": "planned", "inadmissibility_reason": null},
+    {"condition_id": "reserve-re-shoot-one", "status": "planned", "inadmissibility_reason": null},
+    {"condition_id": "reserve-re-shoot-two", "status": "planned", "inadmissibility_reason": null}
+  ],
+  "privacy_decisions": {
+    "storage_administrator": {"state": "UNDECIDED", "decision_record": null},
+    "storage_location": {"state": "UNDECIDED", "decision_record": null},
+    "access_matrix": {"state": "UNDECIDED", "decision_record": null},
+    "retention_period": {"state": "UNDECIDED", "decision_record": null},
+    "withdrawal_and_deletion": {"state": "UNDECIDED", "decision_record": null},
+    "backup_handling": {"state": "UNDECIDED", "decision_record": null},
+    "incident_response": {"state": "UNDECIDED", "decision_record": null},
+    "face_handling": {"state": "UNDECIDED", "decision_record": null}
+  },
+  "platform_scope": {
+    "platform": "android",
+    "device_model": "SM-S938B",
+    "os_build": "BP4A.251205.006.S938BXXSBCZG3",
+    "camera_capability_ref": {
+      "path": "docs/evidence/device-probes/s25-ultra-SM-S938B-api36-camera-capability.json",
+      "sha256": "475bc9592b702f75c7890fb62a520e1ebe2e32e961d8de6cd15c9436ed51fde7"
+    },
+    "model_sha256": "5134a3aad27a58b93da0088d431f366da362b44e3ccfbe3462b3827a839011b1",
+    "runtime_version": "1.0.0",
+    "delegate": "cpu",
+    "requested_cadence": 30,
+    "preprocessing_contract_version": "1.0.0",
+    "observation_contract_version": "1.0.0",
+    "input_class": "empty_scene",
+    "submitted_frame_count": 7,
+    "detection_active_frame_fraction": 0,
+    "rendered_scope_statement": "scope: flagship Android only, non-participant empty_scene; excludes iOS equivalence, mid-range behavior, participant evidence, signal-quality thresholds, and production readiness"
+  },
+  "artifact_locations": [
+    "device_export",
+    "device_staging",
+    "device_transfer_staging",
+    "study_store_source",
+    "study_store_derived",
+    "study_store_report",
+    "tombstone"
+  ],
+  "analysis_cohorts": [
+    {
+      "cohort_id": "flagship-android-synthetic",
+      "scope": {
+        "platform": "android",
+        "device_model": "SM-S938B",
+        "model_sha256": "5134a3aad27a58b93da0088d431f366da362b44e3ccfbe3462b3827a839011b1",
+        "delegate": "cpu",
+        "preprocessing_contract_version": "1.0.0",
+        "observation_contract_version": "1.0.0"
+      },
+      "inputs": [
+        {
+          "artifact": {
+            "path": "docs/evidence/replay-five-run/s25-ultra-SM-S938B-api36-five-run-replay.json",
+            "sha256": "d39480dfb963cacd47c6ea4e28b1a04a4f273d0f210c0645abccc5cfab91d9f0"
+          },
+          "scope": {
+            "platform": "android",
+            "device_model": "SM-S938B",
+            "model_sha256": "5134a3aad27a58b93da0088d431f366da362b44e3ccfbe3462b3827a839011b1",
+            "delegate": "cpu",
+            "preprocessing_contract_version": "1.0.0",
+            "observation_contract_version": "1.0.0"
+          }
+        }
+      ]
+    }
+  ]
+}

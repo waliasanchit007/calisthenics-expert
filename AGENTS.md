@@ -10,11 +10,26 @@ Do not silently turn hypotheses into decisions. Record open questions, assumptio
 
 ## Current operating gate
 
-The M0 observation-contract foundation closed at `60097f6ff0dbbb1b9623739e1216e17a70f915a9`.
+The diagnostic-harness integration boundary closed at live `origin/main` commit
+`ca623d32837dec99d8229083c9159bfd140b1843`. The M0 observation-contract foundation closed at
+`60097f6ff0dbbb1b9623739e1216e17a70f915a9`.
 
-The active implementation scope is the Phase 0 diagnostic harness in `docs/superpowers/specs/2026-08-16-phase-0-diagnostic-harness-design.md` and its approved implementation plan. Within that milestone, the additive 1.1.0 contract release, Kotlin Multiplatform shared logic, Compose Multiplatform UI, Android CameraX/MediaPipe integration, Android replay/live evidence, and compile-valid iOS shell are allowed.
+The active operating gate is the approved M0.5 study-readiness design in
+`docs/superpowers/specs/2026-08-24-m0-5-study-readiness-design.md`, governed by
+`docs/adr/ADR-0005-android-scoped-phase-0-evidence.md`. M0.5A permits tooling contracts,
+synthetic governance fixtures, protocols, and fail-closed admission checks. M0.5B and M0.5C
+remain separate approved slices and must not be pulled into this change.
 
-Canonicalization, reliability thresholds, movement interpretation, rep counting, form scoring, custom ML, study execution, real participant data, functional iOS capture, and production application features remain out of scope.
+The M0.5A gate is synthetic-only. Participant capture remains blocked until the release owner
+accepts all eight privacy decisions with digest-valid records, confirms athlete, venue, device,
+and other matrix resources, locks the selected matrix digest, and a digest-valid participant gate
+passes. This repository must not contain participant video, biometric-derived observations,
+consent records, identity mappings, credentials, or real participant fixtures.
+
+M0.5A does not authorize M0.5B/C work, participant data, a numeric reliability threshold, a
+rep/form engine, a production claim, a mid-range claim, or an iOS-equivalence claim. Functional
+iOS capture, mid-range admission, participant study execution, and production application
+features remain separately governed.
 
 ## Collaboration
 
@@ -36,3 +51,9 @@ Canonicalization, reliability thresholds, movement interpretation, rep counting,
 - Do not invent benchmark acceptance thresholds before baseline data exists.
 - iOS unavailable adapters must fail closed and must never emit placeholder observations.
 - A partially written or validator-invalid session must never appear under the valid exports root.
+
+## Release authority
+
+- The coordinating controller owns decomposition, acceptance, integration, and escalation.
+- The release owner alone authorizes participant capture, merges, tags, and release transitions.
+- This operating gate creates no tag and does not grant participant-capture authority.

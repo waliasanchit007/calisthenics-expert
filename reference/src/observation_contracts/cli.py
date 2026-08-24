@@ -20,6 +20,7 @@ from observation_contracts.semantic import (
     validate_session_manifest_semantics,
 )
 from observation_contracts.structural import validate_document, validate_ndjson
+from observation_contracts.study_readiness import verify_study_readiness
 
 _VALIDATION_FAILURE = 2
 _INTERNAL_FAILURE = 3
@@ -100,6 +101,21 @@ def _build_parser() -> _ArgumentParser:
     guard.add_argument("--staged", action="store_true", help="inspect the staged index")
     guard.add_argument("repository", type=Path, nargs="?", default=Path("."))
     guard.set_defaults(handler=_guard_repository)
+
+    verify_readiness = commands.add_parser(
+        "verify-study-readiness", help="verify canonical study-readiness semantics"
+    )
+    _add_format_option(verify_readiness)
+    verify_readiness.add_argument("manifest", type=Path)
+    verify_readiness.set_defaults(handler=_verify_study_readiness)
+
+    participant_gate = commands.add_parser(
+        "verify-participant-capture-gate",
+        help="verify canonical readiness and the participant-capture privacy gate",
+    )
+    _add_format_option(participant_gate)
+    participant_gate.add_argument("manifest", type=Path)
+    participant_gate.set_defaults(handler=_verify_participant_capture_gate)
     return parser
 
 
@@ -162,6 +178,14 @@ def _verify_preprocessing_vector(arguments: argparse.Namespace) -> list[Validati
 def _guard_repository(arguments: argparse.Namespace) -> list[ValidationIssue]:
     mode: GuardMode = "staged" if arguments.staged else "tracked"
     return guard_repository(arguments.repository, mode=mode)
+
+
+def _verify_study_readiness(arguments: argparse.Namespace) -> list[ValidationIssue]:
+    return verify_study_readiness(arguments.manifest)
+
+
+def _verify_participant_capture_gate(arguments: argparse.Namespace) -> list[ValidationIssue]:
+    return verify_study_readiness(arguments.manifest, require_participant_ready=True)
 
 
 def _load_json(path: Path, kind: ArtifactKind) -> tuple[object | None, list[ValidationIssue]]:

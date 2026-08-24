@@ -1,0 +1,230 @@
+{
+  "condition_matrix_schema_version": "1.0.0",
+  "matrix_id": "m05-flagship-android-candidate-v1",
+  "conditions": [
+    {
+      "condition_id": "angle-frontal",
+      "classification": "required",
+      "set_count": 1,
+      "required_artifact_cells": ["session_manifest", "raw_pose_stream", "device_metadata"],
+      "required_metric_cells": ["detection_rate_curve", "dropout_runs", "landmark_jitter"],
+      "source": "docs/phase-0-plan.md#7-exploratory-study-allocation--28-sets"
+    },
+    {
+      "condition_id": "angle-thirty-degrees",
+      "classification": "required",
+      "set_count": 1,
+      "required_artifact_cells": ["session_manifest", "raw_pose_stream", "device_metadata"],
+      "required_metric_cells": ["detection_rate_curve", "dropout_runs", "landmark_jitter"],
+      "source": "docs/phase-0-plan.md#7-exploratory-study-allocation--28-sets"
+    },
+    {
+      "condition_id": "angle-forty-five-degrees-anchor",
+      "classification": "required",
+      "set_count": 1,
+      "required_artifact_cells": ["session_manifest", "raw_pose_stream", "synthetic_input_attestation"],
+      "required_metric_cells": ["detection_rate_curve", "dropout_runs", "landmark_jitter"],
+      "source": "docs/phase-0-plan.md#7-exploratory-study-allocation--28-sets"
+    },
+    {
+      "condition_id": "angle-sixty-degrees",
+      "classification": "required",
+      "set_count": 1,
+      "required_artifact_cells": ["session_manifest", "raw_pose_stream", "device_metadata"],
+      "required_metric_cells": ["detection_rate_curve", "dropout_runs", "landmark_jitter"],
+      "source": "docs/phase-0-plan.md#7-exploratory-study-allocation--28-sets"
+    },
+    {
+      "condition_id": "angle-side-biased",
+      "classification": "required",
+      "set_count": 1,
+      "required_artifact_cells": ["session_manifest", "raw_pose_stream", "device_metadata"],
+      "required_metric_cells": ["detection_rate_curve", "dropout_runs", "landmark_jitter"],
+      "source": "docs/phase-0-plan.md#7-exploratory-study-allocation--28-sets"
+    },
+    {
+      "condition_id": "distance-two-metres",
+      "classification": "required",
+      "set_count": 1,
+      "required_artifact_cells": ["session_manifest", "raw_pose_stream", "camera_capability"],
+      "required_metric_cells": ["detection_rate_curve", "dropout_runs", "landmark_jitter"],
+      "source": "docs/phase-0-plan.md#7-exploratory-study-allocation--28-sets"
+    },
+    {
+      "condition_id": "distance-four-metres",
+      "classification": "required",
+      "set_count": 1,
+      "required_artifact_cells": ["session_manifest", "raw_pose_stream", "camera_capability"],
+      "required_metric_cells": ["detection_rate_curve", "dropout_runs", "landmark_jitter"],
+      "source": "docs/phase-0-plan.md#7-exploratory-study-allocation--28-sets"
+    },
+    {
+      "condition_id": "height-floor-low",
+      "classification": "required",
+      "set_count": 1,
+      "required_artifact_cells": ["session_manifest", "raw_pose_stream", "device_metadata"],
+      "required_metric_cells": ["detection_rate_curve", "dropout_runs", "landmark_jitter"],
+      "source": "docs/phase-0-plan.md#7-exploratory-study-allocation--28-sets"
+    },
+    {
+      "condition_id": "height-waist",
+      "classification": "required",
+      "set_count": 1,
+      "required_artifact_cells": ["session_manifest", "raw_pose_stream", "device_metadata"],
+      "required_metric_cells": ["detection_rate_curve", "dropout_runs", "landmark_jitter"],
+      "source": "docs/phase-0-plan.md#7-exploratory-study-allocation--28-sets"
+    },
+    {
+      "condition_id": "anchor-replication-day-one",
+      "classification": "required",
+      "set_count": 1,
+      "required_artifact_cells": ["session_manifest", "raw_pose_stream", "synchronization_evidence"],
+      "required_metric_cells": ["detection_rate_curve", "dropout_runs", "synchronization_offset_drift"],
+      "source": "docs/phase-0-plan.md#7-exploratory-study-allocation--28-sets"
+    },
+    {
+      "condition_id": "anchor-replication-day-two",
+      "classification": "required",
+      "set_count": 1,
+      "required_artifact_cells": ["session_manifest", "raw_pose_stream", "synchronization_evidence"],
+      "required_metric_cells": ["detection_rate_curve", "dropout_runs", "synchronization_offset_drift"],
+      "source": "docs/phase-0-plan.md#7-exploratory-study-allocation--28-sets"
+    },
+    {
+      "condition_id": "anchor-replication-day-three",
+      "classification": "required",
+      "set_count": 1,
+      "required_artifact_cells": ["session_manifest", "raw_pose_stream", "synchronization_evidence"],
+      "required_metric_cells": ["detection_rate_curve", "dropout_runs", "synchronization_offset_drift"],
+      "source": "docs/phase-0-plan.md#7-exploratory-study-allocation--28-sets"
+    },
+    {
+      "condition_id": "clothing-tight",
+      "classification": "required",
+      "set_count": 1,
+      "required_artifact_cells": ["session_manifest", "raw_pose_stream", "synthetic_input_attestation"],
+      "required_metric_cells": ["detection_rate_curve", "dropout_runs", "landmark_jitter"],
+      "source": "docs/phase-0-plan.md#7-exploratory-study-allocation--28-sets"
+    },
+    {
+      "condition_id": "clothing-baggy",
+      "classification": "required",
+      "set_count": 1,
+      "required_artifact_cells": ["session_manifest", "raw_pose_stream", "synthetic_input_attestation"],
+      "required_metric_cells": ["detection_rate_curve", "dropout_runs", "landmark_jitter"],
+      "source": "docs/phase-0-plan.md#7-exploratory-study-allocation--28-sets"
+    },
+    {
+      "condition_id": "environment-outdoor-bright",
+      "classification": "required",
+      "set_count": 1,
+      "required_artifact_cells": ["session_manifest", "raw_pose_stream", "camera_capability"],
+      "required_metric_cells": ["detection_rate_curve", "dropout_runs", "landmark_jitter"],
+      "source": "docs/phase-0-plan.md#7-exploratory-study-allocation--28-sets"
+    },
+    {
+      "condition_id": "environment-outdoor-dusk-low",
+      "classification": "required",
+      "set_count": 1,
+      "required_artifact_cells": ["session_manifest", "raw_pose_stream", "camera_capability"],
+      "required_metric_cells": ["detection_rate_curve", "dropout_runs", "landmark_jitter"],
+      "source": "docs/phase-0-plan.md#7-exploratory-study-allocation--28-sets"
+    },
+    {
+      "condition_id": "environment-indoor-low-light",
+      "classification": "required",
+      "set_count": 1,
+      "required_artifact_cells": ["session_manifest", "raw_pose_stream", "camera_capability"],
+      "required_metric_cells": ["detection_rate_curve", "dropout_runs", "landmark_jitter"],
+      "source": "docs/phase-0-plan.md#7-exploratory-study-allocation--28-sets"
+    },
+    {
+      "condition_id": "athlete-b-anchor",
+      "classification": "required",
+      "set_count": 1,
+      "required_artifact_cells": ["session_manifest", "raw_pose_stream", "synthetic_input_attestation"],
+      "required_metric_cells": ["detection_rate_curve", "dropout_runs", "landmark_jitter"],
+      "source": "docs/phase-0-plan.md#7-exploratory-study-allocation--28-sets"
+    },
+    {
+      "condition_id": "athlete-b-thirty-degrees",
+      "classification": "required",
+      "set_count": 1,
+      "required_artifact_cells": ["session_manifest", "raw_pose_stream", "synthetic_input_attestation"],
+      "required_metric_cells": ["detection_rate_curve", "dropout_runs", "landmark_jitter"],
+      "source": "docs/phase-0-plan.md#7-exploratory-study-allocation--28-sets"
+    },
+    {
+      "condition_id": "athlete-b-baggy",
+      "classification": "required",
+      "set_count": 1,
+      "required_artifact_cells": ["session_manifest", "raw_pose_stream", "synthetic_input_attestation"],
+      "required_metric_cells": ["detection_rate_curve", "dropout_runs", "landmark_jitter"],
+      "source": "docs/phase-0-plan.md#7-exploratory-study-allocation--28-sets"
+    },
+    {
+      "condition_id": "athlete-c-anchor",
+      "classification": "exploratory",
+      "set_count": 1,
+      "required_artifact_cells": ["session_manifest", "raw_pose_stream", "synthetic_input_attestation"],
+      "required_metric_cells": ["detection_rate_curve", "dropout_runs", "landmark_jitter"],
+      "source": "docs/phase-0-plan.md#7-exploratory-study-allocation--28-sets"
+    },
+    {
+      "condition_id": "athlete-c-sixty-degrees",
+      "classification": "exploratory",
+      "set_count": 1,
+      "required_artifact_cells": ["session_manifest", "raw_pose_stream", "synthetic_input_attestation"],
+      "required_metric_cells": ["detection_rate_curve", "dropout_runs", "landmark_jitter"],
+      "source": "docs/phase-0-plan.md#7-exploratory-study-allocation--28-sets"
+    },
+    {
+      "condition_id": "failure-body-partly-out-of-frame",
+      "classification": "required",
+      "set_count": 1,
+      "required_artifact_cells": ["session_manifest", "raw_pose_stream", "failure_log"],
+      "required_metric_cells": ["detection_rate_curve", "dropout_runs", "landmark_jitter"],
+      "source": "docs/phase-0-plan.md#7-exploratory-study-allocation--28-sets"
+    },
+    {
+      "condition_id": "failure-strong-backlight",
+      "classification": "required",
+      "set_count": 1,
+      "required_artifact_cells": ["session_manifest", "raw_pose_stream", "failure_log"],
+      "required_metric_cells": ["detection_rate_curve", "dropout_runs", "landmark_jitter"],
+      "source": "docs/phase-0-plan.md#7-exploratory-study-allocation--28-sets"
+    },
+    {
+      "condition_id": "low-fps-configured-fifteen",
+      "classification": "required",
+      "set_count": 1,
+      "required_artifact_cells": ["session_manifest", "raw_pose_stream", "cadence_trace"],
+      "required_metric_cells": ["cadence_latency_thermal_battery", "dropout_runs", "landmark_jitter"],
+      "source": "docs/phase-0-plan.md#7-exploratory-study-allocation--28-sets"
+    },
+    {
+      "condition_id": "low-fps-configured-ten",
+      "classification": "required",
+      "set_count": 1,
+      "required_artifact_cells": ["session_manifest", "raw_pose_stream", "cadence_trace"],
+      "required_metric_cells": ["cadence_latency_thermal_battery", "dropout_runs", "landmark_jitter"],
+      "source": "docs/phase-0-plan.md#7-exploratory-study-allocation--28-sets"
+    },
+    {
+      "condition_id": "reserve-re-shoot-one",
+      "classification": "exploratory",
+      "set_count": 1,
+      "required_artifact_cells": ["session_manifest", "raw_pose_stream", "failure_log"],
+      "required_metric_cells": ["detection_rate_curve", "dropout_runs", "landmark_jitter"],
+      "source": "docs/phase-0-plan.md#7-exploratory-study-allocation--28-sets"
+    },
+    {
+      "condition_id": "reserve-re-shoot-two",
+      "classification": "exploratory",
+      "set_count": 1,
+      "required_artifact_cells": ["session_manifest", "raw_pose_stream", "failure_log"],
+      "required_metric_cells": ["detection_rate_curve", "dropout_runs", "landmark_jitter"],
+      "source": "docs/phase-0-plan.md#7-exploratory-study-allocation--28-sets"
+    }
+  ]
+}

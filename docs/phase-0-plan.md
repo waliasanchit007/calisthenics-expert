@@ -390,6 +390,12 @@ Parts 1–4 stand except where amended here. Superseded text is marked.
 
 ## C1. Cross-platform conformance — replaces D5/E1 (B1, A6, A7, A8)
 
+> **Sequencing amendment:** ADR-0005 permits Android-scoped non-participant study readiness and a
+> separately authorised, flagship-only Android Phase 0 pilot before D5/E1. D5/E1 remains mandatory
+> before cross-platform claims, pooled Android/iOS datasets, platform comparisons, or Phase 2 entry.
+> Mid-range admission remains mandatory before cross-device claims. See
+> `docs/adr/ADR-0005-android-scoped-phase-0-evidence.md`.
+
 **Fixture.** Not a video file. A **pre-decoded raw frame sequence** (numbered raw RGB/NV12 dumps with per-frame SHA-256), fed directly into each harness's inference input, bypassing both platform video decoders. The frozen preprocessing contract specifies: pixel format, colour range (full vs video), channel order, rotation handling, resize algorithm and rounding, letterbox padding value and placement, and frame-index→timestamp mapping. This is a **contract artifact in `contracts/`**, not prose in a protocol doc, because two harnesses must implement it identically.
 
 **Procedure, in order:**
