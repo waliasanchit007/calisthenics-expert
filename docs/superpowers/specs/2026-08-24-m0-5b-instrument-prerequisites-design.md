@@ -250,12 +250,13 @@ Finalization executes exactly:
 10. create synchronization evidence from observed clocks and sample boundaries;
 11. validate all required artifact relations;
 12. write and fsync the synchronization-evidence file;
-13. re-read every payload byte length after fsync and require it to equal the value at digest time;
-14. write manifest with digests and final counts;
-15. fsync manifest and attempt directory;
-16. verify destination absence;
-17. rename the attempt once into the committed export root;
-18. fsync the committed-root parent directory.
+13. compute its SHA-256 and byte length;
+14. re-read every payload and require both SHA-256 and byte length to equal the sealed value;
+15. write manifest with all digests and final counts;
+16. fsync manifest and attempt directory;
+17. verify destination absence;
+18. rename the attempt once into the committed export root;
+19. fsync the committed-root parent directory.
 
 Any failure before rename leaves classified staging residue and no committed session. A failure after
 rename but before parent fsync is `uncertain_durability`; it does not retry under the same session ID.
@@ -269,7 +270,9 @@ fence prevents every post-seal append.
 Video is enabled only for short `live_conformance` runs used to prove synchronization and purge. The
 implementation uses in-app `MediaCodec`/`MediaMuxer` encoding from the same `ImageAnalysis` frames
 that feed preprocessing; CameraX `VideoCapture`/`Recorder` is not used. The muxer writes directly into
-the session staging attempt. Encoder presentation time is
+the session staging attempt and carries an application metadata track. Each metadata sample contains
+the frame index, rebased camera-capture nanoseconds, and submitted encoder PTS, and is submitted with
+the same PTS as its video sample. Encoder input presentation time is
 `floor(rebased_camera_capture_timestamp_ns / 1_000)` microseconds. The video writer is owned by the
 live composition and shares its lifecycle fence; it cannot outlive the camera source or publish
 independently. Task 4 therefore includes `CameraXFrameSource`, `CameraXSourceLifecycle`, and the owned
@@ -288,8 +291,14 @@ top-level properties without extending the closed `media_reference.role` enum:
 - `synchronization_evidence`: `{path_ref, sha256, schema_version}`;
 - `media_required`: boolean.
 
-The error-code registry advances to `1.3.0`, and `contracts/CHANGELOG.md` records both changes. New
-M0.5B producers always emit `raw_pose_stream`. A short synchronization run emits
+Before these contract changes are released, Task 3 runs a minimal write-demux round trip on the S25
+using a known non-zero timestamp sequence. It records whether `MediaExtractor` returns identity PTS
+or a single constant-offset transform. A non-constant transform is a blocking observation and stops
+the contract release; it is not accommodated with a fitted tolerance.
+
+After that prerequisite passes, the error-code registry advances to `1.3.0`, and
+`contracts/CHANGELOG.md` records both changes. New M0.5B producers always emit `raw_pose_stream`. A
+short synchronization run emits
 `media_required=true`, exactly one existing-role `session_video`, and one top-level
 `synchronization_evidence` reference. A sustained run emits `media_required=false`, no video, and no
 synchronization reference.
@@ -306,10 +315,10 @@ The record contains:
 - schema version, session ID, video role/path/digest/byte count/container/codec;
 - pose-stream digest and manifest session ID;
 - camera timestamp domain and encoder timestamp domain;
-- mapping method fixed to `camera_capture_ts_to_encoder_pts_identity_v1`;
-- exact offset `0 ns` and exact drift `0 ns/s`, because encoder PTS is derived from capture time;
-- a frame-index, rebased-capture-nanosecond, expected-PTS-microsecond, and demuxed-PTS-microsecond
-  pairing sidecar bound by digest;
+- mapping method fixed to `camera_capture_to_container_pts_constant_offset_v1`;
+- observed container offset in nanoseconds and exact drift `0 ns/s`;
+- demuxed application-metadata samples containing frame index, rebased-capture nanoseconds, and
+  submitted-PTS microseconds, bound by the synchronization-evidence digest;
 - first and last camera-frame timestamps;
 - first and last encoded-frame presentation timestamps;
 - first and last pose capture timestamps;
@@ -322,22 +331,26 @@ Admission computes consistency; callers cannot declare a success boolean. Requir
 - all session IDs match;
 - manifest media digest equals the finalized video bytes;
 - pose digest equals the finalized NDJSON bytes;
-- offset and drift appear together and equal the identity mapping constants;
+- offset and drift appear together, the offset is derived rather than caller-declared, and drift is
+  exactly zero;
 - first/last ordering is monotonic in each domain;
-- every demuxed encoder PTS equals `floor(rebased_capture_ns / 1_000)` for its paired frame, and the
-  first/last pairs match the observed first/last encoded samples;
+- video and application-metadata tracks have identical demuxed PTS sequences;
+- `container_offset_us = submitted_pts_us - demuxed_pts_us` is identical for every metadata sample,
+  and each submitted PTS equals `floor(rebased_capture_ns / 1_000)` from that sample's payload;
+- first/last metadata pairs match the observed first/last encoded samples;
 - callback, encoded, dropped, submitted, skipped, emitted, and failed counts reconcile through named
   identities rather than one ambiguous total;
 - `delivered_callbacks = encoded_video_frames + dropped_before_encoder + encoder_failures`;
 - a media-required `live_conformance` session has exactly one `session_video`, one top-level
   `synchronization_evidence` reference, and one top-level `raw_pose_stream` reference.
 
-Identity mapping is not presented as an estimated clock-quality claim. Non-vacuity comes from
-demuxing the published video, checking every frame-index/PTS pair against the independently recorded
-camera event stream, and reconciling all delivered frames. Estimated offset/drift remains deferred
-until a genuinely independent capture clock exists, such as the later second-device slate protocol.
-No residual-magnitude acceptance threshold is introduced in M0.5B; any measured quantization detail
-is reported as an observation.
+The constant offset is container timestamp-origin behavior, not a quality threshold. Non-vacuity
+comes from demuxing both published tracks, checking every metadata payload against the independently
+recorded camera event stream, proving identical video/metadata PTS, proving one constant transform,
+and reconciling all delivered frames. A varying transform is a failure, whatever its magnitude.
+Estimated physical clock offset/drift remains deferred until a genuinely independent capture clock
+exists, such as the later second-device slate protocol. No residual-magnitude acceptance threshold is
+introduced in M0.5B.
 
 The host transfer command uses binary-safe `adb exec-out`, writes to a temporary host file, verifies
 byte count and SHA-256 against the manifest, then renames. Text-mode shell capture is prohibited.
@@ -535,8 +548,9 @@ does not authorize participant capture or accept any privacy decision.
 ## 13. Delivery DAG and write scopes
 
 Implementation follows regression-first tests and the dependency order below. Each task lands as one
-coherent commit after targeted checks and exact diff inspection. Routine tasks do not receive an
-automatic second-model review; privacy, synchronization, and final boundary contracts do.
+coherent commit after targeted checks and exact diff inspection, except Task 3's deliberately
+separated observation-then-contract pair. Routine tasks do not receive an automatic second-model
+review; privacy, synchronization, and final boundary contracts do.
 
 1. **Registry and backup exclusion**
    Write scope: registry schema/data, Android manifest/resources, registry validators/tests.
@@ -547,9 +561,12 @@ automatic second-model review; privacy, synchronization, and final boundary cont
    conformance tests. Removes every unbounded per-frame/per-submission collection, introduces the
    abort-on-first-failure rule, and preserves crash/process-kill and byte-identical cadence semantics.
 3. **Synchronization contract**
-   Depends on 2 because it extends the streamed publication contract. Write scope: SessionManifest
-   1.2 additions (`raw_pose_stream`, `synchronization_evidence`, `media_required`), Python semantic
-   validator, Kotlin contract model/codec, error registry 1.3, changelog, synthetic fixtures/tests.
+   Depends on 2 because it extends the streamed publication contract. This task has two atomic
+   commits: first a minimal S25 muxer/demuxer timestamp probe and its typed evidence; only after that
+   proves one constant offset does the second commit release SessionManifest 1.2 additions
+   (`raw_pose_stream`, `synchronization_evidence`, `media_required`), the Python semantic validator,
+   Kotlin contract model/codec, error registry 1.3, changelog, and synthetic fixtures/tests. The
+   contract-release commit is prohibited while the probe is missing or blocking.
 4. **Android video and atomic publication**
    Depends on 2 and 3. Write scope: `CameraXFrameSource`, `CameraXSourceLifecycle`, owned-frame
    fan-out, Android in-app encoder/muxer adapter, storage binary primitives,
@@ -586,6 +603,8 @@ Required evidence includes:
   terminal collection at two large synthetic frame counts;
 - crash points before/after each durable publication step;
 - identity-clock, frame-pairing, media digest, endpoint, and count negative fixtures;
+- a pre-release S25 muxer/demuxer probe using non-zero input PTS, blocking any non-constant
+  container transform;
 - a live-sampler finalization race proving telemetry is stopped and joined before sealing/digest;
 - binary transfer/re-hash of a short device video;
 - purge traversal, prefix, symlink, unknown-root, partial-delete, fsync, post-scan, idempotency, and
