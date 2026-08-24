@@ -39,7 +39,10 @@ Android-only participant pilot before functional iOS conformance, subject to all
    pooled Android/iOS dataset, platform comparison, or Phase 2 entry.
 4. M0.5 is non-participant work. It may build governance, synchronized-video, sustained-measurement,
    annotation, analysis, and withdrawal-rehearsal machinery using only synthetic or empty-scene
-   inputs. It does not authorise participant capture.
+   inputs. Live detection-bearing input is named `displayed_synthetic_figure`; `synthetic_fixture`
+   remains the offline/replay class. A displayed-figure observation that does not fire the detector
+   remains pending for detection-dependent gates rather than passing vacuously. M0.5 does not
+   authorise participant capture.
 5. Participant capture requires a later explicit release-owner gate after privacy, consent,
    retention, storage, deletion, annotation, and instrument-readiness evidence has been reviewed.
 6. Any later Android-only report must mechanically state its device, OS, camera, model, delegate,
@@ -58,22 +61,33 @@ Android-only participant pilot before functional iOS conformance, subject to all
 Phase 0 does not invent signal-quality thresholds before baseline data exists. It does, however,
 pre-register the shape of its falsification decision:
 
-- A planned condition is **inadmissible** when any required artifact or metric is invalid,
-  unavailable, or `UNMEASURED`; an inadmissible condition can never be included in a successful
-  operating envelope.
-- `NO-GO` means no prospectively named **required** operating condition remains admissible, or a
+- An attempted condition is **inadmissible** with reason `instrument_failure` when any required
+  artifact or metric is invalid or `UNMEASURED`; it can never be included in a successful operating
+  envelope.
+- A condition not attempted because a declared athlete, venue, device, or other resource was
+  unavailable is recorded separately as `not_executed_resource`. It is a disclosed coverage gap,
+  not evidence that the instrument or signal failed.
+- Any unresolved required `not_executed_resource` leaves the decision `INCOMPLETE_COVERAGE`; it is
+  not converted into `GO`, `CONDITIONAL-GO`, or `NO-GO`.
+- `NO-GO` means no attempted prospectively named **required** operating condition remains admissible
+  because of instrument failure, or a
   material privacy, synchronization, annotation-independence, or measurement-validity failure
   remains after the one protocol-correction pilot allowed by the study design.
-- `CONDITIONAL-GO` means a strict, non-empty subset of prospectively named **required** conditions
-  remains admissible. The restricted envelope is exactly that subset; it cannot be expanded after
-  seeing results.
-- `GO` means every prospectively required condition is admissible and the evidence supports deriving
-  candidate Phase 2 thresholds without an unresolved material validity finding.
+- `CONDITIONAL-GO` means a strict, non-empty subset of attempted prospectively named **required**
+  conditions remains admissible after instrument failures. The restricted envelope is exactly that
+  subset; it cannot be expanded after seeing results.
+- `GO` means every locked required condition was executed and admitted, no resource coverage gap
+  remains, and the evidence supports deriving candidate Phase 2 thresholds without an unresolved
+  material validity finding.
 
-The condition matrix version and digest are recorded before the correction pilot. A post-pilot
-removal or required-to-exploratory demotion is a disclosed deviation and the affected required
-condition still counts as failed. Exploratory conditions may be reported but cannot alone constitute
-an operating envelope.
+Candidate condition matrices are immutable digest-bound artifacts. Before the pilot lock, a matrix
+may be revised by creating a new artifact linked to its prior digest with a reason. Athlete and venue
+availability for every resource-dependent required condition is confirmed before the selected
+version and digest are locked into the study-run manifest immediately before the correction pilot.
+An unlocked manifest cannot authorise capture. After the lock, a removal or
+required-to-exploratory demotion is a disclosed deviation and the affected required condition still
+counts as failed. Exploratory conditions may be reported but cannot alone constitute an operating
+envelope.
 
 Numeric signal-quality thresholds are proposed from Phase 0 baseline evidence and require their own
 recorded approval before Phase 2. This decision rule prevents post-hoc redefinition of a failed

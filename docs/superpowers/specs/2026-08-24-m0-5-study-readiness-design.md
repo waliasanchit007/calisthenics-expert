@@ -66,6 +66,12 @@ For `input_class = empty_scene`, `detection_active_frame_fraction` must equal ze
 does not prove a participant was present, but it contradicts the declared empty-scene condition and
 makes the run inadmissible rather than silently accepting the attestation.
 
+Live non-participant capture intended to exercise detection uses
+`input_class = displayed_synthetic_figure`. It is distinct from `synthetic_fixture`, which is an
+offline/replay input. A displayed-figure run with zero submitted frames, `UNMEASURED` detection, or
+zero detection-active fraction remains a truthful non-participant observation but cannot satisfy a
+detection-dependent gate; it returns a typed pending/blocking result rather than a vacuous green.
+
 The repository guard remains fail-closed. Study artifacts live outside Git in an owner-approved,
 encrypted study store once participant capture is later authorised. M0.5 uses a synthetic store with
 the same directory and access model so deletion and supersession can be rehearsed without sensitive
@@ -90,7 +96,10 @@ Deliver tracked protocols and machine-checkable metadata definitions before new 
    - focus, exposure, lighting, clothing, occlusion, and static-reference procedures;
    - visible/audible slate and clock-offset/drift procedure for future participant video;
    - named operating conditions for the later pilot before results exist;
-   - a versioned condition matrix whose digest is recorded before the pilot;
+   - a versioned condition matrix whose candidate revisions are immutable artifacts;
+   - explicit confirmation of athlete and venue availability before a matrix digest is locked into
+     the study-run manifest immediately before the pilot;
+   - pre-lock revisions are permitted only as new digest-bound artifacts with a recorded reason;
    - one permitted protocol-correction pilot, after which unresolved material failure forces stop;
    - post-pilot removal or required-to-exploratory demotion is recorded as deviation and the affected
      required condition remains failed for the final decision.
@@ -112,6 +121,9 @@ Deliver tracked protocols and machine-checkable metadata definitions before new 
      supersession artifacts by digest;
    - append-only provenance and immutable admitted artifacts; revisions use new versions and hashes;
    - a platform-scope object that the report renderer must include;
+   - condition execution status records that distinguish `instrument_failure` from
+     `not_executed_resource`; the latter is a disclosed coverage gap, never evidence that the signal
+     is unviable;
    - a location registry covering device exports/staging, transfer staging, study-store source,
      derived artifacts, reports, and tombstones;
    - homogeneous analysis cohorts keyed by platform, device model, model digest, delegate,
@@ -252,19 +264,38 @@ report version while mechanically marking affected predecessors as superseded.
 
 Before participant capture, the capture protocol names the operating-condition matrix and marks each
 condition required or exploratory. It also names the required artifact and metric cells for each
-condition. The matrix version and digest enter the study-run manifest before the correction pilot.
-Later revisions remain visible, but removing a required condition or demoting it to exploratory
-counts as failure of that original required condition.
+condition. Candidate matrices may be revised before the pilot only by creating a new immutable
+artifact, linking its prior digest, and recording a reason. Athlete and venue availability for every
+resource-dependent required condition is confirmed before the selected matrix version and digest are
+locked into the study-run manifest. An unlocked readiness manifest cannot pass the participant-capture
+gate. After that lock, removing a required condition or demoting it to exploratory counts as failure
+of that original required condition.
+
+Every condition execution record is `planned`, `admissible`, or `inadmissible`. An inadmissible record
+must name exactly one reason:
+
+- `instrument_failure` means the condition was attempted but failed a pre-registered artifact,
+  metric, synchronization, independence, or validity requirement; it is evidence about viability;
+- `not_executed_resource` means the condition was not run because a required athlete, venue, device,
+  or other declared resource was unavailable; it is a disclosed coverage gap and is not evidence
+  that the signal failed.
 
 After a separately authorised Phase 0 pilot:
 
-- any condition with an invalid artifact or required `UNMEASURED` cell is excluded;
-- `NO-GO` applies when no pre-registered **required** condition remains, or when a material privacy,
+- any attempted condition with an invalid artifact or required `UNMEASURED` cell is inadmissible with
+  `instrument_failure`;
+- any required condition not attempted because a declared resource was unavailable is recorded as
+  `not_executed_resource` and reported as missing coverage;
+- any unresolved required `not_executed_resource` leaves the final decision
+  `INCOMPLETE_COVERAGE`; it is not converted into `GO`, `CONDITIONAL-GO`, or `NO-GO`;
+- `NO-GO` applies when no attempted pre-registered **required** condition remains viable because of
+  `instrument_failure`, or when a material privacy,
   synchronization, independence, or validity defect remains after the single correction pilot;
-- `CONDITIONAL-GO` applies when a strict, non-empty subset of pre-registered **required** conditions
-  remains, and its restricted envelope is exactly that subset;
-- `GO` applies only when all required conditions remain and candidate Phase 2 thresholds can be
-  derived without an unresolved material validity finding.
+- `CONDITIONAL-GO` applies when a strict, non-empty subset of attempted pre-registered **required**
+  conditions remains after instrument failures, and its restricted envelope is exactly that subset;
+- `GO` applies only when every locked required condition was executed and admitted, with no resource
+  coverage gap, and candidate Phase 2 thresholds can be derived without an unresolved material
+  validity finding.
 
 Surviving exploratory conditions are reported but cannot by themselves constitute an operating
 envelope.
@@ -306,10 +337,12 @@ M0.5 implementation does not consume these gates automatically:
 2. privacy model acceptance, including storage administrator/location, access matrix, retention,
    deletion/backups, incident handling, and no-face-blur risk; every required decision must be
    `ACCEPTED`, because `UNDECIDED` and `REJECTED` fail participant-capture admission;
-3. availability of two independent annotators before Gold labels or split freeze;
-4. explicit participant-capture authorization after M0.5 evidence is reviewed;
-5. approval of any numeric Phase 2 threshold and the final GO/NO-GO/CONDITIONAL-GO result;
-6. admission of a mid-range device and functional iOS conformance before Phase 2.
+3. confirmation of athlete, venue, device, and other matrix resources before the selected candidate
+   matrix digest is pilot-locked;
+4. availability of two independent annotators before Gold labels or split freeze;
+5. explicit participant-capture authorization after M0.5 evidence is reviewed;
+6. approval of any numeric Phase 2 threshold and the final GO/NO-GO/CONDITIONAL-GO result;
+7. admission of a mid-range device and functional iOS conformance before Phase 2.
 
 No implementation may use paid credits, create a cloud upload path, or purchase devices/services.
 Those remain separate human cost decisions.
@@ -324,6 +357,10 @@ M0.5 is complete only when:
   the no-person operator attestation;
 - every registered admission path rejects absent `session_kind`, and empty-scene evidence rejects a
   non-zero detection-active frame fraction;
+- displayed-synthetic-figure evidence cannot satisfy a detection-dependent gate unless detection
+  actually fires;
+- pilot-lock and condition-outcome contracts preserve pre-lock revision provenance and distinguish
+  instrument failure from unexecuted resource coverage;
 - backup/cloud/device-transfer exclusions cover every export root;
 - synchronized non-participant video and observation artifacts carry valid digest-bound sync evidence;
 - device withdrawal rehearsal removes the session from export, staging, transfer staging, study

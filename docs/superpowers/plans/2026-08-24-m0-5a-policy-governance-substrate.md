@@ -15,9 +15,11 @@
 - M0.5A is non-participant work. Use only synthetic metadata and committed synthetic fixtures.
 - Do not change `contracts/schema/session_manifest.v1.schema.json`; absence of `session_kind` retains released `live_study` compatibility semantics.
 - Every M0.5 observation admission path rejects absent `session_kind`, `live_study`, a non-`synthetic-m05-*` pseudonym, `input_class=participant`, missing no-person attestation, and non-zero detection-active fraction for `empty_scene`.
+- Live detection-bearing input is exactly `displayed_synthetic_figure`; `synthetic_fixture` remains offline/replay-only. A displayed figure that does not fire detection is typed pending and cannot satisfy a detection-dependent gate.
 - Human privacy decisions are `UNDECIDED`, `ACCEPTED`, or `REJECTED`. Committed M0.5A protocol state is `UNDECIDED`; participant-ready validation rejects both `UNDECIDED` and `REJECTED`.
 - An analysis cohort is homogeneous in platform, device model, model digest, delegate, preprocessing version, and observation-contract version. Mixed tuples fail with `STUDY.COHORT_SCOPE_MISMATCH`.
-- The pre-pilot condition matrix is immutable by digest. Removing or demoting a required condition after the correction pilot counts as a failed required condition.
+- Every condition-matrix version is immutable by digest. Pre-lock revisions require a prior digest and reason; after athlete/venue availability is confirmed and the pilot lock is recorded, removing or demoting a required condition counts as a failed required condition.
+- `instrument_failure` is viability evidence; `not_executed_resource` is a disclosed coverage gap and must never be counted as signal failure. Any required resource gap yields `INCOMPLETE_COVERAGE`; `GO` requires neither kind of unresolved required-condition gap.
 - Artifact references are repository-relative paths plus lowercase SHA-256. No path may be absolute, contain `..`, or resolve outside the repository.
 - Registered locations are exactly `device_export`, `device_staging`, `device_transfer_staging`, `study_store_source`, `study_store_derived`, `study_store_report`, and `tombstone`.
 - No synchronized-video implementation, Android deletion port, sustained device run, annotation UI, analysis engine, cloud path, participant store, functional iOS backend, signal-quality threshold, or Phase 2 behavior belongs in this plan.
@@ -43,7 +45,7 @@
 - Produces: `load_study_condition_matrix_schema() -> Mapping[str, object]`
 - Produces: `study_readiness_schema_validator() -> Draft202012Validator`
 - Produces: `study_condition_matrix_schema_validator() -> Draft202012Validator`
-- Produces stable codes: `STUDY.ARTIFACT_REFERENCE`, `STUDY.PRIVACY_DECISION`, `STUDY.CONDITION_MATRIX_DRIFT`, `STUDY.COHORT_SCOPE_MISMATCH`, `STUDY.ADMISSION_SESSION_KIND`, `STUDY.ADMISSION_INPUT_CLASS`, `STUDY.EMPTY_SCENE_DETECTION`, and `STUDY.LOCATION_REGISTRY`.
+- Produces stable codes: `STUDY.ARTIFACT_REFERENCE`, `STUDY.PRIVACY_DECISION`, `STUDY.CONDITION_MATRIX_DRIFT`, `STUDY.PILOT_LOCK`, `STUDY.CONDITION_OUTCOME`, `STUDY.COHORT_SCOPE_MISMATCH`, `STUDY.ADMISSION_SESSION_KIND`, `STUDY.ADMISSION_INPUT_CLASS`, `STUDY.EMPTY_SCENE_DETECTION`, `STUDY.SYNTHETIC_DETECTION_PENDING`, and `STUDY.LOCATION_REGISTRY`.
 
 - [ ] **Step 1: RED — loaders and schemas are absent**
 
@@ -67,7 +69,6 @@ Add dedicated tooling loaders to `schema_loader.py`; do not add these artifacts 
 {
   "condition_matrix_schema_version": "1.0.0",
   "matrix_id": "phase0-flagship-android-v1",
-  "frozen_before_pilot": true,
   "conditions": [
     {
       "condition_id": "anchor-45deg-3m-chest-indoor-bright-normal",
@@ -90,7 +91,8 @@ study_readiness_schema_version = 1.0.0
 readiness_id                   lowercase slug
 phase_scope                    m0_5_non_participant
 protocols                      capture, annotation, privacy artifact refs
-condition_matrix               current artifact ref + pre_pilot_sha256 + optional prior artifact ref
+condition_matrix               current/prior refs + explicit pilot lock
+condition_outcomes             execution state and typed inadmissibility reason per condition
 privacy_decisions              eight named decision records
 platform_scope                 exact flagship-only scope object
 artifact_locations             non-empty registered location array
@@ -115,13 +117,29 @@ The condition-matrix object is:
 ```json
 {
   "current": {"path": "...", "sha256": "..."},
-  "pre_pilot_sha256": "...",
+  "pilot_lock": {
+    "state": "UNLOCKED",
+    "locked_matrix": null,
+    "resource_availability_confirmation": null
+  },
   "prior": null,
   "matrix_revision_reason": null
 }
 ```
 
-`prior` is either null or an artifact ref. `matrix_revision_reason` is null when `prior` is null and a non-empty string otherwise. The initial M0.5A manifest has no prior matrix and requires the current digest to equal `pre_pilot_sha256`. Later revisions retain that original digest and provide the immediately prior matrix so semantic validation can detect removal or demotion of required conditions without embedding duplicate condition arrays in the manifest.
+`prior` is either null or an artifact ref. `matrix_revision_reason` is null when `prior` is null and a non-empty string otherwise. `pilot_lock.state` is `UNLOCKED | LOCKED`. Both lock references are null while unlocked; both are digest-bound artifact refs while locked. The resource confirmation names every athlete, venue, device, and other resource required by the selected matrix. A locked matrix remains the comparison baseline even when `current` later points to a revision; this prevents gradual demotion through a chain of individually small edits.
+
+`condition_outcomes` contains exactly one row per current condition:
+
+```json
+{
+  "condition_id": "anchor-45deg-3m-chest-indoor-bright-normal",
+  "status": "planned",
+  "inadmissibility_reason": null
+}
+```
+
+Status is `planned | admissible | inadmissible`. The reason must be null unless status is inadmissible, then it is exactly `instrument_failure | not_executed_resource`. M0.5A commits only planned rows.
 
 The platform scope requires platform, device model, OS build, camera capability ref, model digest, runtime version, delegate, requested cadence, preprocessing version, observation-contract version, input class, detection-active frame fraction, and rendered scope statement. Permit `UNMEASURED` only for the detection-active fraction when zero frames were submitted.
 
@@ -129,7 +147,7 @@ The platform scope requires platform, device model, OS build, camera capability 
 
 - [ ] **Step 3: GREEN — register stable errors and finish structural tests**
 
-Append the eight codes without renaming or reordering existing codes and increment `registry_version` from `1.1.0` to `1.2.0`. Add positive minimal documents and negative rows for missing required properties, bad SHA/path, unknown decision state, zero set count, and an unknown top-level property.
+Append the eleven codes without renaming or reordering existing codes and increment `registry_version` from `1.1.0` to `1.2.0`. Add positive minimal documents and negative rows for missing required properties, bad SHA/path, unknown decision state, inconsistent pilot-lock references, invalid outcome/reason combinations, zero set count, and an unknown top-level property.
 
 Run the focused test file. Expected: all Task 1 tests pass.
 
@@ -166,6 +184,8 @@ git commit -m "feat: define study readiness tooling contracts"
 **Interfaces:**
 - Produces: `verify_study_readiness(path: Path, *, require_participant_ready: bool = False) -> list[ValidationIssue]`
 - Produces: `scope_tuple(scope: Mapping[str, object]) -> tuple[str, str, str, str, str, str]`
+- Produces: `summarize_condition_outcomes(manifest: Mapping[str, object]) -> ConditionOutcomeSummary`
+- Produces: frozen `ConditionOutcomeSummary(required_admissible: int, instrument_failures: int, resource_gaps: int, planned: int, decision_state: str)`
 - Produces CLI: `verify-study-readiness MANIFEST`
 - Produces CLI: `verify-participant-capture-gate MANIFEST`
 - Consumes: strict JSON/schema loaders from Task 1.
@@ -192,7 +212,7 @@ Load every reference with `read_bytes()`, compare `hashlib.sha256(content).hexdi
 
 - [ ] **Step 3: RED — privacy decisions are allowed for readiness but block capture**
 
-Create a manifest whose eight privacy decisions are `UNDECIDED`. Assert:
+Create a manifest whose pilot lock is otherwise valid and whose eight privacy decisions are `UNDECIDED`. Assert:
 
 ```python
 assert verify_study_readiness(path) == []
@@ -213,15 +233,25 @@ Add tests for:
 
 ```text
 duplicate condition_id                      -> STUDY.CONDITION_MATRIX_DRIFT
-condition_matrix.current.sha256 != pre_pilot_sha256 -> STUDY.CONDITION_MATRIX_DRIFT
-removed required condition                  -> STUDY.CONDITION_MATRIX_DRIFT
-required-to-exploratory demotion             -> STUDY.CONDITION_MATRIX_DRIFT
+UNLOCKED revision with prior + reason         -> valid
+UNLOCKED revision missing prior or reason      -> STUDY.CONDITION_MATRIX_DRIFT
+LOCKED without both lock references            -> STUDY.PILOT_LOCK
+LOCKED removal of locked required condition    -> STUDY.CONDITION_MATRIX_DRIFT
+LOCKED required-to-exploratory demotion        -> STUDY.CONDITION_MATRIX_DRIFT
+participant gate while UNLOCKED                -> STUDY.PILOT_LOCK
+inadmissible without a typed reason            -> STUDY.CONDITION_OUTCOME
+admissible/planned with an inadmissibility reason -> STUDY.CONDITION_OUTCOME
+instrument_failure                             -> viability failure
+not_executed_resource                          -> coverage gap, not viability failure
+required resource gap                         -> decision_state INCOMPLETE_COVERAGE
 two pooled inputs with differing scope key   -> STUDY.COHORT_SCOPE_MISMATCH
 two separate cohorts with differing keys     -> valid comparison, no pooling
 missing/duplicate/unregistered location      -> STUDY.LOCATION_REGISTRY
 ```
 
-For the initial manifest (`prior=null`), require the current artifact digest to equal `pre_pilot_sha256`. For a later revision, load the digest-bound `prior` matrix and return deterministic issues for every condition that was `required` in the prior matrix but is removed or demoted in the current matrix. The manifest must not contain inline condition copies.
+For an unlocked manifest, allow a changed matrix only when `prior` resolves to the preceding digest and `matrix_revision_reason` is non-empty. For a locked manifest, load `pilot_lock.locked_matrix` and return deterministic issues for every condition that was `required` at lock but is removed or demoted in the current matrix. Do not compare only with the immediate prior. The manifest must not contain inline condition copies.
+
+Participant-ready validation also requires `pilot_lock.state=LOCKED` and digest-valid locked-matrix and resource-confirmation artifacts. This is in addition to, never instead of, the eight accepted privacy decisions.
 
 - [ ] **Step 6: GREEN — implement deterministic semantic validation**
 
@@ -239,6 +269,8 @@ _SCOPE_KEYS = (
 ```
 
 Each pooled cohort requires every input artifact's scope tuple to equal the cohort scope. Separate cohort declarations may have different tuples. Sort issues by `(pointer or "", code, message)` before returning.
+
+Expose a pure condition summary that counts admitted required conditions, instrument failures, and resource coverage gaps separately. `not_executed_resource` must not increment the instrument-failure count and sets `decision_state=INCOMPLETE_COVERAGE`; it cannot be reclassified as any viability decision.
 
 - [ ] **Step 7: RED/GREEN — CLI exit contracts**
 
@@ -279,8 +311,10 @@ git commit -m "feat: enforce study readiness semantics"
 - Modify: `reference/tests/test_architecture.py`
 
 **Interfaces:**
-- Produces Kotlin: `enum class M05InputClass { EMPTY_SCENE, PROP_SCENE }`
+- Produces Kotlin: `enum class M05InputClass { EMPTY_SCENE, DISPLAYED_SYNTHETIC_FIGURE }`
+- Produces Kotlin: `enum class M05DetectionEvidenceState { NOT_APPLICABLE, ACTIVE, PENDING }`
 - Produces Kotlin: `data class M05AdmissionEvidence(...)`
+- Produces Kotlin: `data class M05AdmissionResult(..., val detectionEvidenceState: M05DetectionEvidenceState, val blockingCodes: List<String>)`
 - Produces Kotlin: `object M05Admission { fun evaluate(evidence: M05AdmissionEvidence): M05AdmissionResult }`
 - Produces Python: `M05_ADMISSION_PATHS = ("live_transcript", "recorded_live_ledger")`
 - Consumes the stable admission codes registered in Task 1.
@@ -294,8 +328,10 @@ session_kind absent               -> STUDY.ADMISSION_SESSION_KIND
 session_kind = live_study         -> STUDY.ADMISSION_SESSION_KIND
 participant_pseudonym_id = human  -> STUDY.ADMISSION_INPUT_CLASS
 input_class = participant         -> STUDY.ADMISSION_INPUT_CLASS
+input_class = synthetic_fixture   -> STUDY.ADMISSION_INPUT_CLASS
 no-person attestation absent/false -> STUDY.ADMISSION_INPUT_CLASS
 empty_scene with fraction > 0     -> STUDY.EMPTY_SCENE_DETECTION
+displayed figure with zero/UNMEASURED detection -> STUDY.SYNTHETIC_DETECTION_PENDING
 ```
 
 The test must enumerate the production constant and assert its exact membership. Adding a future admission path without adding it to this table must fail the architecture test.
@@ -306,7 +342,7 @@ Expected RED: the path constant and M0.5 checks do not exist.
 
 Implement one helper used by both `check_transcript` and `verify_recorded_ledger`; neither public path may reproduce the field checks. The released observation schema remains untouched. Missing `session_kind` is rejected only at these M0.5 admission boundaries.
 
-Keep `check_transcript`'s existing live-capture behavior for non-M0.5 callers. Select M0.5 validation explicitly from the evidence marker rather than guessing from a pseudonym string. Return deterministic, sanitized failure data; do not throw a generic assertion for policy rejection.
+Keep `check_transcript`'s existing live-capture behavior for non-M0.5 callers. Select M0.5 validation explicitly from the evidence marker rather than guessing from a pseudonym string. Existing records without that marker stay on the legacy verification path. Return deterministic, sanitized failure data; do not throw a generic assertion for policy rejection.
 
 - [ ] **Step 3: RED — Kotlin cannot emit caller-selected participant identity**
 
@@ -325,9 +361,10 @@ val result = M05Admission.evaluate(
 )
 assertEquals("synthetic-m05-00000000-0000-4000-8000-000000000001", result.participantPseudonymId)
 assertEquals(0.0, result.detectionActiveFrameFraction)
+assertEquals(M05DetectionEvidenceState.NOT_APPLICABLE, result.detectionEvidenceState)
 ```
 
-Add mutation rows proving the result rejects a different session kind, false attestation, `detectionActiveFrameCount > submittedFrameCount`, `EMPTY_SCENE` with a non-zero derived fraction, and zero submitted frames when a numeric fraction would otherwise be invented.
+Add mutation rows proving the result rejects a different session kind, false attestation, `detectionActiveFrameCount > submittedFrameCount`, `EMPTY_SCENE` with a non-zero derived fraction, and zero submitted frames when a numeric fraction would otherwise be invented. Add displayed-figure rows proving a positive derived fraction activates detection-dependent evidence while zero or `UNMEASURED` returns `STUDY.SYNTHETIC_DETECTION_PENDING`.
 
 In the Android composition test, first prove the current caller-controlled `LiveManifestMetadata.participantPseudonymId` can produce a non-synthetic identity. This is the intended RED failure.
 
@@ -338,14 +375,18 @@ In the Android composition test, first prove the current caller-controlled `Live
 ```text
 session_kind                    live_conformance
 participant_pseudonym_id        synthetic-m05-<session UUID>
-input_class                     empty_scene | prop_scene
+input_class                     empty_scene | displayed_synthetic_figure
 operator_attested_no_person     true
 detection_active_frame_fraction active/submitted, or UNMEASURED when submitted=0
 ```
 
 Add those six values to `LiveCaptureEvidence` as one typed nested M0.5 admission record and render them into the signed device-gate JSON consumed by both Python paths. The recorded-ledger path must never infer them from a missing manifest.
 
+`detectionEvidenceState` is `NOT_APPLICABLE` for a valid zero-detection empty scene, `ACTIVE` for a displayed figure with at least one submitted frame and positive derived fraction, and `PENDING` for a displayed figure with zero submitted frames or zero detection. Keep the underlying pending observation and attach `STUDY.SYNTHETIC_DETECTION_PENDING`; never fabricate detection.
+
 Remove `participantPseudonymId` from `LiveManifestMetadata`. The composition supplies its generated session ID to `M05Admission`, then uses only the returned values for both the session manifest and `LiveCaptureEvidence`. Add a cross-object test asserting the manifest and evidence record carry identical session kind and pseudonym. Do not add participant mode or a bypass flag.
+
+Add an explicit repository regression that opens and verifies the existing recorded ledgers under `docs/evidence/live-capture/` and `docs/evidence/replay-five-run/` unchanged. Assert the existing live record has no M0.5 marker and therefore follows the legacy path. Regeneration or editing of historical evidence is forbidden.
 
 - [ ] **Step 5: Mutation verification**
 
@@ -355,7 +396,8 @@ Temporarily apply and independently verify these mutations turn a focused test r
 2. change the synthetic pseudonym prefix;
 3. trust a caller-provided detection fraction instead of deriving it;
 4. change the empty-scene comparison from `== 0` to `>= 0`;
-5. remove one member from `M05_ADMISSION_PATHS` or bypass the shared helper.
+5. allow zero displayed-figure detections to satisfy its detection-dependent gate;
+6. remove one member from `M05_ADMISSION_PATHS` or bypass the shared helper.
 
 Record each test name and failure in the ignored ledger. A surviving mutant is unresolved until either the test or mutation is corrected.
 
@@ -364,7 +406,7 @@ Record each test name and failure in the ignored ledger. A surviving mutant is u
 Run:
 
 ```bash
-.venv/bin/python -m pytest reference/tests/test_live_capture_run_check.py reference/tests/test_architecture.py -v
+.venv/bin/python -m pytest reference/tests/test_live_capture_run_check.py reference/tests/test_device_evidence_ledger.py reference/tests/test_architecture.py -v
 make verify-harness-jvm
 make verify
 ```
@@ -386,7 +428,7 @@ git commit -m "feat: enforce synthetic M0.5 live admission"
 
 ---
 
-### Task 4: Digest-bound protocols and frozen flagship-only condition matrix
+### Task 4: Digest-bound protocols and candidate flagship-only condition matrix
 
 **Files:**
 - Create: `docs/protocols/capture-protocol.v1.md`
@@ -403,7 +445,7 @@ git commit -m "feat: enforce synthetic M0.5 live admission"
 
 - [ ] **Step 1: RED — repository readiness artifacts do not exist**
 
-Add a repository-level test that loads `docs/protocols/study-readiness.m05.v1.json` using Task 2's canonical verifier. Assert the manifest is valid for non-participant readiness and invalid for participant capture with exactly eight `STUDY.PRIVACY_DECISION` issues.
+Add a repository-level test that loads `docs/protocols/study-readiness.m05.v1.json` using Task 2's canonical verifier. Assert the manifest is valid for non-participant readiness and invalid for participant capture with exactly eight `STUDY.PRIVACY_DECISION` issues plus one `STUDY.PILOT_LOCK` issue.
 
 Assert every referenced artifact exists, matches its recorded digest, and is beneath `docs/protocols/`. Expected RED: the files are absent.
 
@@ -412,11 +454,12 @@ Assert every referenced artifact exists, matches its recorded digest, and is ben
 The capture protocol must specify:
 
 - approved `session_kind=live_conformance` and reserved `synthetic-m05-*` identity for M0.5;
-- non-participant input classes `empty_scene` and `prop_scene` only;
+- non-participant live input classes `empty_scene` and `displayed_synthetic_figure` only;
 - operator no-person attestation before camera start;
 - camera placement, full-body framing, lighting, clothing, distance, height, and angle recording rules;
 - device/app/model/delegate/cadence/thermal/battery metadata;
-- empty-scene detection-active fraction must equal zero;
+- empty-scene detection-active fraction must equal zero, while a displayed synthetic figure must
+  produce positive detection evidence before any detection-dependent gate can pass;
 - stopping behavior when a person enters frame, metadata is absent, or admission disagrees with the matrix;
 - no claim that the current S25 evidence generalizes to mid-range Android or iOS.
 
@@ -428,7 +471,7 @@ The annotation protocol must make the primary labeling component structurally bl
 
 The privacy/retention/withdrawal protocol must enumerate all eight human decisions and all seven registered locations. For each decision, record owner, required evidence, and effect of `UNDECIDED`, `ACCEPTED`, or `REJECTED`. State mechanically that only eight `ACCEPTED` states with digest-valid decision records can open participant capture. Leave every committed state `UNDECIDED`; do not invent storage administrators, retention periods, access roles, withdrawal channels, or face policy.
 
-- [ ] **Step 4: RED/GREEN — freeze the 28-set matrix without false platform attribution**
+- [ ] **Step 4: RED/GREEN — pre-register the candidate 28-set matrix without false platform attribution**
 
 Translate `docs/phase-0-plan.md` section 7 into explicit condition rows totaling 28 sets. Preserve the current allocation and these classifications:
 
@@ -441,6 +484,8 @@ Add tests asserting exact total `28`, unique condition IDs, the required/explora
 
 Every row must also name its required artifact and metric cells before pilot data exists. Reuse the canonical cell slugs declared by the capture and annotation protocols; do not leave a required condition with an empty cell list or infer cells later from observed results.
 
+This commit creates an immutable candidate matrix, not the pilot lock. Athlete B, the repeated-session athlete/venue availability, and every other resource-dependent required condition must be confirmed in a separate digest-bound resource-availability record before a later study-run manifest may lock the matrix. If availability is not confirmed, create a new pre-lock matrix revision with `prior` and `matrix_revision_reason`; do not misclassify non-recruitment as `instrument_failure`.
+
 - [ ] **Step 5: GREEN — bind the synthetic readiness manifest**
 
 Populate the manifest with:
@@ -452,9 +497,12 @@ input_class                              empty_scene
 detection_active_frame_fraction          0
 all privacy decision states              UNDECIDED
 condition_matrix.current.sha256           actual matrix digest
-condition_matrix.pre_pilot_sha256         same digest
+condition_matrix.pilot_lock.state         UNLOCKED
+condition_matrix.pilot_lock.locked_matrix null
+condition_matrix.pilot_lock.resource_availability_confirmation null
 condition_matrix.prior                    null
 condition_matrix.matrix_revision_reason   null
+condition_outcomes                        one planned/null-reason row per condition
 ```
 
 Use the actual evidence, model, runtime, delegate, preprocessing, observation-contract, OS-build, requested-cadence, and camera-capability values already tracked in the repository. Do not use `TBD`, a wildcard, or a value copied from memory when an authoritative artifact exists.
@@ -467,9 +515,11 @@ Temporarily mutate each item and prove the repository test fails, then restore i
 
 1. edit one protocol after its digest is recorded;
 2. mark one privacy decision `ACCEPTED` without a decision record;
-3. change one required matrix row to exploratory while using the prior-matrix comparison;
-4. change empty-scene detection fraction from zero;
-5. change one cohort scope component while retaining it in a pooled cohort.
+3. claim a pilot lock without both digest-valid lock references;
+4. remove or demote a condition required by a locked baseline;
+5. change empty-scene detection fraction from zero;
+6. change one cohort scope component while retaining it in a pooled cohort;
+7. classify `not_executed_resource` as an instrument failure.
 
 - [ ] **Step 7: Verify and commit**
 
@@ -495,7 +545,7 @@ git add docs/protocols/capture-protocol.v1.md \
   docs/protocols/condition-matrix.m05.v1.json \
   docs/protocols/study-readiness.m05.v1.json \
   reference/tests/test_study_readiness_repository.py
-git commit -m "docs: freeze synthetic M0.5 study readiness"
+git commit -m "docs: record synthetic M0.5 study readiness"
 ```
 
 ---
@@ -540,7 +590,7 @@ Update `AGENTS.md` to state:
 - M0.5 is governed by the approved study-readiness spec and ADR-0005;
 - M0.5A permits tooling contracts, synthetic governance fixtures, protocols, and fail-closed admission checks;
 - M0.5B/C remain separate approved slices and must not be pulled into this PR;
-- participant capture remains blocked until the release owner accepts all eight privacy decisions and a digest-valid participant gate passes;
+- participant capture remains blocked until the release owner accepts all eight privacy decisions, confirms matrix resources, locks the selected matrix digest, and a digest-valid participant gate passes;
 - participant video, biometric-derived observations, consent records, identity mappings, credentials, and real participant fixtures remain prohibited in Git;
 - no numeric reliability threshold, rep engine, form score, production claim, mid-range claim, or iOS-equivalence claim may be inferred.
 
@@ -548,7 +598,7 @@ Preserve the collaboration and release-authority sections; this task changes sco
 
 - [ ] **Step 4: GREEN — record the tooling-contract release**
 
-Add a `1.2.0` tooling-contract entry to `contracts/CHANGELOG.md` naming the two schemas, eight stable errors, canonical validator commands, M0.5 admission behavior, ADR-0005, and compatibility note: observation schemas remain at their released versions and absent `session_kind` retains its schema-level default. State that participant capture is blocked and that no tag is created by this plan.
+Add a `1.2.0` tooling-contract entry to `contracts/CHANGELOG.md` naming the two schemas, eleven stable errors, canonical validator commands, M0.5 admission behavior, ADR-0005, and compatibility note: observation schemas remain at their released versions and absent `session_kind` retains its schema-level default. State that participant capture is blocked and that no tag is created by this plan.
 
 - [ ] **Step 5: Full verification and clean-checkout proof**
 
@@ -578,8 +628,11 @@ Delete only that explicitly resolved temporary clone after recording commands, e
 Request one fresh review over `origin/main...HEAD`, scoped to:
 
 - privacy decisions cannot default to capture authority;
+- an unlocked matrix cannot open participant capture, while pre-lock revisions retain prior digest and reason;
+- post-lock required-condition drift fails, and resource gaps are not counted as instrument failures;
 - all live M0.5 admission paths are enumerated and reject missing `session_kind`;
 - empty-scene detection is derived and must be zero;
+- displayed-synthetic-figure evidence stays pending unless detection actually fires;
 - artifact references are digest-bound and root-confined;
 - condition-matrix revision and cohort-pooling rules fail closed;
 - committed artifacts contain synthetic metadata only.
@@ -611,7 +664,7 @@ M0.5A is implementation-complete only when:
 - `make verify`, JVM, iOS compile, Kotlin export, and clean-checkout verification pass at the final SHA;
 - the one bounded privacy/contract review has no unresolved Critical or Important finding;
 - the PR is open, mergeable, and its required `verify` check is green;
-- the committed readiness manifest passes non-participant validation and fails participant admission with exactly eight undecided privacy decisions;
+- the committed readiness manifest passes non-participant validation and fails participant admission with exactly eight undecided privacy decisions plus an unlocked pilot matrix;
 - no participant artifact, participant authority, tag, or merge has been created.
 
 Record the final branch, worktree, base/head SHAs, commits, checks, review findings, Minor debt, PR URL, and next release-owner action in the ignored ledger.
