@@ -49,6 +49,9 @@ Android-only participant pilot before functional iOS conformance, subject to all
 7. An analysis cohort is homogeneous in platform, device model, model digest, delegate,
    preprocessing version, and observation-contract version. Differing tuples may be compared as
    separate cohorts but never pooled. Mixed-scope pooling fails closed with a stable error code.
+8. Released manifest compatibility is not rewritten: absent `session_kind` retains its v1
+   `live_study` meaning. M0.5 instead enumerates every artifact-admission path and mechanically proves
+   each path rejects absence before accepting non-participant evidence.
 
 ## Decision rule
 

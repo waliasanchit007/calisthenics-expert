@@ -1,6 +1,6 @@
 # M0.5 Non-Participant Study Readiness Design
 
-- Status: Approved direction; written specification pending final review
+- Status: Approved
 - Date: 2026-08-24
 - Base: `ca623d32837dec99d8229083c9159bfd140b1843`
 - Decision record: `docs/adr/ADR-0005-android-scoped-phase-0-evidence.md`
@@ -56,6 +56,16 @@ mechanically prevents a session from being admitted as participant-study evidenc
 frame rule remains a separately attested physical protocol because software cannot prove identity
 absence from arbitrary pixels.
 
+The released v1 manifest semantics remain immutable: an absent `session_kind` continues to mean
+`live_study` for backwards compatibility. M0.5 therefore maintains a mechanically enumerated
+registry of every admission entry point and proves that each rejects an absent `session_kind` before
+any M0.5 artifact can be admitted. Adding an admission path without registering the corresponding
+negative test fails repository verification.
+
+For `input_class = empty_scene`, `detection_active_frame_fraction` must equal zero. A non-zero value
+does not prove a participant was present, but it contradicts the declared empty-scene condition and
+makes the run inadmissible rather than silently accepting the attestation.
+
 The repository guard remains fail-closed. Study artifacts live outside Git in an owner-approved,
 encrypted study store once participant capture is later authorised. M0.5 uses a synthetic store with
 the same directory and access model so deletion and supersession can be rehearsed without sensitive
@@ -93,7 +103,10 @@ Deliver tracked protocols and machine-checkable metadata definitions before new 
    - separate opt-in by artifact class and separate training-use permission;
    - storage administrator/location, access roles, retention periods, withdrawal channels, deletion
      propagation, backup handling, incident response, and minimal tombstone semantics;
-   - no-face-blur acceptance is a named human privacy decision, never an implementation default.
+   - no-face-blur acceptance is a named human privacy decision, never an implementation default;
+   - every human-owned privacy decision is represented as `UNDECIDED`, `ACCEPTED`, or `REJECTED`.
+     Protocol documents merge with `UNDECIDED`; participant-capture admission rejects every
+     `UNDECIDED` or `REJECTED` required decision.
 4. **Governance contracts**
    - a versioned study-run manifest referencing source, annotation, analysis, split, report, and
      supersession artifacts by digest;
@@ -109,6 +122,8 @@ Deliver tracked protocols and machine-checkable metadata definitions before new 
    - repository checks for protocol presence, scope metadata, and synthetic-only fixtures;
    - device-evidence checks for fixed `live_conformance`, reserved synthetic identity, non-participant
      input class, and operator attestation;
+   - an enumerated admission-path registry whose tests reject absent `session_kind` on every path;
+   - an empty-scene consistency check requiring zero detection-active fraction;
    - `AGENTS.md` operating gate updated without weakening participant-data prohibitions;
    - no network upload path and no automated paid service.
 
@@ -143,6 +158,13 @@ Deliver the missing device and media evidence using non-participant inputs:
      successful withdrawal.
 4. **Sustained S25 characterization**
    - run 20–30 minute non-participant sessions at requested 10, 15, and 30 FPS conditions;
+   - before the first run, derive and freeze a start-state envelope from a fixed idle-baseline
+     procedure: Android thermal status, battery temperature variability, charging state, and ambient
+     condition; record the procedure version and digest;
+   - start every measured run only after cooldown returns the device to that frozen envelope;
+     otherwise record the condition as blocked rather than relaxing the envelope;
+   - pre-register and record the cadence execution order so results cannot be reordered after
+     observation;
    - record delivered callbacks, submitted/emitted frames, every skip reason, inference latency
      percentiles, achieved-cadence time series, thermal status time series, battery start/end and
      charging state, app/device/model/delegate identity, and process/source outcome;
@@ -218,6 +240,7 @@ report version while mechanically marking affected predecessors as superseded.
 
 - Invalid or incomplete artifacts never enter an admitted/current root.
 - Privacy, backup, synchronization, scope, and provenance failures are typed and fail closed.
+- An `empty_scene` run with non-zero detection-active frame fraction fails scope admission.
 - A missing optional measurement is rendered `UNMEASURED`; a missing required measurement makes that
   operating condition inadmissible.
 - Tools return meaningful exit codes. Human-facing output is not parsed to decide success.
@@ -281,7 +304,8 @@ M0.5 implementation does not consume these gates automatically:
 
 1. approval of this written specification;
 2. privacy model acceptance, including storage administrator/location, access matrix, retention,
-   deletion/backups, incident handling, and no-face-blur risk;
+   deletion/backups, incident handling, and no-face-blur risk; every required decision must be
+   `ACCEPTED`, because `UNDECIDED` and `REJECTED` fail participant-capture admission;
 3. availability of two independent annotators before Gold labels or split freeze;
 4. explicit participant-capture authorization after M0.5 evidence is reviewed;
 5. approval of any numeric Phase 2 threshold and the final GO/NO-GO/CONDITIONAL-GO result;
@@ -298,12 +322,15 @@ M0.5 is complete only when:
 - the three protocols and governance contracts are versioned and mechanically validated;
 - study-mode artifact admission remains mechanically prohibited, and every physical capture carries
   the no-person operator attestation;
+- every registered admission path rejects absent `session_kind`, and empty-scene evidence rejects a
+  non-zero detection-active frame fraction;
 - backup/cloud/device-transfer exclusions cover every export root;
 - synchronized non-participant video and observation artifacts carry valid digest-bound sync evidence;
 - device withdrawal rehearsal removes the session from export, staging, transfer staging, study
   store, and derived roots, preserves only the tombstone, and verifies post-purge absence;
 - sustained S25 measurements exist for requested 10, 15, and 30 FPS with truthful time-series and
-  latency/thermal/battery evidence;
+  latency/thermal/battery evidence, the same frozen start-state envelope, cooldown admission, and a
+  pre-registered execution order;
 - the synthetic study pipeline regenerates its report in one command;
 - overlay-blind annotation is structural;
 - withdrawal creates a tombstone, split-v2, and superseded prior outputs without rewriting history;
