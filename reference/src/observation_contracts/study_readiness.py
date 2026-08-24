@@ -8,6 +8,7 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypeGuard
 
 from jsonschema import Draft202012Validator
 
@@ -170,16 +171,25 @@ def verify_study_readiness(
         "/condition_matrix/current",
         issues,
     )
+    prior_matrix = _load_matrix(
+        reference_content.get("/condition_matrix/prior"),
+        manifest_path,
+        "/condition_matrix/prior",
+        issues,
+    )
     locked_matrix = _load_matrix(
         reference_content.get("/condition_matrix/pilot_lock/locked_matrix"),
         manifest_path,
         "/condition_matrix/pilot_lock/locked_matrix",
         issues,
     )
-    _validate_matrix_binding(manifest, current_matrix, locked_matrix, manifest_path, issues)
+    _validate_matrix_binding(
+        manifest, current_matrix, prior_matrix, locked_matrix, manifest_path, issues
+    )
     _validate_outcomes(manifest, current_matrix, manifest_path, issues)
     _validate_locations(manifest, manifest_path, issues)
     _validate_cohorts(manifest, manifest_path, issues)
+    _validate_detection_readiness(manifest, manifest_path, issues)
     if require_participant_ready:
         _validate_participant_gate(manifest, artifact_success, manifest_path, issues)
     return _sorted(issues)
@@ -296,6 +306,7 @@ def _load_matrix(
 def _validate_matrix_binding(
     manifest: Mapping[str, object],
     current: Mapping[str, object] | None,
+    prior_matrix: Mapping[str, object] | None,
     locked: Mapping[str, object] | None,
     path: Path,
     issues: list[ValidationIssue],
@@ -327,6 +338,26 @@ def _validate_matrix_binding(
         )
     if current is not None:
         _validate_unique_condition_ids(current, path, "/condition_matrix/current", issues)
+    if prior_matrix is not None:
+        _validate_unique_condition_ids(prior_matrix, path, "/condition_matrix/prior", issues)
+    current_ref = _mapping(binding.get("current"))
+    prior_ref = _mapping(binding.get("prior"))
+    if current_ref and prior_ref:
+        current_digest = current_ref.get("sha256")
+        prior_digest = prior_ref.get("sha256")
+        if (
+            isinstance(current_digest, str)
+            and isinstance(prior_digest, str)
+            and hmac.compare_digest(current_digest, prior_digest)
+        ):
+            issues.append(
+                _issue(
+                    "STUDY.CONDITION_MATRIX_DRIFT",
+                    path,
+                    "an unlocked matrix revision prior must reference a different matrix digest",
+                    "/condition_matrix/prior",
+                )
+            )
     if is_locked and current is not None and locked is not None:
         current_conditions = {
             item.get("condition_id"): item for item in _mappings(current.get("conditions"))
@@ -345,6 +376,40 @@ def _validate_matrix_binding(
                         "/condition_matrix/current",
                     )
                 )
+
+
+def _validate_detection_readiness(
+    manifest: Mapping[str, object], path: Path, issues: list[ValidationIssue]
+) -> None:
+    scope = _mapping(manifest.get("platform_scope"))
+    input_class = scope.get("input_class")
+    fraction = scope.get("detection_active_frame_fraction")
+    pointer = "/platform_scope/detection_active_frame_fraction"
+    if input_class == "empty_scene":
+        if not _measured_fraction(fraction) or fraction != 0:
+            issues.append(
+                _issue(
+                    "STUDY.EMPTY_SCENE_DETECTION",
+                    path,
+                    "empty-scene readiness evidence must have exactly zero active detections",
+                    pointer,
+                )
+            )
+    elif input_class == "displayed_synthetic_figure" and (
+        not _measured_fraction(fraction) or fraction <= 0
+    ):
+        issues.append(
+            _issue(
+                "STUDY.SYNTHETIC_DETECTION_PENDING",
+                path,
+                "displayed synthetic figure readiness evidence requires positive measured detection",
+                pointer,
+            )
+        )
+
+
+def _measured_fraction(value: object) -> TypeGuard[int | float]:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def _validate_unique_condition_ids(

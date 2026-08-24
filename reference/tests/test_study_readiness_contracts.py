@@ -120,8 +120,8 @@ def readiness_manifest() -> dict[str, Any]:
             "preprocessing_contract_version": "1.0.0",
             "observation_contract_version": "1.0.0",
             "input_class": "empty_scene",
-            "submitted_frame_count": 0,
-            "detection_active_frame_fraction": "UNMEASURED",
+            "submitted_frame_count": 10,
+            "detection_active_frame_fraction": 0,
             "rendered_scope_statement": (
                 "scope: flagship Android only, non-participant empty_scene; no cross-device, "
                 "cross-platform, or participant-workload claim"
@@ -498,8 +498,8 @@ def _semantic_repository(
             "preprocessing_contract_version": "1.0.0",
             "observation_contract_version": "1.0.0",
             "input_class": "empty_scene",
-            "submitted_frame_count": 0,
-            "detection_active_frame_fraction": "UNMEASURED",
+            "submitted_frame_count": 10,
+            "detection_active_frame_fraction": 0,
             "rendered_scope_statement": "synthetic-only test scope",
         },
         "artifact_locations": sorted(_REGISTERED_LOCATIONS),
@@ -615,6 +615,45 @@ def test_participant_gate_accepts_digest_valid_accepted_privacy_decisions(tmp_pa
 
 
 @pytest.mark.parametrize(
+    ("input_class", "submitted_frame_count", "fraction", "expected_code"),
+    (
+        ("empty_scene", 10, 0.5, "STUDY.EMPTY_SCENE_DETECTION"),
+        ("displayed_synthetic_figure", 10, 0, "STUDY.SYNTHETIC_DETECTION_PENDING"),
+        (
+            "displayed_synthetic_figure",
+            0,
+            "UNMEASURED",
+            "STUDY.SYNTHETIC_DETECTION_PENDING",
+        ),
+    ),
+)
+def test_participant_gate_rejects_contradictory_or_pending_detection_evidence(
+    tmp_path: Path,
+    input_class: str,
+    submitted_frame_count: int,
+    fraction: float | str,
+    expected_code: str,
+) -> None:
+    _root, manifest_path, manifest, _matrix = _semantic_repository(
+        tmp_path,
+        locked=True,
+        accepted_privacy=True,
+    )
+    manifest["platform_scope"].update(
+        input_class=input_class,
+        submitted_frame_count=submitted_frame_count,
+        detection_active_frame_fraction=fraction,
+    )
+    _write_manifest(manifest_path, manifest)
+
+    issues = verify_study_readiness(manifest_path, require_participant_ready=True)
+
+    assert [(issue.code, issue.pointer) for issue in issues] == [
+        (expected_code, "/platform_scope/detection_active_frame_fraction")
+    ]
+
+
+@pytest.mark.parametrize(
     "mutation",
     ("missing_prior", "missing_reason"),
 )
@@ -637,13 +676,44 @@ def test_unlocked_matrix_revision_with_digest_valid_prior_and_reason_is_valid(
     tmp_path: Path,
 ) -> None:
     root, manifest_path, manifest, matrix = _semantic_repository(tmp_path)
+    prior_matrix = dict(matrix)
+    prior_matrix["matrix_id"] = "phase0-flagship-android-prior"
     manifest["condition_matrix"]["prior"] = _write_reference(
-        root, "docs/conditions/prior.json", matrix
+        root, "docs/conditions/prior.json", prior_matrix
     )
     manifest["condition_matrix"]["matrix_revision_reason"] = "clarify allocation"
     _write_manifest(manifest_path, manifest)
 
     assert verify_study_readiness(manifest_path) == []
+
+
+def test_unlocked_matrix_revision_rejects_digest_valid_non_matrix_prior(tmp_path: Path) -> None:
+    root, manifest_path, manifest, _matrix = _semantic_repository(tmp_path)
+    manifest["condition_matrix"]["prior"] = _write_reference(
+        root,
+        "docs/conditions/prior.json",
+        {"capture_protocol": "digest-valid but not a condition matrix"},
+    )
+    manifest["condition_matrix"]["matrix_revision_reason"] = "clarify allocation"
+    _write_manifest(manifest_path, manifest)
+
+    issues = verify_study_readiness(manifest_path)
+
+    assert "SCHEMA.INVALID" in _issue_codes(issues)
+    assert any(issue.artifact_kind == "study_condition_matrix" for issue in issues)
+
+
+def test_unlocked_matrix_revision_rejects_prior_digest_equal_to_current(tmp_path: Path) -> None:
+    _root, manifest_path, manifest, _matrix = _semantic_repository(tmp_path)
+    manifest["condition_matrix"]["prior"] = dict(manifest["condition_matrix"]["current"])
+    manifest["condition_matrix"]["matrix_revision_reason"] = "clarify allocation"
+    _write_manifest(manifest_path, manifest)
+
+    issues = verify_study_readiness(manifest_path)
+
+    assert [(issue.code, issue.pointer) for issue in issues] == [
+        ("STUDY.CONDITION_MATRIX_DRIFT", "/condition_matrix/prior")
+    ]
 
 
 def test_condition_matrix_duplicate_id_fails_closed(tmp_path: Path) -> None:

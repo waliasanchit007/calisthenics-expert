@@ -65,10 +65,10 @@ object M05Admission {
             }
         }
         return M05AdmissionResult(
-            sessionKind = LIVE_CONFORMANCE,
+            sessionKind = evidence.sessionKind,
             participantPseudonymId = "$PSEUDONYM_PREFIX${evidence.sessionId}",
             inputClass = evidence.inputClass,
-            operatorAttestedNoPerson = true,
+            operatorAttestedNoPerson = evidence.operatorAttestedNoPerson,
             detectionActiveFrameFraction = fraction,
             detectionEvidenceState = evidenceState,
             blockingCodes = blockingCodes.distinct(),

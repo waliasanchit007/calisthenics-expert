@@ -36,7 +36,10 @@ class M05AdmissionTest {
         )
 
         mutations.forEach { (evidence, code) ->
-            assertTrue(code in M05Admission.evaluate(evidence).blockingCodes)
+            val result = M05Admission.evaluate(evidence)
+            assertTrue(code in result.blockingCodes)
+            assertEquals(evidence.sessionKind, result.sessionKind)
+            assertEquals(evidence.operatorAttestedNoPerson, result.operatorAttestedNoPerson)
         }
         val unmeasured = M05Admission.evaluate(
             M05AdmissionEvidence("id", "live_conformance", M05InputClass.DISPLAYED_SYNTHETIC_FIGURE, true, 0, 0),

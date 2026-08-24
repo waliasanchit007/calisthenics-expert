@@ -47,6 +47,7 @@ import com.calisthenics.diagnostic.ui.ReplayRunSummary
 import com.calisthenics.diagnostic.ui.selectFixture
 import com.calisthenics.diagnostic.ui.selectLiveFps
 import com.calisthenics.diagnostic.ui.selectMode
+import com.calisthenics.diagnostic.ui.setOperatorAttestedNoPerson
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -145,6 +146,7 @@ class MainActivity : ComponentActivity() {
                 onModeSelected = { state = state.selectMode(it) },
                 onFixtureSelected = { state = state.selectFixture(it) },
                 onLiveFpsSelected = { state = state.selectLiveFps(it) },
+                onOperatorAttestationChanged = { state = state.setOperatorAttestedNoPerson(it) },
                 onRequestCameraPermission = { permissionLauncher.launch(Manifest.permission.CAMERA) },
                 onStop = {
                     val composition = liveComposition
@@ -199,8 +201,12 @@ class MainActivity : ComponentActivity() {
                                 return@launch
                             }
                             liveComposition = composition
+                            val operatorAttestedNoPerson = state.operatorAttestedNoPerson
                             when (val started = withContext(Dispatchers.IO) {
-                                composition.start(state.selectedLiveFps.value) { snapshot ->
+                                composition.start(
+                                    state.selectedLiveFps.value,
+                                    operatorAttestedNoPerson = operatorAttestedNoPerson,
+                                ) { snapshot ->
                                     state = state.copy(
                                         liveRunPhase = snapshot.toLiveRunning(
                                             fps = state.selectedLiveFps.value,

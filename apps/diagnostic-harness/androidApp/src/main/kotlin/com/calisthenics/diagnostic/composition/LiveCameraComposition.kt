@@ -84,7 +84,6 @@ private const val REQUESTED_CAMERA_HEIGHT = 720
 private const val STALL_TIMEOUT_NS = 5_000_000_000L
 private const val DRAIN_TIMEOUT_NS = 5_000_000_000L
 private val LIVE_M05_INPUT_CLASS = M05InputClass.EMPTY_SCENE
-private const val LIVE_M05_OPERATOR_ATTESTED_NO_PERSON = true
 
 sealed interface LiveCameraStartResult {
     data class Started(val sessionId: Uuid) : LiveCameraStartResult
@@ -101,6 +100,10 @@ sealed interface LiveUnavailableReason {
 
     data object CameraPermissionDenied : LiveUnavailableReason {
         override val code: String = "camera_permission_denied"
+    }
+
+    data object OperatorAttestationRequired : LiveUnavailableReason {
+        override val code: String = "operator_no_person_attestation_required"
     }
 
     data class ThermalApi(val detail: String) : LiveUnavailableReason {
@@ -317,7 +320,11 @@ class LiveCameraComposition internal constructor(
     private var resourcesReleased = false
     private var abandonRequested = false
 
-    fun start(configuredInferenceFps: Int, onProgress: (SessionRunnerSnapshot) -> Unit = {}): LiveCameraStartResult {
+    fun start(
+        configuredInferenceFps: Int,
+        operatorAttestedNoPerson: Boolean,
+        onProgress: (SessionRunnerSnapshot) -> Unit = {},
+    ): LiveCameraStartResult {
         var unavailable: LiveCameraStartResult.Unavailable? = null
         var releasePlan: ResourceReleasePlan? = null
         var createdRunner: SessionRunner? = null
@@ -334,6 +341,9 @@ class LiveCameraComposition internal constructor(
             }
             if (sessionId != null) {
                 return LiveCameraStartResult.Unavailable(LiveUnavailableReason.Initialization("live_session_already_started"))
+            }
+            if (!operatorAttestedNoPerson) {
+                return LiveCameraStartResult.Unavailable(LiveUnavailableReason.OperatorAttestationRequired)
             }
             if (!dependencies.permissionGranted) {
                 unavailable = LiveCameraStartResult.Unavailable(LiveUnavailableReason.CameraPermissionDenied)
@@ -377,7 +387,7 @@ class LiveCameraComposition internal constructor(
             sessionId = id
             createdSessionId = id
             try {
-                val initialM05Admission = evaluateM05Admission(id, submittedFrameCount = 0, detectionActiveFrameCount = 0)
+                val initialM05Admission = evaluateM05Admission(id, operatorAttestedNoPerson, submittedFrameCount = 0, detectionActiveFrameCount = 0)
                 m05Admission = initialM05Admission
                 val liveInference = dependencies.inferenceFactory(::relativeNowNs)
                 inference = liveInference
@@ -422,6 +432,7 @@ class LiveCameraComposition internal constructor(
                             val thermalObservations = activeThermalProbe.observations()
                             val finalizedM05Admission = evaluateM05Admission(
                                 id = checkNotNull(sessionId),
+                                operatorAttestedNoPerson = operatorAttestedNoPerson,
                                 submittedFrameCount = sealed.counts.inferenceFramesSubmitted,
                                 detectionActiveFrameCount = sealed.counts.poseDetectedRecords,
                             )
@@ -1102,6 +1113,7 @@ class LiveCameraComposition internal constructor(
 
     private fun evaluateM05Admission(
         id: Uuid,
+        operatorAttestedNoPerson: Boolean,
         submittedFrameCount: Long,
         detectionActiveFrameCount: Long,
     ): M05AdmissionResult = M05Admission.evaluate(
@@ -1109,7 +1121,7 @@ class LiveCameraComposition internal constructor(
             sessionId = id.value,
             sessionKind = LIVE_SESSION_KIND,
             inputClass = LIVE_M05_INPUT_CLASS,
-            operatorAttestedNoPerson = LIVE_M05_OPERATOR_ATTESTED_NO_PERSON,
+            operatorAttestedNoPerson = operatorAttestedNoPerson,
             submittedFrameCount = submittedFrameCount,
             detectionActiveFrameCount = detectionActiveFrameCount,
         ),

@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
@@ -25,6 +26,7 @@ fun HarnessApp(
     onModeSelected: (HarnessMode) -> Unit = {},
     onFixtureSelected: (ReplayFixtureOption) -> Unit = {},
     onLiveFpsSelected: (LiveInferenceFps) -> Unit = {},
+    onOperatorAttestationChanged: (Boolean) -> Unit = {},
     onStart: () -> Unit = {},
     onStop: () -> Unit = {},
     onRequestCameraPermission: () -> Unit = {},
@@ -67,6 +69,13 @@ fun HarnessApp(
             }
             if (state.capabilities.any { it.id == CapabilityId.CAMERA_PERMISSION && it.state is CapabilityState.Unavailable }) {
                 Button(onClick = onRequestCameraPermission) { Text("Grant camera permission") }
+            }
+            Row {
+                Checkbox(
+                    checked = state.operatorAttestedNoPerson,
+                    onCheckedChange = onOperatorAttestationChanged,
+                )
+                Text("No person visible before camera start")
             }
         }
         Text("Capabilities", style = MaterialTheme.typography.titleMedium)

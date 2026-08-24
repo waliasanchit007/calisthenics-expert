@@ -25,7 +25,10 @@ class LiveRunStateTest {
             sessionActive = false,
         )
 
-        assertTrue(state.canStart)
+        assertFalse(state.canStart)
+        assertEquals(listOf("operator_no_person_attestation_required"), state.disabledReasons)
+        val attested = state.setOperatorAttestedNoPerson(true)
+        assertTrue(attested.canStart)
         val denied = state.copy(
             capabilities = state.capabilities.map {
                 if (it.id == CapabilityId.CAMERA_PERMISSION) {
@@ -34,7 +37,32 @@ class LiveRunStateTest {
             },
         )
         assertFalse(denied.canStart)
-        assertEquals(listOf("CAMERA_PERMISSION: camera_permission_denied"), denied.disabledReasons)
+        assertEquals(
+            listOf(
+                "CAMERA_PERMISSION: camera_permission_denied",
+                "operator_no_person_attestation_required",
+            ),
+            denied.disabledReasons,
+        )
+    }
+
+    @Test
+    fun liveNoPersonAttestationStartsFalseAndMustBeDeliberatelySetForEachRun() {
+        val live = HarnessUiState(
+            platform = "Android",
+            capabilities = liveCapabilities().map { it.copy(state = CapabilityState.Available) },
+            selectedMode = HarnessMode.LIVE,
+            sessionActive = false,
+        )
+
+        assertFalse(live.operatorAttestedNoPerson)
+        assertTrue(live.setOperatorAttestedNoPerson(true).operatorAttestedNoPerson)
+        assertFalse(
+            live.setOperatorAttestedNoPerson(true)
+                .selectMode(HarnessMode.REPLAY)
+                .selectMode(HarnessMode.LIVE)
+                .operatorAttestedNoPerson,
+        )
     }
 
     @Test
