@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://calisthenics-movement-intelligence.local/contracts/tooling/study_condition_matrix.v1.schema.json",
+  "title": "StudyConditionMatrix v1",
+  "description": "Pre-registered, versioned condition allocation for the non-participant study-readiness boundary.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "condition_matrix_schema_version",
+    "matrix_id",
+    "conditions"
+  ],
+  "properties": {
+    "condition_matrix_schema_version": {
+      "const": "1.0.0"
+    },
+    "matrix_id": {
+      "$ref": "#/$defs/lowercase_slug"
+    },
+    "conditions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/condition"
+      },
+      "contains": {
+        "type": "object",
+        "required": ["classification"],
+        "properties": {
+          "classification": {
+            "const": "required"
+          }
+        }
+      },
+      "minContains": 1
+    }
+  },
+  "$defs": {
+    "lowercase_slug": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "slug_array": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/lowercase_cell_slug"
+      }
+    },
+    "lowercase_cell_slug": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:[-_][a-z0-9]+)*$"
+    },
+    "condition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "condition_id",
+        "classification",
+        "set_count",
+        "required_artifact_cells",
+        "required_metric_cells",
+        "source"
+      ],
+      "properties": {
+        "condition_id": {
+          "$ref": "#/$defs/lowercase_slug"
+        },
+        "classification": {
+          "enum": ["required", "exploratory"]
+        },
+        "set_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "required_artifact_cells": {
+          "$ref": "#/$defs/slug_array"
+        },
+        "required_metric_cells": {
+          "$ref": "#/$defs/slug_array"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}
