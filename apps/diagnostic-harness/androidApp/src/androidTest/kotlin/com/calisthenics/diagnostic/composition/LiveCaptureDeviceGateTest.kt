@@ -190,6 +190,7 @@ class LiveCaptureDeviceGateTest {
                         sourceErrorCode = it.sourceErrorCode,
                     )
                 } ?: emptyList(),
+                m05Admission = composition?.m05Admission(),
             )
             instrumentation.sendStatus(
                 STATUS_CODE,

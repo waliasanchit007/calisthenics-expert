@@ -1,5 +1,13 @@
 package com.calisthenics.diagnostic.live
 
+import com.calisthenics.diagnostic.study.M05Admission
+import com.calisthenics.diagnostic.study.M05AdmissionEvidence
+import com.calisthenics.diagnostic.study.M05InputClass
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.double
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -7,6 +15,35 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class LiveCaptureEvidenceTest {
+    @Test
+    fun m05AdmissionMarkerRendersAOnePointOneRecordWithDerivedValues() {
+        val admission = M05Admission.evaluate(
+            M05AdmissionEvidence(
+                sessionId = "00000000-0000-4000-8000-000000000001",
+                sessionKind = "live_conformance",
+                inputClass = M05InputClass.EMPTY_SCENE,
+                operatorAttestedNoPerson = true,
+                submittedFrameCount = 10,
+                detectionActiveFrameCount = 0,
+            ),
+        )
+
+        val rendered = renderLiveCaptureEvidence(admittedEvidence().copy(m05Admission = admission))
+        val root = Json.parseToJsonElement(rendered).jsonObject
+        val marker = root.getValue("m05_admission").jsonObject
+
+        assertEquals("1.1.0", root.getValue("artifact_schema_version").jsonPrimitive.content)
+        assertEquals("live_conformance", marker.getValue("session_kind").jsonPrimitive.content)
+        assertEquals(
+            "synthetic-m05-00000000-0000-4000-8000-000000000001",
+            marker.getValue("participant_pseudonym_id").jsonPrimitive.content,
+        )
+        assertEquals("empty_scene", marker.getValue("input_class").jsonPrimitive.content)
+        assertTrue(marker.getValue("operator_attested_no_person").jsonPrimitive.boolean)
+        assertEquals(0.0, marker.getValue("detection_active_frame_fraction").jsonPrimitive.double)
+        assertEquals("not_applicable", marker.getValue("detection_evidence_state").jsonPrimitive.content)
+    }
+
     @Test
     fun rejectsMalformedHarnessGitSha() {
         assertFailsWith<IllegalArgumentException> {

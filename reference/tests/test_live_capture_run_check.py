@@ -9,8 +9,10 @@ import pytest
 ROOT = Path(__file__).parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 
+import check_five_run_replay
 import check_live_capture_run as live_checker
 from check_live_capture_run import (
+    M05_ADMISSION_PATHS,
     LiveCaptureCheckError,
     check_transcript,
     verify_recorded_ledger,
@@ -149,6 +151,206 @@ def manifest() -> dict:
             "thermal_observations": exact_record()["thermal"],
         },
     }
+
+
+def m05_record() -> dict:
+    record = exact_record()
+    record["artifact_schema_version"] = "1.1.0"
+    record["m05_admission"] = {
+        "session_kind": "live_conformance",
+        "participant_pseudonym_id": "synthetic-m05-session-1",
+        "input_class": "empty_scene",
+        "operator_attested_no_person": True,
+        "detection_active_frame_fraction": 0.0,
+        "detection_evidence_state": "not_applicable",
+    }
+    return record
+
+
+def m05_manifest() -> dict:
+    pulled = manifest()
+    pulled["participant_pseudonym_id"] = "synthetic-m05-session-1"
+    pulled["study_context"]["m05_admission"] = m05_record()["m05_admission"]
+    return pulled
+
+
+def verify_m05_admission_path(
+    path: str,
+    record: dict,
+    expected_code: str,
+    tmp_path: Path,
+) -> None:
+    if path == "live_transcript":
+        checked = check_transcript(transcript(record), m05_manifest(), True, 0)
+        assert expected_code in checked["blocking_reasons"]
+        assert checked["satisfies_s25_live_capture"] is False
+        return
+
+    evidence_path = tmp_path / "evidence.json"
+    record["blocking_reasons"] = [expected_code]
+    record["satisfies_s25_live_capture"] = False
+    evidence_path.write_text(json.dumps(record, sort_keys=True) + "\n", encoding="utf-8")
+    ledger_path = tmp_path / "ledger.json"
+    ledger_path.write_text(
+        json.dumps(
+            {
+                "status": "recorded",
+                "evidence_file": "evidence.json",
+                "evidence_sha256": hashlib.sha256(evidence_path.read_bytes()).hexdigest(),
+                "live_admission": "blocked",
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert verify_recorded_ledger(tmp_path, ledger_path.name)["status"] == "recorded"
+
+
+@pytest.mark.parametrize("path", M05_ADMISSION_PATHS)
+@pytest.mark.parametrize(
+    ("mutate", "expected_code"),
+    [
+        (
+            lambda record: record["m05_admission"].pop("session_kind"),
+            "STUDY.ADMISSION_SESSION_KIND",
+        ),
+        (
+            lambda record: record["m05_admission"].update(session_kind="live_study"),
+            "STUDY.ADMISSION_SESSION_KIND",
+        ),
+        (
+            lambda record: record["m05_admission"].update(participant_pseudonym_id="human"),
+            "STUDY.ADMISSION_INPUT_CLASS",
+        ),
+        (
+            lambda record: record["m05_admission"].update(
+                participant_pseudonym_id="synthetic-m05-other"
+            ),
+            "STUDY.ADMISSION_INPUT_CLASS",
+        ),
+        (
+            lambda record: record["m05_admission"].update(input_class="participant"),
+            "STUDY.ADMISSION_INPUT_CLASS",
+        ),
+        (
+            lambda record: record["m05_admission"].update(input_class="synthetic_fixture"),
+            "STUDY.ADMISSION_INPUT_CLASS",
+        ),
+        (
+            lambda record: record["m05_admission"].pop("operator_attested_no_person"),
+            "STUDY.ADMISSION_INPUT_CLASS",
+        ),
+        (
+            lambda record: record["m05_admission"].update(operator_attested_no_person=False),
+            "STUDY.ADMISSION_INPUT_CLASS",
+        ),
+        (
+            lambda record: record["m05_admission"].update(detection_active_frame_fraction=0.1),
+            "STUDY.EMPTY_SCENE_DETECTION",
+        ),
+        (
+            lambda record: record["m05_admission"].update(
+                input_class="displayed_synthetic_figure",
+                detection_active_frame_fraction=0.0,
+                detection_evidence_state="pending",
+            ),
+            "STUDY.SYNTHETIC_DETECTION_PENDING",
+        ),
+        (
+            lambda record: record["m05_admission"].update(
+                input_class="displayed_synthetic_figure",
+                detection_active_frame_fraction=0.0,
+                detection_evidence_state="active",
+            ),
+            "STUDY.SYNTHETIC_DETECTION_PENDING",
+        ),
+        (
+            lambda record: record["m05_admission"].update(
+                input_class="displayed_synthetic_figure",
+                detection_active_frame_fraction="UNMEASURED",
+                detection_evidence_state="pending",
+            ),
+            "STUDY.SYNTHETIC_DETECTION_PENDING",
+        ),
+    ],
+)
+def test_every_m05_admission_path_rejects_incompatible_metadata(
+    path: str, mutate, expected_code: str, tmp_path: Path
+) -> None:
+    record = m05_record()
+    mutate(record)
+    verify_m05_admission_path(path, record, expected_code, tmp_path)
+
+
+def test_existing_recorded_ledgers_verify_unchanged_and_live_evidence_stays_legacy() -> None:
+    live_ledger = verify_recorded_ledger(
+        ROOT,
+        "docs/evidence/live-capture/s25-ultra-live-capture-ledger.json",
+    )
+    replay_ledger = check_five_run_replay.verify_recorded_ledger(
+        ROOT,
+        "docs/evidence/replay-five-run/s25-ultra-five-run-replay-ledger.json",
+    )
+    evidence = json.loads((ROOT / live_ledger["evidence_file"]).read_text(encoding="utf-8"))
+    assert live_ledger["status"] == "recorded"
+    assert replay_ledger["status"] == "recorded"
+    assert evidence["artifact_schema_version"] == "1.0.0"
+    assert "m05_admission" not in evidence
+
+
+@pytest.mark.parametrize("path", M05_ADMISSION_PATHS)
+def test_m05_marker_requires_schema_one_point_one_on_every_path(path: str, tmp_path: Path) -> None:
+    record = m05_record()
+    record["artifact_schema_version"] = "1.0.0"
+    if path == "live_transcript":
+        with pytest.raises(LiveCaptureCheckError, match="schema version"):
+            check_transcript(transcript(record), m05_manifest(), True, 0)
+        return
+
+    evidence_path = tmp_path / "evidence.json"
+    evidence_path.write_text(json.dumps(record, sort_keys=True) + "\n", encoding="utf-8")
+    (tmp_path / "ledger.json").write_text(
+        json.dumps(
+            {
+                "status": "recorded",
+                "evidence_file": "evidence.json",
+                "evidence_sha256": hashlib.sha256(evidence_path.read_bytes()).hexdigest(),
+                "live_admission": "admitted",
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(LiveCaptureCheckError, match="schema version"):
+        verify_recorded_ledger(tmp_path, "ledger.json")
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "expected"),
+    [
+        (
+            ("participant_pseudonym_id",),
+            "synthetic-m05-other",
+            "manifest_participant_pseudonym_mismatch",
+        ),
+        (
+            ("study_context", "m05_admission", "input_class"),
+            "displayed_synthetic_figure",
+            "manifest_m05_admission_mismatch",
+        ),
+    ],
+)
+def test_live_manifest_m05_marker_must_match_device_evidence(
+    path: tuple[str, ...], value: object, expected: str
+) -> None:
+    pulled = m05_manifest()
+    target = pulled
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+
+    checked = check_transcript(transcript(m05_record()), pulled, True, 0)
+
+    assert expected in checked["blocking_reasons"]
+    assert checked["satisfies_s25_live_capture"] is False
 
 
 def test_admitted_transcript_requires_manifest_and_all_observed_conjuncts() -> None:

@@ -18,6 +18,7 @@ import com.calisthenics.diagnostic.session.SessionRunnerSnapshot
 import com.calisthenics.diagnostic.ui.LiveRunPhase
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.double
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -37,6 +38,39 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.system.measureTimeMillis
 
 class LiveCameraCompositionTest {
+    @Test
+    fun liveManifestDoesNotEmitACallerSelectedParticipantIdentity() {
+        withHarness(Harness()) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+
+            assertEquals(
+                "synthetic-m05-${harness.manifest.sessionId.value}",
+                harness.manifest.participantPseudonymId,
+            )
+        }
+    }
+
+    @Test
+    fun finalizedManifestAndM05AdmissionShareTheDerivedIdentityAndDetectionEvidence() {
+        withHarness(Harness(invokeManifestAtFinalization = true)) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            harness.source.emit(frame(timestampNs = 1_000_002_000L))
+            harness.inference.completeSuccess()
+            harness.composition.stop()
+
+            val admission = assertNotNull(harness.composition.m05Admission())
+            val finalized = assertNotNull(harness.finalizedManifest)
+            val marker = assertIs<JsonObject>(finalized.studyContext.getValue("m05_admission"))
+            assertEquals(admission.sessionKind, finalized.sessionKind)
+            assertEquals(admission.participantPseudonymId, finalized.participantPseudonymId)
+            assertEquals(admission.participantPseudonymId, marker["participant_pseudonym_id"]?.jsonPrimitive?.content)
+            assertEquals(admission.inputClass.wireValue, marker["input_class"]?.jsonPrimitive?.content)
+            assertEquals(admission.detectionActiveFrameFraction, marker["detection_active_frame_fraction"]?.jsonPrimitive?.double)
+            assertEquals(admission.detectionEvidenceState.wireValue, marker["detection_evidence_state"]?.jsonPrimitive?.content)
+            assertEquals(admission.operatorAttestedNoPerson, marker["operator_attested_no_person"]?.jsonPrimitive?.boolean)
+        }
+    }
+
     @Test
     fun unsupportedFpsReleasesOwnedSchedulerBeforeAnySessionResourceIsCreated() {
         val harness = Harness()

@@ -32,6 +32,7 @@ import com.calisthenics.diagnostic.live.LiveCaptureCadenceDiagnostics
 import com.calisthenics.diagnostic.live.LiveCaptureThermalObservation
 import com.calisthenics.diagnostic.live.LiveCaptureThermalSummary
 import com.calisthenics.diagnostic.live.achievedInferenceFpsTimeseriesOf
+import com.calisthenics.diagnostic.live.asLiveEvidenceJson
 import com.calisthenics.diagnostic.mediapipe.PoseLandmarkerConstructionEvidence
 import com.calisthenics.diagnostic.mediapipe.PoseLandmarkerLiveAdapterFactory
 import com.calisthenics.diagnostic.mediapipe.PoseLandmarkerLiveInferencePort
@@ -57,6 +58,10 @@ import com.calisthenics.diagnostic.session.SessionRunner
 import com.calisthenics.diagnostic.session.SessionRunnerSnapshot
 import com.calisthenics.diagnostic.session.SessionConfiguration
 import com.calisthenics.diagnostic.session.SkipReason
+import com.calisthenics.diagnostic.study.M05Admission
+import com.calisthenics.diagnostic.study.M05AdmissionEvidence
+import com.calisthenics.diagnostic.study.M05AdmissionResult
+import com.calisthenics.diagnostic.study.M05InputClass
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
@@ -78,6 +83,8 @@ private const val REQUESTED_CAMERA_WIDTH = 1280
 private const val REQUESTED_CAMERA_HEIGHT = 720
 private const val STALL_TIMEOUT_NS = 5_000_000_000L
 private const val DRAIN_TIMEOUT_NS = 5_000_000_000L
+private val LIVE_M05_INPUT_CLASS = M05InputClass.EMPTY_SCENE
+private const val LIVE_M05_OPERATOR_ATTESTED_NO_PERSON = true
 
 sealed interface LiveCameraStartResult {
     data class Started(val sessionId: Uuid) : LiveCameraStartResult
@@ -258,7 +265,6 @@ class LiveCameraComposition internal constructor(
     }
 
     data class LiveManifestMetadata(
-        val participantPseudonymId: String = "device-live",
         val cameraFacing: String = "back",
         val orientationDegrees: Int = 0,
         val mirrored: Boolean = false,
@@ -277,6 +283,7 @@ class LiveCameraComposition internal constructor(
     private var inference: LiveInference? = null
     private var thermalProbe: LiveThermalProbe? = null
     private var manifest: SessionManifest? = null
+    private var m05Admission: M05AdmissionResult? = null
     private var frameIndex = 0L
     private data class SourceGeometry(
         val width: Int,
@@ -370,6 +377,8 @@ class LiveCameraComposition internal constructor(
             sessionId = id
             createdSessionId = id
             try {
+                val initialM05Admission = evaluateM05Admission(id, submittedFrameCount = 0, detectionActiveFrameCount = 0)
+                m05Admission = initialM05Admission
                 val liveInference = dependencies.inferenceFactory(::relativeNowNs)
                 inference = liveInference
                 val template = buildManifest(
@@ -377,6 +386,7 @@ class LiveCameraComposition internal constructor(
                     configuredInferenceFps,
                     liveInference.constructionEvidence,
                     dependencies.wallClockUtc(),
+                    initialM05Admission,
                 )
                 manifest = template
                 val trackedInference = TerminalTrackingInferencePort(
@@ -410,7 +420,15 @@ class LiveCameraComposition internal constructor(
                             this@LiveCameraComposition.cadenceDiagnostics = cadenceDiagnostics
                             val activeThermalProbe = checkNotNull(thermalProbe)
                             val thermalObservations = activeThermalProbe.observations()
+                            val finalizedM05Admission = evaluateM05Admission(
+                                id = checkNotNull(sessionId),
+                                submittedFrameCount = sealed.counts.inferenceFramesSubmitted,
+                                detectionActiveFrameCount = sealed.counts.poseDetectedRecords,
+                            )
+                            m05Admission = finalizedM05Admission
                             val completed = finalized.copy(
+                                sessionKind = finalizedM05Admission.sessionKind,
+                                participantPseudonymId = finalizedM05Admission.participantPseudonymId,
                                 camera = finalized.camera.copy(
                                     captureWidth = geometry.width,
                                     captureHeight = geometry.height,
@@ -430,6 +448,7 @@ class LiveCameraComposition internal constructor(
                                 ),
                                 clock = finalized.clock.copy(endedAtUtc = dependencies.wallClockUtc()),
                                 studyContext = finalized.studyContext + mapOf(
+                                    "m05_admission" to finalizedM05Admission.asLiveEvidenceJson(),
                                     "camera_cadence_diagnostics" to cadenceDiagnostics.asJson(),
                                     "thermal_observations" to buildJsonObject {
                                         put("api_available", activeThermalProbe.available)
@@ -604,6 +623,8 @@ class LiveCameraComposition internal constructor(
     }
 
     fun manifest(): SessionManifest? = synchronized(monitor) { manifest }
+
+    fun m05Admission(): M05AdmissionResult? = synchronized(monitor) { m05Admission }
 
     /** Observed delivery span, used by the physical gate after the first delivered callback. */
     fun observedCaptureSpanNs(): Long? = synchronized(monitor) {
@@ -997,10 +1018,12 @@ class LiveCameraComposition internal constructor(
         configuredInferenceFps: Int,
         evidence: PoseLandmarkerConstructionEvidence,
         startedAtUtc: String,
+        m05Admission: M05AdmissionResult,
     ): SessionManifest {
         val metadata = dependencies.manifestMetadata
         val provenance = metadata.provenance
         val studyContext: Map<String, JsonElement> = mapOf(
+            "m05_admission" to m05Admission.asLiveEvidenceJson(),
             "mediapipe_construction_evidence" to buildJsonObject {
                 put("model_sha256", evidence.modelSha256)
                 put("tasks_vision_version", evidence.tasksVisionVersion)
@@ -1018,8 +1041,8 @@ class LiveCameraComposition internal constructor(
         return SessionManifest(
             schemaVersion = SemanticVersion("1.1.0"),
             sessionId = id,
-            sessionKind = LIVE_SESSION_KIND,
-            participantPseudonymId = metadata.participantPseudonymId,
+            sessionKind = m05Admission.sessionKind,
+            participantPseudonymId = m05Admission.participantPseudonymId,
             captureProtocolVersion = SemanticVersion("1.0.0"),
             harnessGitSha = metadata.harnessGitSha,
             device = metadata.device.copy(thermalApiAvailable = thermalProbe?.available ?: false),
@@ -1076,6 +1099,21 @@ class LiveCameraComposition internal constructor(
             studyContext = studyContext,
         )
     }
+
+    private fun evaluateM05Admission(
+        id: Uuid,
+        submittedFrameCount: Long,
+        detectionActiveFrameCount: Long,
+    ): M05AdmissionResult = M05Admission.evaluate(
+        M05AdmissionEvidence(
+            sessionId = id.value,
+            sessionKind = LIVE_SESSION_KIND,
+            inputClass = LIVE_M05_INPUT_CLASS,
+            operatorAttestedNoPerson = LIVE_M05_OPERATOR_ATTESTED_NO_PERSON,
+            submittedFrameCount = submittedFrameCount,
+            detectionActiveFrameCount = detectionActiveFrameCount,
+        ),
+    )
 
     companion object {
         fun fromAndroid(

@@ -1,6 +1,7 @@
 package com.calisthenics.diagnostic.live
 
 import com.calisthenics.diagnostic.replay.isAuthorizedS25Target
+import com.calisthenics.diagnostic.study.M05AdmissionResult
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
@@ -10,6 +11,7 @@ import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 
 const val LIVE_CAPTURE_EVIDENCE_SCHEMA_VERSION = "1.0.0"
+const val LIVE_CAPTURE_M05_EVIDENCE_SCHEMA_VERSION = "1.1.0"
 const val LIVE_CAPTURE_RECORD_KIND = "live_capture_device_gate_observation"
 
 const val LIVE_CAPTURE_BLOCK_UNAUTHORIZED_TARGET = "unauthorized_device_target"
@@ -130,6 +132,7 @@ data class LiveCaptureEvidence(
     val runFailureCode: String? = null,
     val runFailureDetail: String? = null,
     val inferenceFailureIdentities: List<LiveCaptureFailureIdentity> = emptyList(),
+    val m05Admission: M05AdmissionResult? = null,
 ) {
     init {
         require(HARNESS_GIT_SHA_PATTERN.matches(harnessGitSha)) {
@@ -198,6 +201,7 @@ fun liveCaptureBlockingReasons(evidence: LiveCaptureEvidence): List<String> {
         reasons += LIVE_CAPTURE_BLOCK_CADENCE_DIAGNOSTICS
     }
     if (!evidence.referenceValidationSucceeded) reasons += LIVE_CAPTURE_BLOCK_VALIDATOR
+    evidence.m05Admission?.blockingCodes?.let(reasons::addAll)
     evidence.runFailureCode?.let { reasons += it }
     if (!evidence.instrumentationSucceeded) reasons += LIVE_CAPTURE_BLOCK_INSTRUMENTATION
     return reasons
@@ -205,16 +209,33 @@ fun liveCaptureBlockingReasons(evidence: LiveCaptureEvidence): List<String> {
 
 fun liveCaptureIsAdmitted(evidence: LiveCaptureEvidence): Boolean = liveCaptureBlockingReasons(evidence).isEmpty()
 
+fun M05AdmissionResult.asLiveEvidenceJson(): JsonObject = buildJsonObject {
+    put("session_kind", sessionKind)
+    put("participant_pseudonym_id", participantPseudonymId)
+    put("input_class", inputClass.wireValue)
+    put("operator_attested_no_person", operatorAttestedNoPerson)
+    if (detectionActiveFrameFraction == null) {
+        put("detection_active_frame_fraction", "UNMEASURED")
+    } else {
+        put("detection_active_frame_fraction", detectionActiveFrameFraction)
+    }
+    put("detection_evidence_state", detectionEvidenceState.wireValue)
+}
+
 fun renderLiveCaptureEvidence(evidence: LiveCaptureEvidence): String {
     val blockingReasons = liveCaptureBlockingReasons(evidence)
     val record: JsonObject = buildJsonObject {
-        put("artifact_schema_version", LIVE_CAPTURE_EVIDENCE_SCHEMA_VERSION)
+        put(
+            "artifact_schema_version",
+            if (evidence.m05Admission == null) LIVE_CAPTURE_EVIDENCE_SCHEMA_VERSION else LIVE_CAPTURE_M05_EVIDENCE_SCHEMA_VERSION,
+        )
         put("record_kind", LIVE_CAPTURE_RECORD_KIND)
         put("sanitized", true)
         put("contains_landmark_coordinates", false)
         put("emitted_by", evidence.emittedBy)
         put("session_id", evidence.sessionId)
         put("harness_git_sha", evidence.harnessGitSha)
+        evidence.m05Admission?.let { put("m05_admission", it.asLiveEvidenceJson()) }
         putJsonObject("environment") {
             put("device_class", evidence.environment.deviceClass)
             put("device_identity", evidence.environment.deviceIdentity)
