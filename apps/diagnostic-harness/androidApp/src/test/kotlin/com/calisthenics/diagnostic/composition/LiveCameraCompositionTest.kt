@@ -963,8 +963,10 @@ class LiveCameraCompositionTest {
         assertFailsWith<RejectedExecutionException> {
             harness.sessionDispatchers.single().dispatch {}
         }
+        val worker = harness.sessionDispatcherThreads.single()
+        worker.join(1_000)
         assertFalse(
-            harness.sessionDispatcherThreads.single().isAlive,
+            worker.isAlive,
             "owned live session dispatcher worker leaked",
         )
     }
