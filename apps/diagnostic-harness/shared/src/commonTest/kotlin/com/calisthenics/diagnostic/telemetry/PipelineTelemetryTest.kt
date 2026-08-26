@@ -6,6 +6,20 @@ import kotlin.test.assertFailsWith
 
 class PipelineTelemetryTest {
     @Test
+    fun deliveredCallbackLedgerRequiresExactlyOneDistinctTerminalDispositionPerCallback() {
+        val ledger = DeliveredCallbackLedger()
+        CallbackTerminalDisposition.entries.forEachIndexed { index, disposition ->
+            ledger.begin(index.toLong())
+            ledger.close(index.toLong(), disposition)
+        }
+
+        assertEquals(CallbackTerminalDisposition.entries.size.toLong(), ledger.deliveredCallbacks)
+        assertEquals(0L, ledger.unclosedCallbacks)
+        assertEquals(1L, ledger.counts.getValue(CallbackTerminalDisposition.CLOCK_FAULT))
+        assertFailsWith<IllegalStateException> { ledger.close(0L, CallbackTerminalDisposition.PREPROCESSING_FAILED) }
+    }
+
+    @Test
     fun stageRecorderStreamsContiguousEventsAndDerivesCountsFromThem() {
         val sink = RecordingTelemetrySink()
         val recorder = PipelineStageRecorder(nowNs = { 41L }, sink = sink)

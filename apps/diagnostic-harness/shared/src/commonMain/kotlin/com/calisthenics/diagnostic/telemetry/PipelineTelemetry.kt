@@ -39,6 +39,51 @@ enum class PipelineDisposition {
     ENCODER_WRITTEN,
 }
 
+/** The one and only terminal outcome for each callback delivered to the analyzer. */
+enum class CallbackTerminalDisposition {
+    SOURCE_NOT_READY,
+    CLOCK_FAULT,
+    SOURCE_LOSS,
+    PREPROCESSING_FAILED,
+    CADENCE_SELECTION,
+    BACKPRESSURE,
+    SESSION_STOPPING,
+    INFERENCE_FAILED,
+    INFERENCE_COMPLETED,
+    /** Task 4 will make this live when video encoder fan-out exists. */
+    ENCODER_ACCEPTED,
+    ENCODER_DROPPED,
+    ENCODER_WRITTEN,
+}
+
+/** Bounded accounting only; it intentionally never retains callback IDs after they close. */
+class DeliveredCallbackLedger {
+    private val mutableCounts = mutableMapOf<CallbackTerminalDisposition, Long>()
+    private var openFrameIndex: Long? = null
+    var deliveredCallbacks: Long = 0L
+        private set
+
+    val counts: Map<CallbackTerminalDisposition, Long>
+        get() = mutableCounts.toMap()
+
+    val unclosedCallbacks: Long
+        get() = if (openFrameIndex == null) 0L else 1L
+
+    fun begin(frameIndex: Long) {
+        require(frameIndex >= 0L) { "frame index must be non-negative" }
+        check(openFrameIndex == null) { "a delivered callback is already open" }
+        openFrameIndex = frameIndex
+        deliveredCallbacks += 1L
+    }
+
+    fun close(frameIndex: Long, disposition: CallbackTerminalDisposition) {
+        require(frameIndex >= 0L) { "frame index must be non-negative" }
+        check(openFrameIndex == frameIndex) { "callback has no open terminal disposition slot" }
+        openFrameIndex = null
+        mutableCounts[disposition] = (mutableCounts[disposition] ?: 0L) + 1L
+    }
+}
+
 data class PipelineStageEvent(
     val sequence: Long,
     val tSessionNs: Long,
