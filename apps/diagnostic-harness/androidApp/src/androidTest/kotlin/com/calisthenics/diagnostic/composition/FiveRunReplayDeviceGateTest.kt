@@ -6,6 +6,7 @@ import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import androidx.test.platform.app.InstrumentationRegistry
+import com.calisthenics.diagnostic.contract.decodeFrame
 import com.calisthenics.diagnostic.export.AndroidStorageRoots
 import com.calisthenics.diagnostic.export.StorageRootsResult
 import com.calisthenics.diagnostic.hash.Sha256Digest
@@ -72,6 +73,9 @@ class FiveRunReplayDeviceGateTest {
             val manifestFile = File(exportDir, "manifest.json")
             val framesFile = File(exportDir, "frames.ndjson")
             assertTrue(manifestFile.isFile && framesFile.isFile, "run $runIndex export must exist on disk")
+            val persistedFrames = framesFile.readLines()
+                .filter(String::isNotEmpty)
+                .map(::decodeFrame)
 
             FiveRunReplayRunRecord(
                 runIndex = runIndex,
@@ -84,8 +88,8 @@ class FiveRunReplayDeviceGateTest {
                 // pose pipeline reproduces every field above exactly, so without this the gate
                 // would certify five identical runs of a pipeline that detected nothing.
                 pose = fiveRunPoseObservationOf(
-                    completed.snapshot.records,
-                    completed.snapshot.counts.poseDetectedRecords,
+                    persistedFrames,
+                    persistedFrames.count { it.posePresent }.toLong(),
                 ),
                 manifestSha256 = Sha256Digest.hex(manifestFile.readBytes()),
                 framesSha256 = Sha256Digest.hex(framesFile.readBytes()),

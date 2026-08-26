@@ -8,6 +8,7 @@ import com.calisthenics.diagnostic.contract.nextBackendTimestampMs
 class SessionLedger(
     private val configuration: SessionConfiguration,
     private val dispatcher: SessionDispatcher = DirectSessionDispatcher,
+    private val recordSink: EmittedRecordSink = EmittedRecordSink {},
 ) {
     private data class ReceivedFrame(
         val frameIndex: Long,
@@ -21,13 +22,11 @@ class SessionLedger(
         val backendTimestampMs: Long,
     )
 
-    private val records = mutableListOf<RawPoseFrame>()
-    private val failures = mutableListOf<MachineInferenceFailure>()
+    private val boundedState = BoundedSessionState()
     private val skipCounts = linkedMapOf<SkipReason, Long>().apply {
         SkipReason.entries.forEach { this[it] = 0L }
     }
-    private val pendingSubmissions = linkedMapOf<Long, PendingSubmission>()
-    private val completedSubmissionIndices = mutableSetOf<Long>()
+    private var pendingSubmission: PendingSubmission? = null
 
     private var cameraFramesReceived = 0L
     private var inferenceFramesSubmitted = 0L
@@ -99,7 +98,8 @@ class SessionLedger(
         previousBackendTimestampMs = backendTimestampMs
         inferenceFramesSubmitted++
         unclassifiedFrame = null
-        pendingSubmissions[event.submissionIndex] = PendingSubmission(
+        boundedState.submitted(event.submissionIndex)
+        pendingSubmission = PendingSubmission(
             submissionIndex = event.submissionIndex,
             frame = frame,
             inferenceStartNs = event.inferenceStartNs,
@@ -127,7 +127,9 @@ class SessionLedger(
             imageHeight = configuration.imageHeight,
             framesSkippedSinceLastEmittedRecord = skippedSinceLastEmittedRecord,
         )
-        records += record
+        recordSink.appendPose(record)
+        boundedState.emitted(event.submissionIndex, record)
+        pendingSubmission = null
         inferenceRecordsEmitted++
         if (event.posePresent) poseDetectedRecords++
         skippedSinceLastEmittedRecord = 0L
@@ -136,7 +138,7 @@ class SessionLedger(
 
     private fun failSubmission(event: SessionEvent.InferenceFailed) {
         val submission = takePendingSubmission(event.submissionIndex)
-        failures += MachineInferenceFailure(
+        val failure = MachineInferenceFailure(
             submissionIndex = submission.submissionIndex,
             captureTimestampNs = submission.frame.captureTimestampNs,
             failureSource = event.failureSource,
@@ -144,12 +146,22 @@ class SessionLedger(
             sourceErrorCode = event.sourceErrorCode,
             detail = event.detail,
         )
+        boundedState.failed(
+            failure,
+            if (event.classification == "session_teardown_timeout") {
+                TerminalState.TIMED_OUT
+            } else {
+                TerminalState.FAILED
+            },
+        )
+        pendingSubmission = null
         inferenceFailures++
+        admissionOpen = false
     }
 
     private fun timeoutPendingSubmissions() {
         admissionOpen = false
-        pendingSubmissions.keys.toList().forEach { submissionIndex ->
+        pendingSubmission?.submissionIndex?.let { submissionIndex ->
             failSubmission(
                 SessionEvent.InferenceFailed(
                     submissionIndex = submissionIndex,
@@ -169,10 +181,9 @@ class SessionLedger(
         check(submissionIndex in 0 until inferenceFramesSubmitted) {
             "submission index is outside the accepted submission range"
         }
-        check(submissionIndex !in completedSubmissionIndices) { "submission already has a terminal result" }
-        val submission = pendingSubmissions.remove(submissionIndex)
+        val submission = pendingSubmission
+            ?.takeIf { it.submissionIndex == submissionIndex }
             ?: error("submission has no pending inference call")
-        completedSubmissionIndices += submissionIndex
         return submission
     }
 
@@ -187,8 +198,7 @@ class SessionLedger(
             trailingFramesSkippedAfterLastEmittedRecord = trailingSkipped,
             inferenceFailures = inferenceFailures,
         ),
-        records = records.toList(),
-        failures = failures.toList(),
+        boundedState = boundedState.snapshot(),
         admissionOpen = admissionOpen,
     )
 }

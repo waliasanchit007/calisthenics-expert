@@ -253,7 +253,8 @@ def test_live_capture_gate_binds_runtime_manifest_and_runs_instrumentation_contr
         "catches the source recording the requested dimensions instead of the bound use case's "
         "negotiated resolution"
     )
-    assert "achievedInferenceFpsTimeseriesOf" in composition
+    assert "sealed.boundedState.achievedInferenceFpsTimeseries" in composition
+    assert "LiveCaptureCadenceAccumulator" in composition
     assert "achievedInferenceFpsTimeseries = listOf(CadenceSample(0L, 0.0))" not in composition
     assert "grantRuntimePermission" in live_test
     assert "LiveCameraComposition.fromAndroid" in live_test

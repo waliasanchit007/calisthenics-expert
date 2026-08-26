@@ -8,10 +8,9 @@ import com.calisthenics.diagnostic.contract.Uuid
  * before delegating when the ordinal matches an injected failure set. This is `FakeStorage`'s
  * former `before()` hook, promoted out of the fake and generalized to any backend.
  *
- * Ordinal/label coverage is exact, per design spec §6.1 point 1 / §6.2: [appendLine], [flush],
- * [fsyncFile], [reconcile], [writeManifest], [fsyncDirectory], [destinationExists],
- * [renameNoReplace], and [writeAbortMarker] consume an ordinal and are fault-injectable, in that
- * call order, with the same label strings `FakeStorage.operations` already produced.
+ * Ordinal/label coverage is exact, per design spec §6.1 point 1 / §6.2: the legacy export
+ * primitives and the named durable-artifact primitives consume an ordinal and are fault-injectable.
+ * The labels identify the operation and named artifact without exposing filesystem paths.
  * [createStagingAttempt], [scanCommittedRoot], and [scanStagingResidues] delegate directly,
  * consuming no ordinal and never eligible for injected failure — they are not part of
  * `SessionExporter`'s six-step commit sequence the fake's original ordinal gate covered.
@@ -78,6 +77,31 @@ class FaultInjectingStoragePort(
     override fun scanCommittedRoot(): List<ExportRootCorruption> = delegate.scanCommittedRoot()
 
     override fun scanStagingResidues(): List<StagingResidue> = delegate.scanStagingResidues()
+
+    override fun appendArtifact(attempt: StagingAttempt, artifact: DurableArtifact, bytes: ByteArray) {
+        before("appendArtifact:$artifact")
+        if (!dropAppends) delegate.appendArtifact(attempt, artifact, bytes)
+    }
+
+    override fun flushArtifact(attempt: StagingAttempt, artifact: DurableArtifact) {
+        before("flushArtifact:$artifact")
+        delegate.flushArtifact(attempt, artifact)
+    }
+
+    override fun fsyncArtifact(attempt: StagingAttempt, artifact: DurableArtifact) {
+        before("fsyncArtifact:$artifact")
+        delegate.fsyncArtifact(attempt, artifact)
+    }
+
+    override fun replaceCheckpoint(attempt: StagingAttempt, encodedCheckpoint: String) {
+        before("replaceCheckpoint")
+        delegate.replaceCheckpoint(attempt, encodedCheckpoint)
+    }
+
+    override fun reconcileArtifact(attempt: StagingAttempt, artifact: DurableArtifact): ArtifactReconciliation {
+        before("reconcileArtifact:$artifact")
+        return delegate.reconcileArtifact(attempt, artifact)
+    }
 
     private fun before(operation: String) {
         ordinal++

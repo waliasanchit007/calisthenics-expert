@@ -3,8 +3,10 @@ package com.calisthenics.diagnostic.export
 import android.system.Os
 import android.system.OsConstants
 import com.calisthenics.diagnostic.contract.Counts
+import com.calisthenics.diagnostic.contract.decodeFrame
 import com.calisthenics.diagnostic.contract.Uuid
 import com.calisthenics.diagnostic.contract.decodeFrame
+import com.calisthenics.diagnostic.hash.Sha256Digest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
@@ -23,13 +25,14 @@ import java.nio.file.StandardOpenOption
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * Real Android primitives for the twelve-method [StoragePort] contract. Every method is a
+ * Real Android primitives for the [StoragePort] contract. Every method is a
  * standalone `java.io`/`java.nio.file`/`android.system.Os` primitive; none of them sequence a
  * second [StoragePort] method to do their job — that ordering stays in `SessionExporter`.
  */
 class AndroidStoragePort(override val roots: StorageRoots) : StoragePort {
     private val nonce = AtomicInteger(0)
     private val frameChannels = mutableMapOf<String, FileChannel>()
+    private val artifactChannels = mutableMapOf<Pair<String, DurableArtifact>, FileChannel>()
     private val renamedPaths = mutableSetOf<String>()
 
     /**
@@ -155,7 +158,75 @@ class AndroidStoragePort(override val roots: StorageRoots) : StoragePort {
         }
     }
 
+    override fun appendArtifact(attempt: StagingAttempt, artifact: DurableArtifact, bytes: ByteArray) {
+        val channel = artifactChannels.getOrPut(attempt.path to artifact) {
+            FileChannel.open(
+                artifactPath(attempt, artifact),
+                StandardOpenOption.CREATE,
+                StandardOpenOption.APPEND,
+                StandardOpenOption.WRITE,
+            )
+        }
+        val buffer = ByteBuffer.wrap(bytes)
+        while (buffer.hasRemaining()) channel.write(buffer)
+    }
+
+    override fun flushArtifact(attempt: StagingAttempt, artifact: DurableArtifact) {
+        artifactChannels[attempt.path to artifact]?.force(false)
+    }
+
+    override fun fsyncArtifact(attempt: StagingAttempt, artifact: DurableArtifact) {
+        artifactChannels.remove(attempt.path to artifact)?.let { channel ->
+            channel.force(true)
+            channel.close()
+        }
+        val path = artifactPath(attempt, artifact)
+        FileChannel.open(path, StandardOpenOption.WRITE, StandardOpenOption.CREATE).use { it.force(true) }
+    }
+
+    override fun replaceCheckpoint(attempt: StagingAttempt, encodedCheckpoint: String) {
+        val checkpoint = checkpointPath(attempt)
+        val temporary = checkpoint.resolveSibling("${checkpoint.fileName}.tmp")
+        Files.write(
+            temporary,
+            encodedCheckpoint.toByteArray(StandardCharsets.UTF_8),
+            StandardOpenOption.CREATE,
+            StandardOpenOption.TRUNCATE_EXISTING,
+            StandardOpenOption.WRITE,
+        )
+        FileChannel.open(temporary, StandardOpenOption.WRITE).use { it.force(true) }
+        Os.rename(temporary.toString(), checkpoint.toString())
+        fsyncDirectory(attempt.path)
+    }
+
+    override fun reconcileArtifact(attempt: StagingAttempt, artifact: DurableArtifact): ArtifactReconciliation {
+        val bytes = if (Files.exists(artifactPath(attempt, artifact))) {
+            Files.readAllBytes(artifactPath(attempt, artifact))
+        } else {
+            ByteArray(0)
+        }
+        val lines = bytes.toString(StandardCharsets.UTF_8).lineSequence().filter { it.isNotEmpty() }.toList()
+        return ArtifactReconciliation(
+            byteLength = bytes.size.toLong(),
+            sha256 = Sha256Digest.hex(bytes),
+            recordCount = lines.size.toLong(),
+            posePresentCount = if (artifact == DurableArtifact.POSE_STREAM) {
+                lines.count { decodeFrame("$it\n").posePresent }.toLong()
+            } else {
+                null
+            },
+        )
+    }
+
     private fun framesPath(attempt: StagingAttempt): Path = Paths.get(attempt.path, FRAMES_FILE_NAME)
+
+    private fun artifactPath(attempt: StagingAttempt, artifact: DurableArtifact): Path =
+        Paths.get(attempt.path, when (artifact) {
+            DurableArtifact.POSE_STREAM -> FRAMES_FILE_NAME
+            DurableArtifact.TELEMETRY -> TELEMETRY_FILE_NAME
+        })
+
+    private fun checkpointPath(attempt: StagingAttempt): Path = Paths.get(attempt.path, CHECKPOINT_FILE_NAME)
 
     private fun manifestPath(attempt: StagingAttempt): Path = Paths.get(attempt.path, MANIFEST_FILE_NAME)
 
@@ -171,6 +242,8 @@ class AndroidStoragePort(override val roots: StorageRoots) : StoragePort {
 
     private companion object {
         const val FRAMES_FILE_NAME = "frames.ndjson"
+        const val TELEMETRY_FILE_NAME = "telemetry.ndjson"
+        const val CHECKPOINT_FILE_NAME = "checkpoint"
         const val MANIFEST_FILE_NAME = "manifest.json"
         const val ABORT_MARKER_FILE_NAME = "abort-marker.json"
 

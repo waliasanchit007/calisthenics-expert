@@ -17,8 +17,8 @@ import com.calisthenics.diagnostic.contract.SessionManifest
 import com.calisthenics.diagnostic.contract.Sha256
 import com.calisthenics.diagnostic.contract.Uuid
 import com.calisthenics.diagnostic.session.FinalizationResult
+import com.calisthenics.diagnostic.session.BoundedSessionState
 import com.calisthenics.diagnostic.session.SealedSessionSnapshot
-import com.calisthenics.diagnostic.session.TerminalState
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -60,11 +60,11 @@ abstract class StoragePortConformanceSuite {
 
         val inferenceMismatch = export(
             harness().freshPort(),
-            snapshot(listOf(frame), counts = counts(emitted = 2, posePresent = 1)),
+            fixture(listOf(frame), counts = counts(emitted = 2, posePresent = 1)),
         )
         val poseMismatch = export(
             harness().freshPort(),
-            snapshot(listOf(frame), counts = counts(emitted = 1, posePresent = 0)),
+            fixture(listOf(frame), counts = counts(emitted = 1, posePresent = 0)),
         )
 
         val inferenceFailure = assertIs<FinalizationResult.Failed>(inferenceMismatch)
@@ -77,7 +77,7 @@ abstract class StoragePortConformanceSuite {
     fun silentDropWriterIsCaughtByIndependentRecount() {
         val port = FaultInjectingStoragePort(harness().freshPort(), dropAppends = true)
 
-        val result = export(port, snapshot(listOf(frame(posePresent = true))))
+        val result = export(port, fixture(listOf(frame(posePresent = true))))
 
         assertIs<FinalizationResult.Failed>(result)
     }
@@ -86,14 +86,14 @@ abstract class StoragePortConformanceSuite {
     fun everyOrdinalFaultPreventsValidPublishExceptReportsUncertainDurabilityAfterRename() {
         val baselineDelegate = harness().freshPort()
         val baseline = FaultInjectingStoragePort(baselineDelegate)
-        export(baseline, snapshot(listOf(frame(posePresent = true))))
+        export(baseline, fixture(listOf(frame(posePresent = true))))
         val operationCount = baseline.operations.size
         val renameOrdinal = baseline.operations.indexOf("renameNoReplace") + 1
 
         for (ordinal in 1..operationCount) {
             val delegate = harness().freshPort()
             val port = FaultInjectingStoragePort(delegate, failOnOrdinal = ordinal)
-            val result = export(port, snapshot(listOf(frame(posePresent = true))))
+            val result = export(port, fixture(listOf(frame(posePresent = true))))
             val destination = "${delegate.roots.exportsRoot}/$SESSION_ID"
 
             assertFalse(result is FinalizationResult.Published, "ordinal $ordinal unexpectedly published")
@@ -132,7 +132,7 @@ abstract class StoragePortConformanceSuite {
         harness().precreateDestination(destination, populated = true)
         val before = harness().destinationFingerprint(destination)
 
-        val result = export(port, snapshot(listOf(frame(posePresent = true))))
+        val result = export(port, fixture(listOf(frame(posePresent = true))))
 
         assertIs<FinalizationResult.Failed>(result)
         val after = harness().destinationFingerprint(destination)
@@ -145,7 +145,7 @@ abstract class StoragePortConformanceSuite {
         val destination = "${port.roots.exportsRoot}/$SESSION_ID"
         harness().precreateDestination(destination, populated = false)
 
-        val result = export(port, snapshot(listOf(frame(posePresent = true))))
+        val result = export(port, fixture(listOf(frame(posePresent = true))))
 
         assertIs<FinalizationResult.Failed>(result)
         assertTrue(port.scanCommittedRoot().any { it.path == destination })
@@ -155,8 +155,8 @@ abstract class StoragePortConformanceSuite {
     fun failedAttemptsAreUniqueAbandonedAndCarryFsyncedSanitizedCounters() {
         val port = FaultInjectingStoragePort(harness().freshPort(), failOnOrdinals = setOf(1, 4))
 
-        val first = export(port, snapshot(listOf(frame(posePresent = true))))
-        val second = export(port, snapshot(listOf(frame(posePresent = true))))
+        val first = export(port, fixture(listOf(frame(posePresent = true))))
+        val second = export(port, fixture(listOf(frame(posePresent = true))))
 
         assertIs<FinalizationResult.Failed>(first)
         assertIs<FinalizationResult.Failed>(second)
@@ -174,7 +174,7 @@ abstract class StoragePortConformanceSuite {
     fun writeAbortMarkerFailureAfterCommitPrimitiveFailureClassifiesCrashResidue() {
         val probeDelegate = harness().freshPort()
         val probePort = FaultInjectingStoragePort(probeDelegate, failOnOrdinal = 1)
-        export(probePort, snapshot(listOf(frame(posePresent = true))))
+        export(probePort, fixture(listOf(frame(posePresent = true))))
         val markerOrdinal = probePort.operations.indexOf("writeAbortMarker") + 1
         assertTrue(
             markerOrdinal > 0,
@@ -183,7 +183,7 @@ abstract class StoragePortConformanceSuite {
 
         val delegate = harness().freshPort()
         val port = FaultInjectingStoragePort(delegate, failOnOrdinals = setOf(1, markerOrdinal))
-        val result = export(port, snapshot(listOf(frame(posePresent = true))))
+        val result = export(port, fixture(listOf(frame(posePresent = true))))
 
         assertIs<FinalizationResult.Failed>(result)
         assertTrue(
@@ -210,7 +210,7 @@ abstract class StoragePortConformanceSuite {
     fun stagingAndExportsRootsAreLexicallyContainedAndDistinct() {
         val port = harness().freshPort()
 
-        assertIs<FinalizationResult.Published>(export(port, snapshot(emptyList(), counts = counts())))
+        assertIs<FinalizationResult.Published>(export(port, fixture(emptyList(), counts = counts())))
         assertTrue(port.destinationExists("${port.roots.exportsRoot}/$SESSION_ID"))
         assertTrue(port.roots.stagingRoot.startsWith("${port.roots.filesDir}/"))
         assertTrue(port.roots.exportsRoot.startsWith("${port.roots.filesDir}/"))
@@ -224,13 +224,13 @@ abstract class StoragePortConformanceSuite {
     fun parentFsyncFailureReportsUncertainDurabilityWithoutDeletingCommittedEntry() {
         val delegate = harness().freshPort()
         val port = FaultInjectingStoragePort(delegate)
-        val baselineExport = export(port, snapshot(listOf(frame(posePresent = true))))
+        val baselineExport = export(port, fixture(listOf(frame(posePresent = true))))
         assertIs<FinalizationResult.Published>(baselineExport)
         val finalFsyncOrdinal = port.operations.size
 
         val secondDelegate = harness().freshPort()
         val secondPort = FaultInjectingStoragePort(secondDelegate, failOnOrdinal = finalFsyncOrdinal)
-        val result = export(secondPort, snapshot(listOf(frame(posePresent = true))))
+        val result = export(secondPort, fixture(listOf(frame(posePresent = true))))
 
         val uncertain = assertIs<FinalizationResult.Failed>(result)
         assertEquals("uncertain_durability", uncertain.failureCode)
@@ -239,16 +239,31 @@ abstract class StoragePortConformanceSuite {
         assertTrue(secondDelegate.scanStagingResidues().isEmpty())
     }
 
-    private fun export(storage: StoragePort, sealed: SealedSessionSnapshot): FinalizationResult =
-        SessionExporter(storage, manifest()).finalize(sealed)
+    private data class SnapshotFixture(val sealed: SealedSessionSnapshot, val records: List<RawPoseFrame>)
 
-    private fun snapshot(records: List<RawPoseFrame>, counts: Counts = counts(records)): SealedSessionSnapshot =
-        SealedSessionSnapshot(
-            counts = counts,
+    private fun export(storage: StoragePort, fixture: SnapshotFixture): FinalizationResult =
+        SessionExporter(storage, manifest()).let { exporter ->
+            try {
+                fixture.records.forEach(exporter::appendPose)
+                exporter.finalize(fixture.sealed)
+            } catch (_: Throwable) {
+                runCatching { exporter.abort(fixture.sealed, "abandoned export for pseudonym=$PSEUDONYM") }
+                FinalizationResult.Failed(fixture.sealed, "stream_write_failed", "stream write failed")
+            }
+        }
+
+    private fun fixture(records: List<RawPoseFrame>, counts: Counts = counts(records)): SnapshotFixture =
+        SnapshotFixture(
+            sealed = SealedSessionSnapshot(counts = counts, boundedState = boundedState(records)),
             records = records,
-            failures = emptyList(),
-            terminalMap = records.mapIndexed { index, _ -> index.toLong() to TerminalState.EMITTED }.toMap(),
         )
+
+    private fun boundedState(records: List<RawPoseFrame>) = BoundedSessionState().apply {
+        records.forEachIndexed { index, record ->
+            submitted(index.toLong())
+            emitted(index.toLong(), record)
+        }
+    }.snapshot()
 
     private fun counts(records: List<RawPoseFrame> = emptyList()): Counts =
         counts(records.size.toLong(), records.count { it.posePresent }.toLong())

@@ -267,7 +267,6 @@ private fun SessionRunnerSnapshot.toLiveRunning(
     fps: Int,
     composition: LiveCameraComposition,
 ): LiveRunPhase.Running {
-    val latestRecord = records.lastOrNull()
     val latestThermal = composition.latestThermalObservation()
     return LiveRunPhase.Running(
         configuredInferenceFps = fps,
@@ -278,7 +277,7 @@ private fun SessionRunnerSnapshot.toLiveRunning(
         inferenceFailures = counts.inferenceFailures,
         configuredCameraFps = 30,
         deliveredCallbackCount = counts.cameraFramesReceived,
-        latestInferenceLatencyNs = latestRecord?.let { it.inferenceEndNs - it.inferenceStartNs },
+        latestInferenceLatencyNs = boundedState.latestInferenceLatencyNs,
         latestThermalStatus = latestThermal?.status,
         latestThermalObservedAtNs = latestThermal?.tMonotonicNs,
         thermalUnavailableReason = null,

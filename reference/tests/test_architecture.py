@@ -73,3 +73,49 @@ def test_m05_admission_paths_are_exhaustive_and_use_one_shared_policy_helper() -
     assert "input_class" not in transcript_path
     assert "session_kind" not in ledger_path
     assert "input_class" not in ledger_path
+
+
+def test_m05b_session_runtime_has_no_unbounded_per_frame_or_terminal_collections() -> None:
+    session_root = (
+        ROOT
+        / "apps"
+        / "diagnostic-harness"
+        / "shared"
+        / "src"
+        / "commonMain"
+        / "kotlin"
+        / "com"
+        / "calisthenics"
+        / "diagnostic"
+        / "session"
+    )
+    live_composition = (
+        ROOT
+        / "apps"
+        / "diagnostic-harness"
+        / "androidApp"
+        / "src"
+        / "main"
+        / "kotlin"
+        / "com"
+        / "calisthenics"
+        / "diagnostic"
+        / "composition"
+        / "LiveCameraComposition.kt"
+    ).read_text(encoding="utf-8")
+    session_sources = "\n".join(
+        path.read_text(encoding="utf-8") for path in session_root.glob("*.kt")
+    )
+
+    for removed_collection in (
+        "terminalMap",
+        "completedSubmissionIndices",
+        "pendingSubmissions",
+        "terminalSubmissionIndices",
+        "admittedCallbackTimestampsNs",
+    ):
+        assert removed_collection not in session_sources
+        assert removed_collection not in live_composition
+
+    assert not re.search(r"mutableListOf\s*<\s*RawPoseFrame", session_sources)
+    assert "LiveCaptureCadenceAccumulator" in live_composition

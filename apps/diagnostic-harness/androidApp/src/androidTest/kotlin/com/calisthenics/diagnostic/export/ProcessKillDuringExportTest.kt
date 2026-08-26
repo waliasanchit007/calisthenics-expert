@@ -170,6 +170,31 @@ private class ProcessKillingStoragePort(
 
     override fun scanStagingResidues(): List<StagingResidue> = delegate.scanStagingResidues()
 
+    override fun appendArtifact(attempt: StagingAttempt, artifact: DurableArtifact, bytes: ByteArray) {
+        before("appendArtifact:$artifact")
+        delegate.appendArtifact(attempt, artifact, bytes)
+    }
+
+    override fun flushArtifact(attempt: StagingAttempt, artifact: DurableArtifact) {
+        before("flushArtifact:$artifact")
+        delegate.flushArtifact(attempt, artifact)
+    }
+
+    override fun fsyncArtifact(attempt: StagingAttempt, artifact: DurableArtifact) {
+        before("fsyncArtifact:$artifact")
+        delegate.fsyncArtifact(attempt, artifact)
+    }
+
+    override fun replaceCheckpoint(attempt: StagingAttempt, encodedCheckpoint: String) {
+        before("replaceCheckpoint")
+        delegate.replaceCheckpoint(attempt, encodedCheckpoint)
+    }
+
+    override fun reconcileArtifact(attempt: StagingAttempt, artifact: DurableArtifact): ArtifactReconciliation {
+        before("reconcileArtifact:$artifact")
+        return delegate.reconcileArtifact(attempt, artifact)
+    }
+
     private fun before(operation: String) {
         if (operation == killOnLabel) Process.killProcess(Process.myPid())
     }

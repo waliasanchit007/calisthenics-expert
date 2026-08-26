@@ -54,6 +54,19 @@ enum class StorageFile {
     ABORT_MARKER,
 }
 
+/** Named streams owned by the durable writer. Platform paths never cross this boundary. */
+enum class DurableArtifact {
+    POSE_STREAM,
+    TELEMETRY,
+}
+
+data class ArtifactReconciliation(
+    val byteLength: Long,
+    val sha256: String,
+    val recordCount: Long,
+    val posePresentCount: Long?,
+)
+
 data class StreamReconciliation(
     val lineCount: Long,
     val posePresentCount: Long,
@@ -107,4 +120,19 @@ interface StoragePort {
     fun scanCommittedRoot(): List<ExportRootCorruption>
 
     fun scanStagingResidues(): List<StagingResidue>
+
+    /** Appends bytes to a named durable stream without exposing its platform path. */
+    fun appendArtifact(attempt: StagingAttempt, artifact: DurableArtifact, bytes: ByteArray)
+
+    /** Flushes a named stream's userspace/channel buffers. */
+    fun flushArtifact(attempt: StagingAttempt, artifact: DurableArtifact)
+
+    /** Forces a named stream to stable storage. */
+    fun fsyncArtifact(attempt: StagingAttempt, artifact: DurableArtifact)
+
+    /** Atomically replaces the compact checkpoint using the platform's durable sequence. */
+    fun replaceCheckpoint(attempt: StagingAttempt, encodedCheckpoint: String)
+
+    /** Independently reads a finalized named stream and returns its digest/length/count. */
+    fun reconcileArtifact(attempt: StagingAttempt, artifact: DurableArtifact): ArtifactReconciliation
 }

@@ -18,8 +18,8 @@ import com.calisthenics.diagnostic.contract.Sha256
 import com.calisthenics.diagnostic.contract.Uuid
 import com.calisthenics.diagnostic.contract.decodeManifest
 import com.calisthenics.diagnostic.session.FinalizationResult
+import com.calisthenics.diagnostic.session.BoundedSessionState
 import com.calisthenics.diagnostic.session.SealedSessionSnapshot
-import com.calisthenics.diagnostic.session.TerminalState
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -41,34 +41,42 @@ class SessionExporterTest {
         val beforeReplay = "2026-01-01T00:00:00Z"
         val afterReplay = "2026-01-01T00:00:10Z"
         val template = manifest().copy(clock = manifest().clock.copy(endedAtUtc = beforeReplay))
-        val result = SessionExporter(
+        val exporter = SessionExporter(
             storage,
             template,
             manifestAtFinalization = { current, sealedSnapshot ->
-                assertTrue(storage.operations.contains("reconcile"))
+                assertTrue(storage.operations.contains("reconcileArtifact:POSE_STREAM"))
                 assertEquals(1L, sealedSnapshot.counts.inferenceRecordsEmitted)
                 current.copy(clock = current.clock.copy(endedAtUtc = afterReplay))
             },
-        ).finalize(snapshot(listOf(frame(posePresent = true))))
+        )
+        val sealed = snapshot(listOf(frame(posePresent = true)))
+        exporter.appendPose(frame(posePresent = true))
+        val result = exporter.finalize(sealed)
 
         assertIs<FinalizationResult.Published>(result)
         val exportedManifest = decodeManifest(fake.attempts.single().manifest!!)
         assertEquals(afterReplay, exportedManifest.clock.endedAtUtc)
-        assertTrue(storage.operations.indexOf("reconcile") < storage.operations.indexOf("writeManifest"))
+        assertTrue(
+            storage.operations.indexOf("reconcileArtifact:POSE_STREAM") <
+                storage.operations.indexOf("writeManifest"),
+        )
     }
 
     @Test
     fun fixedCommitOrderIsObservable() {
         val storage = FaultInjectingStoragePort(FakeStorage())
 
-        assertIs<FinalizationResult.Published>(export(storage, snapshot(listOf(frame(posePresent = true)))))
+        assertIs<FinalizationResult.Published>(export(storage, snapshot(listOf(frame(posePresent = true))), listOf(frame(posePresent = true))))
 
         assertEquals(
             listOf(
-                "appendLine",
-                "flush",
-                "fsyncFile:FRAMES",
-                "reconcile",
+                "appendArtifact:POSE_STREAM",
+                "flushArtifact:POSE_STREAM",
+                "fsyncArtifact:POSE_STREAM",
+                "replaceCheckpoint",
+                "replaceCheckpoint",
+                "reconcileArtifact:POSE_STREAM",
                 "writeManifest",
                 "fsyncFile:MANIFEST",
                 "fsyncDirectory:staging",
@@ -84,7 +92,9 @@ class SessionExporterTest {
     fun repeatedFinalizeJoinsFirstResultAndPublishesOnlyOnce() {
         val storage = FaultInjectingStoragePort(FakeStorage())
         val exporter = SessionExporter(storage, manifest())
-        val sealed = snapshot(listOf(frame(posePresent = true)))
+        val records = listOf(frame(posePresent = true))
+        val sealed = snapshot(records)
+        records.forEach(exporter::appendPose)
 
         val first = exporter.finalize(sealed)
         val second = exporter.finalize(sealed)
@@ -96,7 +106,7 @@ class SessionExporterTest {
     @Test
     fun validationErrorsAreSanitizedAndNeverExposeFrameOrFilesystemSecrets() {
         val storage = FaultInjectingStoragePort(FakeStorage(), dropAppends = true)
-        val result = export(storage, snapshot(listOf(frame(posePresent = true))))
+        val result = export(storage, snapshot(listOf(frame(posePresent = true))), listOf(frame(posePresent = true)))
 
         val failure = assertIs<FinalizationResult.Failed>(result)
         assertTrue(failure.detail.contains("pseudonym=$PSEUDONYM"))
@@ -105,16 +115,24 @@ class SessionExporterTest {
         assertFalse(failure.detail.contains(SESSION_ID))
     }
 
-    private fun export(storage: StoragePort, sealed: SealedSessionSnapshot): FinalizationResult =
-        SessionExporter(storage, manifest()).finalize(sealed)
+    private fun export(
+        storage: StoragePort,
+        sealed: SealedSessionSnapshot,
+        records: List<RawPoseFrame> = emptyList(),
+    ): FinalizationResult = SessionExporter(storage, manifest()).let { exporter ->
+        records.forEach(exporter::appendPose)
+        exporter.finalize(sealed)
+    }
 
     private fun snapshot(records: List<RawPoseFrame>, counts: Counts = counts(records)): SealedSessionSnapshot =
-        SealedSessionSnapshot(
-            counts = counts,
-            records = records,
-            failures = emptyList(),
-            terminalMap = records.mapIndexed { index, _ -> index.toLong() to TerminalState.EMITTED }.toMap(),
-        )
+        SealedSessionSnapshot(counts = counts, boundedState = boundedState(records))
+
+    private fun boundedState(records: List<RawPoseFrame>) = BoundedSessionState().apply {
+        records.forEachIndexed { index, record ->
+            submitted(index.toLong())
+            emitted(index.toLong(), record)
+        }
+    }.snapshot()
 
     private fun counts(records: List<RawPoseFrame> = emptyList()): Counts =
         counts(records.size.toLong(), records.count { it.posePresent }.toLong())

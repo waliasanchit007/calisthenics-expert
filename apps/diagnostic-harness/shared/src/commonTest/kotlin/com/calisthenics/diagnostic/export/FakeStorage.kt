@@ -2,6 +2,7 @@ package com.calisthenics.diagnostic.export
 
 import com.calisthenics.diagnostic.contract.Counts
 import com.calisthenics.diagnostic.contract.decodeFrame
+import com.calisthenics.diagnostic.hash.Sha256Digest
 
 /** A pure in-memory [StoragePort] implementation with no test-only surface of its own. */
 class FakeStorage(
@@ -85,6 +86,41 @@ class FakeStorage(
             }
         }
 
+    override fun appendArtifact(attempt: StagingAttempt, artifact: DurableArtifact, bytes: ByteArray) {
+        val fake = fakeAttempt(attempt)
+        val prior = fake.artifactBytes[artifact] ?: ByteArray(0)
+        fake.artifactBytes[artifact] = prior + bytes
+    }
+
+    override fun flushArtifact(attempt: StagingAttempt, artifact: DurableArtifact) {
+        fakeAttempt(attempt).flushedArtifacts += artifact
+    }
+
+    override fun fsyncArtifact(attempt: StagingAttempt, artifact: DurableArtifact) {
+        fakeAttempt(attempt).fsyncedArtifacts += artifact
+    }
+
+    override fun replaceCheckpoint(attempt: StagingAttempt, encodedCheckpoint: String) {
+        val fake = fakeAttempt(attempt)
+        fake.checkpoint = encodedCheckpoint
+        fake.checkpointReplacements++
+    }
+
+    override fun reconcileArtifact(attempt: StagingAttempt, artifact: DurableArtifact): ArtifactReconciliation {
+        val bytes = fakeAttempt(attempt).artifactBytes[artifact] ?: ByteArray(0)
+        val lines = bytes.toString(Charsets.UTF_8).lineSequence().filter { it.isNotEmpty() }.toList()
+        return ArtifactReconciliation(
+            byteLength = bytes.size.toLong(),
+            sha256 = Sha256Digest.hex(bytes),
+            recordCount = lines.size.toLong(),
+            posePresentCount = if (artifact == DurableArtifact.POSE_STREAM) {
+                lines.count { decodeFrame("$it\n").posePresent }.toLong()
+            } else {
+                null
+            },
+        )
+    }
+
     private fun fakeAttempt(attempt: StagingAttempt): FakeStagingAttempt = attempts.single { it.path == attempt.path }
 
     private fun fakeAttemptByPath(path: String): FakeStagingAttempt = attempts.single { it.path == path }
@@ -99,6 +135,11 @@ data class FakeStagingAttempt(
     var manifest: String? = null,
     var abortMarker: AbortMarker? = null,
     var renamed: Boolean = false,
+    val artifactBytes: MutableMap<DurableArtifact, ByteArray> = mutableMapOf(),
+    val flushedArtifacts: MutableSet<DurableArtifact> = mutableSetOf(),
+    val fsyncedArtifacts: MutableSet<DurableArtifact> = mutableSetOf(),
+    var checkpoint: String? = null,
+    var checkpointReplacements: Int = 0,
 ) : StagingAttempt
 
 data class FakeCommittedDirectory(val frameLines: List<String>, val manifest: String)

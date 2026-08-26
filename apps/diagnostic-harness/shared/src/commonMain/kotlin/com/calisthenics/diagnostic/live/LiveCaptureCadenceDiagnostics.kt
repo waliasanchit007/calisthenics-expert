@@ -4,6 +4,42 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
+/** Constant-space capture-cadence evidence accumulated while callbacks are admitted. */
+class LiveCaptureCadenceAccumulator(private val requestedCameraFps: Int) {
+    private var deliveredCount = 0L
+    private var firstTimestampNs: Long? = null
+    private var lastTimestampNs: Long? = null
+
+    val retainedTimestampCount: Int
+        get() = 0
+
+    init {
+        require(requestedCameraFps > 0)
+    }
+
+    fun observe(timestampNs: Long) {
+        require(timestampNs >= 0L) { "capture timestamps must be non-negative" }
+        if (firstTimestampNs == null) firstTimestampNs = timestampNs
+        lastTimestampNs = timestampNs
+        deliveredCount++
+    }
+
+    fun observedSpanNs(): Long? = firstTimestampNs?.let { first ->
+        lastTimestampNs?.minus(first)
+    }
+
+    fun snapshot(deliveredCallbackClassificationGap: Long): LiveCaptureCadenceDiagnostics {
+        require(deliveredCallbackClassificationGap >= 0L) { "classification gap must be non-negative" }
+        return LiveCaptureCadenceDiagnostics.fromObservedBounds(
+            deliveredCallbackCount = deliveredCount,
+            firstTimestampNs = firstTimestampNs,
+            lastTimestampNs = lastTimestampNs,
+            requestedCameraFps = requestedCameraFps,
+            deliveredCallbackClassificationGap = deliveredCallbackClassificationGap,
+        )
+    }
+}
+
 /**
  * Observed CameraX analyzer-callback cadence. The upstream gap is an estimate over the closed
  * observed interval, never a sensor-frame count or a delivered-callback skip classification.
@@ -77,15 +113,39 @@ data class LiveCaptureCadenceDiagnostics(
                 require(last >= first) { "capture timestamps must be monotonic" }
                 last - first
             }
+            return fromObservedBounds(
+                deliveredCallbackCount = timestampsNs.size.toLong(),
+                firstTimestampNs = first,
+                lastTimestampNs = last,
+                requestedCameraFps = requestedCameraFps,
+                deliveredCallbackClassificationGap = deliveredCallbackClassificationGap,
+            )
+        }
+
+        internal fun fromObservedBounds(
+            deliveredCallbackCount: Long,
+            firstTimestampNs: Long?,
+            lastTimestampNs: Long?,
+            requestedCameraFps: Int,
+            deliveredCallbackClassificationGap: Long,
+        ): LiveCaptureCadenceDiagnostics {
+            require(deliveredCallbackCount >= 0L)
+            require((deliveredCallbackCount == 0L) == (firstTimestampNs == null && lastTimestampNs == null)) {
+                "empty bounds must match delivered callback count"
+            }
+            val span = if (firstTimestampNs == null || lastTimestampNs == null) null else {
+                require(lastTimestampNs >= firstTimestampNs) { "capture timestamps must be monotonic" }
+                lastTimestampNs - firstTimestampNs
+            }
             val opportunities = span?.let { closedIntervalOpportunities(it, requestedCameraFps) } ?: 0L
             return LiveCaptureCadenceDiagnostics(
-                deliveredCallbackCount = timestampsNs.size.toLong(),
-                firstDeliveredCaptureTimestampNs = first,
-                lastDeliveredCaptureTimestampNs = last,
+                deliveredCallbackCount = deliveredCallbackCount,
+                firstDeliveredCaptureTimestampNs = firstTimestampNs,
+                lastDeliveredCaptureTimestampNs = lastTimestampNs,
                 observedCaptureSpanNs = span,
                 requestedCameraFps = requestedCameraFps,
                 requestedCallbackOpportunities = opportunities,
-                upstreamUnclassifiedCadenceGapEstimate = (opportunities - timestampsNs.size.toLong()).coerceAtLeast(0L),
+                upstreamUnclassifiedCadenceGapEstimate = (opportunities - deliveredCallbackCount).coerceAtLeast(0L),
                 deliveredCallbackClassificationGap = deliveredCallbackClassificationGap,
             )
         }

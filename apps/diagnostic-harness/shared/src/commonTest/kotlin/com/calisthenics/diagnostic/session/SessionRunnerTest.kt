@@ -1,5 +1,6 @@
 package com.calisthenics.diagnostic.session
 
+import com.calisthenics.diagnostic.contract.RawPoseFrame
 import com.calisthenics.diagnostic.contract.SemanticVersion
 import com.calisthenics.diagnostic.contract.Uuid
 import kotlin.test.Test
@@ -51,8 +52,12 @@ class SessionRunnerTest {
         runner.stop(nowNs = 200)
 
         scheduler.advanceTo(1_200)
-        assertEquals(SessionLifecycle.SEALED, runner.snapshot().lifecycle)
-        assertEquals(TerminalState.TIMED_OUT, runner.snapshot().sealedSnapshot!!.terminalMap[first])
+        assertEquals(SessionLifecycle.FAILED, runner.snapshot().lifecycle)
+        val timedOutState = assertNotNull(runner.snapshot().sealedSnapshot).boundedState
+        assertEquals(first, timedOutState.submittedHighWaterMark)
+        assertEquals(first, timedOutState.terminalHighWaterMark)
+        assertEquals(null, timedOutState.currentSubmissionIndex)
+        assertEquals(TerminalState.TIMED_OUT, timedOutState.lastTerminalState)
         val sealedCounts = runner.snapshot().sealedSnapshot!!.counts
         inference.complete(first, InferenceResult.Success(1_201, posePresent = true))
         assertEquals(sealedCounts, runner.snapshot().sealedSnapshot!!.counts)
@@ -65,7 +70,11 @@ class SessionRunnerTest {
         callbackFirst.stop(nowNs = 200)
         callbackFirstInference.complete(callbackFirstIndex, InferenceResult.Success(1_200, posePresent = false))
         callbackFirstScheduler.advanceTo(1_200)
-        assertEquals(TerminalState.EMITTED, callbackFirst.snapshot().sealedSnapshot!!.terminalMap[callbackFirstIndex])
+        val emittedState = assertNotNull(callbackFirst.snapshot().sealedSnapshot).boundedState
+        assertEquals(callbackFirstIndex, emittedState.submittedHighWaterMark)
+        assertEquals(callbackFirstIndex, emittedState.terminalHighWaterMark)
+        assertEquals(null, emittedState.currentSubmissionIndex)
+        assertEquals(TerminalState.EMITTED, emittedState.lastTerminalState)
     }
 
     @Test
@@ -82,7 +91,11 @@ class SessionRunnerTest {
         assertEquals(submission, failure.submissionIndex)
         assertEquals("harness", failure.failureSource)
         assertEquals("session_teardown_timeout", failure.classification)
-        assertEquals(TerminalState.TIMED_OUT, runner.snapshot().sealedSnapshot!!.terminalMap[submission])
+        val boundedState = assertNotNull(runner.snapshot().sealedSnapshot).boundedState
+        assertEquals(submission, boundedState.submittedHighWaterMark)
+        assertEquals(submission, boundedState.terminalHighWaterMark)
+        assertEquals(null, boundedState.currentSubmissionIndex)
+        assertEquals(TerminalState.TIMED_OUT, boundedState.lastTerminalState)
     }
 
     @Test
@@ -119,7 +132,11 @@ class SessionRunnerTest {
         val timedOutSubmission = timedOut.submit(0, 100, 110, byteArrayOf(1))!!
         timedOut.stop(nowNs = 200)
         timedOut.postDeadline()
-        assertEquals(timedOutSubmission, timedOut.snapshot().sealedSnapshot!!.terminalMap.keys.single())
+        val timedOutState = assertNotNull(timedOut.snapshot().sealedSnapshot).boundedState
+        assertEquals(timedOutSubmission, timedOutState.submittedHighWaterMark)
+        assertEquals(timedOutSubmission, timedOutState.terminalHighWaterMark)
+        assertEquals(null, timedOutState.currentSubmissionIndex)
+        assertEquals(TerminalState.TIMED_OUT, timedOutState.lastTerminalState)
         assertEquals(false, timedOut.hasPendingInference())
     }
 
@@ -135,7 +152,11 @@ class SessionRunnerTest {
             inference.complete(submission, InferenceResult.Failure("backend", "duplicate"))
         }
         assertEquals(SessionLifecycle.FAILED, runner.snapshot().lifecycle)
-        assertEquals(TerminalState.EMITTED, runner.snapshot().sealedSnapshot!!.terminalMap[submission])
+        val boundedState = assertNotNull(runner.snapshot().sealedSnapshot).boundedState
+        assertEquals(submission, boundedState.submittedHighWaterMark)
+        assertEquals(submission, boundedState.terminalHighWaterMark)
+        assertEquals(null, boundedState.currentSubmissionIndex)
+        assertEquals(TerminalState.EMITTED, boundedState.lastTerminalState)
         assertEquals(1, runner.snapshot().sealedSnapshot!!.counts.inferenceRecordsEmitted)
         assertEquals(0, runner.snapshot().sealedSnapshot!!.counts.inferenceFailures)
     }
@@ -159,8 +180,10 @@ class SessionRunnerTest {
         assertEquals(1, sealed.counts.inferenceFailures)
         assertEquals(1, sealed.counts.poseDetectedRecords)
         assertEquals(1, sealed.counts.framesSkippedBeforeInference)
-        assertEquals(TerminalState.EMITTED, sealed.terminalMap[emitted])
-        assertEquals(TerminalState.FAILED, sealed.terminalMap[failed])
+        assertEquals(failed, sealed.boundedState.submittedHighWaterMark)
+        assertEquals(failed, sealed.boundedState.terminalHighWaterMark)
+        assertEquals(null, sealed.boundedState.currentSubmissionIndex)
+        assertEquals(TerminalState.FAILED, sealed.boundedState.lastTerminalState)
 
         val afterSeal = runner.snapshot()
         runner.skip(frameIndex = 3, captureTimestampNs = 210, reason = SkipReason.BACKPRESSURE)
@@ -218,7 +241,11 @@ class SessionRunnerTest {
         runner.stop(nowNs = 200)
         assertEquals("harness", runner.snapshot().sealedSnapshot!!.failures.single().failureSource)
         assertEquals("session_teardown_timeout", runner.snapshot().sealedSnapshot!!.failures.single().classification)
-        assertEquals(TerminalState.TIMED_OUT, runner.snapshot().sealedSnapshot!!.terminalMap[submission])
+        val boundedState = assertNotNull(runner.snapshot().sealedSnapshot).boundedState
+        assertEquals(submission, boundedState.submittedHighWaterMark)
+        assertEquals(submission, boundedState.terminalHighWaterMark)
+        assertEquals(null, boundedState.currentSubmissionIndex)
+        assertEquals(TerminalState.TIMED_OUT, boundedState.lastTerminalState)
 
         val stoppingRunner = runner(VirtualDeadlineScheduler(), RecordingInferencePort(), RecordingFinalizer())
         val pending = stoppingRunner.submit(0, 100, 110, byteArrayOf(1))!!
@@ -228,7 +255,11 @@ class SessionRunnerTest {
         assertEquals(2, stoppingRunner.snapshot().counts.cameraFramesReceived)
         assertEquals(1, stoppingRunner.snapshot().counts.framesSkippedBeforeInference)
         stoppingRunner.postDeadline()
-        assertEquals(TerminalState.TIMED_OUT, stoppingRunner.snapshot().sealedSnapshot!!.terminalMap[pending])
+        val stoppingBoundedState = assertNotNull(stoppingRunner.snapshot().sealedSnapshot).boundedState
+        assertEquals(pending, stoppingBoundedState.submittedHighWaterMark)
+        assertEquals(pending, stoppingBoundedState.terminalHighWaterMark)
+        assertEquals(null, stoppingBoundedState.currentSubmissionIndex)
+        assertEquals(TerminalState.TIMED_OUT, stoppingBoundedState.lastTerminalState)
     }
 
     @Test
@@ -236,7 +267,13 @@ class SessionRunnerTest {
         val scheduler = VirtualDeadlineScheduler()
         val inference = RecordingInferencePort()
         val finalizer = RecordingFinalizer()
-        val runner = runner(scheduler, inference, finalizer)
+        val emittedRecords = mutableListOf<RawPoseFrame>()
+        val runner = runner(
+            scheduler,
+            inference,
+            finalizer,
+            poseRecordSink = EmittedRecordSink(emittedRecords::add),
+        )
 
         assertFailsWith<IllegalArgumentException> {
             runner.submit(frameIndex = 0, captureTimestampNs = 100, inferenceStartNs = 99, input = byteArrayOf(1))
@@ -247,12 +284,12 @@ class SessionRunnerTest {
         assertEquals(0, snapshot.counts.cameraFramesReceived)
         assertEquals(0, snapshot.counts.inferenceFramesSubmitted)
         assertEquals(0, snapshot.counts.framesSkippedBeforeInference)
-        assertTrue(snapshot.records.isEmpty())
+        assertTrue(emittedRecords.isEmpty())
         assertTrue(snapshot.failures.isEmpty())
         assertEquals(0, inference.submissions)
 
         runner.stop(nowNs = 200)
-        assertFailsWith<IllegalStateException> { runner.finalize() }
+        assertIs<FinalizationResult.Failed>(runner.finalize())
         assertEquals(0, finalizer.invocations)
     }
 
@@ -438,14 +475,15 @@ class SessionRunnerTest {
     @Test
     fun aSessionFailedByAnInternalErrorIsNeverReportedAsACancellation() {
         // "Only the teardown race maps to cancellation." A session driven into FAILED by a genuine
-        // internal defect was not abandoned by anyone, so finalize() must still fail loudly rather
-        // than quietly reporting the defect as an intentional cancellation.
+        // internal defect was not abandoned by anyone, so finalize() must retain a typed failure
+        // rather than quietly reporting the defect as an intentional cancellation.
         val runner = runner(VirtualDeadlineScheduler(), RecordingInferencePort(), RecordingFinalizer())
 
         assertFailsWith<IllegalStateException> { runner.cancel(submissionIndex = 99) }
         assertEquals(SessionLifecycle.FAILED, runner.snapshot().lifecycle)
 
-        assertFailsWith<IllegalStateException> { runner.finalize() }
+        val result = assertIs<FinalizationResult.Failed>(runner.finalize())
+        assertEquals("session_aborted", result.failureCode)
     }
 
     @Test
@@ -463,6 +501,7 @@ class SessionRunnerTest {
         scheduler: VirtualDeadlineScheduler,
         inference: RecordingInferencePort,
         finalizer: RecordingFinalizer,
+        poseRecordSink: EmittedRecordSink = EmittedRecordSink {},
     ) = SessionRunner(
         configuration = SessionConfiguration(TEST_SESSION_ID, TEST_SCHEMA_VERSION, TEST_WIDTH, TEST_HEIGHT),
         inference = inference,
@@ -470,6 +509,7 @@ class SessionRunnerTest {
         drainTimeoutNs = 1_000,
         finalizer = finalizer,
         dispatcher = DirectSessionDispatcher,
+        poseRecordSink = poseRecordSink,
     )
 
     private fun runnerWith(

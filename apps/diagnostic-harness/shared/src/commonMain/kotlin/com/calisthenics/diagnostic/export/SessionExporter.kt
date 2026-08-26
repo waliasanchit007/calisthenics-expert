@@ -1,10 +1,11 @@
 package com.calisthenics.diagnostic.export
 
 import com.calisthenics.diagnostic.contract.SessionManifest
-import com.calisthenics.diagnostic.contract.encodeFrameLine
 import com.calisthenics.diagnostic.contract.encodeManifest
+import com.calisthenics.diagnostic.session.EmittedRecordSink
 import com.calisthenics.diagnostic.session.FinalizationResult
 import com.calisthenics.diagnostic.session.SealedSessionSnapshot
+import com.calisthenics.diagnostic.session.SessionAborter
 import com.calisthenics.diagnostic.session.SessionFinalizer
 
 /** Publishes one sealed session using the fixed crash-consistent commit sequence. */
@@ -12,30 +13,50 @@ class SessionExporter(
     private val storage: StoragePort,
     private val manifestTemplate: SessionManifest,
     private val manifestAtFinalization: (SessionManifest, SealedSessionSnapshot) -> SessionManifest = { manifest, _ -> manifest },
-) : SessionFinalizer {
+    private val writer: DurableSessionWriter = DefaultDurableSessionWriter(
+        storage = storage,
+        sessionId = manifestTemplate.sessionId,
+    ),
+) : SessionFinalizer, SessionAborter, EmittedRecordSink {
     private var finalizationResult: FinalizationResult? = null
+
+    init {
+        writer.open()
+    }
+
+    override fun appendPose(record: com.calisthenics.diagnostic.contract.RawPoseFrame) {
+        writer.appendPose(record)
+    }
+
+    override fun abort(snapshot: SealedSessionSnapshot, reason: String) {
+        if (writer.state == DurableWriterState.OPEN || writer.state == DurableWriterState.SEALING ||
+            writer.state == DurableWriterState.FAILED
+        ) {
+            writer.abort(reason, snapshot.counts)
+        }
+    }
 
     override fun finalize(snapshot: SealedSessionSnapshot): FinalizationResult {
         finalizationResult?.let { return it }
 
-        val attempt = try {
-            storage.createStagingAttempt(manifestTemplate.sessionId)
+        val sealedArtifacts = try {
+            writer.seal(FinalSessionAggregates(snapshot.counts))
+        } catch (_: DurableReconciliationException) {
+            abortWriter(snapshot, sanitizedDetail("abandoned export attempt"))
+            return failed(snapshot, "stream_reconciliation_failed").also { finalizationResult = it }
         } catch (_: Throwable) {
-            return failed(snapshot, "staging_creation_failed").also { finalizationResult = it }
+            abortWriter(snapshot, sanitizedDetail("abandoned export attempt"))
+            return failed(snapshot, "stream_sealing_failed").also { finalizationResult = it }
         }
+        val attempt = sealedArtifacts.attempt
 
         var renamed = false
         var reconciliationFailed = false
         val result = try {
-            snapshot.records.forEach { record ->
-                storage.appendLine(attempt, encodeFrameLine(record))
-            }
-            storage.flush(attempt)
-            storage.fsyncFile(attempt, StorageFile.FRAMES)
-
-            val reconciliation = storage.reconcile(attempt)
-            if (reconciliation.lineCount != snapshot.counts.inferenceRecordsEmitted ||
-                reconciliation.posePresentCount != snapshot.counts.poseDetectedRecords
+            val poseReconciliation = sealedArtifacts.artifacts
+                .single { it.artifact == DurableArtifact.POSE_STREAM }
+                .reconciliation
+            if (poseReconciliation.recordCount != snapshot.counts.inferenceRecordsEmitted
             ) {
                 reconciliationFailed = true
                 throw StreamReconciliationMismatch
@@ -96,6 +117,10 @@ class SessionExporter(
         } catch (_: Throwable) {
             // Marker absence is the deliberate crash-residue classification.
         }
+    }
+
+    private fun abortWriter(snapshot: SealedSessionSnapshot, reason: String) {
+        runCatching { abort(snapshot, reason) }
     }
 
     private fun failed(snapshot: SealedSessionSnapshot, code: String): FinalizationResult.Failed =

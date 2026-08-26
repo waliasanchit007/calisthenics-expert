@@ -43,6 +43,35 @@ class LiveAchievedCadenceTest {
         assertTrue(samples.all { it.tMonotonicNs >= 1_000_000_000L })
     }
 
+    @Test
+    fun incrementalAccumulatorIsByteEquivalentToTheReleasedBatchSemantics() {
+        val records = listOf(
+            frame(100_000_000L),
+            frame(900_000_000L),
+            frame(2_100_000_000L),
+            frame(2_400_000_000L),
+        )
+        val accumulator = IncrementalCadenceAccumulator()
+        records.forEach { accumulator.observe(it.captureTimestampNs) }
+
+        assertEquals(achievedInferenceFpsTimeseriesOf(records), accumulator.completedSamples())
+        assertEquals(0, accumulator.retainedRawTimestampCount)
+    }
+
+    @Test
+    fun inputCardinalityDoesNotChangeRetainedStateForTheSameObservedDuration() {
+        fun accumulate(count: Int): IncrementalCadenceAccumulator = IncrementalCadenceAccumulator().also { accumulator ->
+            repeat(count) { index -> accumulator.observe(index.toLong() * 10_000_000_000L / count) }
+        }
+
+        val thousand = accumulate(1_000)
+        val hundredThousand = accumulate(100_000)
+
+        assertEquals(thousand.completedSamples().size, hundredThousand.completedSamples().size)
+        assertEquals(0, thousand.retainedRawTimestampCount)
+        assertEquals(0, hundredThousand.retainedRawTimestampCount)
+    }
+
     private fun frame(timestampNs: Long) = RawPoseFrame(
         schemaVersion = SemanticVersion("1.1.0"),
         sessionId = Uuid("00000000-0000-4000-8000-000000000001"),

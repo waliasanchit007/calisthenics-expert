@@ -1,7 +1,6 @@
 package com.calisthenics.diagnostic.session
 
 import com.calisthenics.diagnostic.contract.MachineInferenceFailure
-import com.calisthenics.diagnostic.contract.RawPoseFrame
 import com.calisthenics.diagnostic.contract.nextBackendTimestampMs
 
 enum class SessionLifecycle {
@@ -21,20 +20,16 @@ enum class TerminalState {
 
 class SealedSessionSnapshot internal constructor(
     val counts: SessionCounts,
-    records: List<RawPoseFrame>,
-    failures: List<MachineInferenceFailure>,
-    terminalMap: Map<Long, TerminalState>,
+    val boundedState: BoundedSessionSnapshot,
 ) {
-    val records: List<RawPoseFrame> = records.toList()
-    val failures: List<MachineInferenceFailure> = failures.toList()
-    val terminalMap: Map<Long, TerminalState> = terminalMap.toMap()
+    val failures = listOfNotNull(boundedState.failure)
 
     override fun equals(other: Any?): Boolean = other is SealedSessionSnapshot &&
-        counts == other.counts && records == other.records && failures == other.failures && terminalMap == other.terminalMap
+        counts == other.counts && boundedState == other.boundedState
 
-    override fun hashCode(): Int = (((counts.hashCode() * 31) + records.hashCode()) * 31 + failures.hashCode()) * 31 + terminalMap.hashCode()
+    override fun hashCode(): Int = counts.hashCode() * 31 + boundedState.hashCode()
 
-    override fun toString(): String = "SealedSessionSnapshot(counts=$counts, records=$records, failures=$failures, terminalMap=$terminalMap)"
+    override fun toString(): String = "SealedSessionSnapshot(counts=$counts, boundedState=$boundedState)"
 }
 
 sealed interface FinalizationResult {
@@ -75,12 +70,17 @@ fun interface SessionFinalizer {
     fun finalize(snapshot: SealedSessionSnapshot): FinalizationResult
 }
 
+/** Optional pre-publication abort hook for finalizers that own durable staging state. */
+fun interface SessionAborter {
+    fun abort(snapshot: SealedSessionSnapshot, reason: String)
+}
+
 data class SessionRunnerSnapshot(
     val lifecycle: SessionLifecycle,
     val transitionHistory: List<SessionLifecycle>,
     val drainDeadlineNs: Long?,
     val counts: SessionCounts,
-    val records: List<RawPoseFrame>,
+    val boundedState: BoundedSessionSnapshot,
     val failures: List<MachineInferenceFailure>,
     val diagnosticDropsAfterSeal: Long,
     val sealedSnapshot: SealedSessionSnapshot?,
@@ -94,6 +94,7 @@ class SessionRunner(
     private val drainTimeoutNs: Long,
     private val finalizer: SessionFinalizer,
     private val dispatcher: SessionDispatcher = DirectSessionDispatcher,
+    poseRecordSink: EmittedRecordSink = (finalizer as? EmittedRecordSink) ?: EmittedRecordSink {},
 ) {
     private sealed interface RunnerEvent {
         data class Submit(
@@ -115,9 +116,8 @@ class SessionRunner(
     }
 
     private val sessionConfiguration = configuration
-    private val ledger = SessionLedger(sessionConfiguration, dispatcher)
-    private val pendingSubmissionIndices = linkedSetOf<Long>()
-    private val terminalStates = linkedMapOf<Long, TerminalState>()
+    private val ledger = SessionLedger(sessionConfiguration, dispatcher, poseRecordSink)
+    private var pendingSubmissionIndex: Long? = null
     private val transitionHistory = mutableListOf(SessionLifecycle.RUNNING)
     private var lifecycle = SessionLifecycle.RUNNING
     private var nextSubmissionIndex = 0L
@@ -148,6 +148,11 @@ class SessionRunner(
             ledger.accept(SessionEvent.FrameSkipped(SkipReason.SESSION_STOPPING))
             return@admit null
         }
+        if (pendingSubmissionIndex != null) {
+            ledger.accept(SessionEvent.FrameReceived(frameIndex, captureTimestampNs, imageWidth(), imageHeight()))
+            ledger.accept(SessionEvent.FrameSkipped(SkipReason.BACKPRESSURE))
+            return@admit null
+        }
 
         val submissionIndex = nextSubmissionIndex
         val backendTimestampMs = nextBackendTimestampMs(captureTimestampNs, previousBackendTimestampMs)
@@ -155,7 +160,7 @@ class SessionRunner(
         ledger.accept(SessionEvent.InferenceSubmitted(submissionIndex, inferenceStartNs))
         nextSubmissionIndex++
         previousBackendTimestampMs = backendTimestampMs
-        pendingSubmissionIndices += submissionIndex
+        pendingSubmissionIndex = submissionIndex
         try {
             inference.submit(submissionIndex, input.copyOf(), backendTimestampMs) { result ->
                 postInferenceResult(submissionIndex, result)
@@ -202,10 +207,10 @@ class SessionRunner(
     fun postDeadline(): Unit = admit(RunnerEvent.DeadlineExpired) { expireDeadline() }.let { }
 
     /** Conservative dispatcher-confined view; the port's own slot remains authoritative. */
-    fun hasPendingInference(): Boolean = dispatcher.dispatch { pendingSubmissionIndices.isNotEmpty() }
+    fun hasPendingInference(): Boolean = dispatcher.dispatch { pendingSubmissionIndex != null }
 
     fun cancel(submissionIndex: Long): Unit = admit(RunnerEvent.Cancel(submissionIndex)) {
-        check(submissionIndex in pendingSubmissionIndices) { "submission is not pending" }
+        check(submissionIndex == pendingSubmissionIndex) { "submission is not pending" }
         inference.cancel(submissionIndex)
         classifyFailure(
             submissionIndex,
@@ -289,7 +294,7 @@ class SessionRunner(
     private fun classifyResult(submissionIndex: Long, result: InferenceResult) {
         when (result) {
             is InferenceResult.Success -> {
-                check(submissionIndex in pendingSubmissionIndices) { "submission has no pending inference call" }
+                check(submissionIndex == pendingSubmissionIndex) { "submission has no pending inference call" }
                 ledger.accept(
                     SessionEvent.InferenceSucceeded(
                         submissionIndex = submissionIndex,
@@ -299,8 +304,7 @@ class SessionRunner(
                         worldLandmarks = result.worldLandmarks,
                     ),
                 )
-                pendingSubmissionIndices -= submissionIndex
-                terminalStates[submissionIndex] = TerminalState.EMITTED
+                pendingSubmissionIndex = null
             }
 
             is InferenceResult.Failure -> classifyFailure(submissionIndex, result)
@@ -309,7 +313,7 @@ class SessionRunner(
     }
 
     private fun classifyFailure(submissionIndex: Long, result: InferenceResult.Failure) {
-        check(submissionIndex in pendingSubmissionIndices) { "submission has no pending inference call" }
+        check(submissionIndex == pendingSubmissionIndex) { "submission has no pending inference call" }
         ledger.accept(
             SessionEvent.InferenceFailed(
                 submissionIndex = submissionIndex,
@@ -319,18 +323,13 @@ class SessionRunner(
                 detail = result.detail,
             ),
         )
-        pendingSubmissionIndices -= submissionIndex
-        terminalStates[submissionIndex] = if (result.classification == "session_teardown_timeout") {
-            TerminalState.TIMED_OUT
-        } else {
-            TerminalState.FAILED
-        }
-        sealIfQuiescent()
+        pendingSubmissionIndex = null
+        failSession()
     }
 
     private fun expireDeadline() {
         if (lifecycle != SessionLifecycle.DRAINING) return
-        pendingSubmissionIndices.toList().forEach { submissionIndex ->
+        pendingSubmissionIndex?.let { submissionIndex ->
             inference.cancel(submissionIndex)
             classifyFailure(
                 submissionIndex,
@@ -341,7 +340,7 @@ class SessionRunner(
     }
 
     private fun sealIfQuiescent() {
-        if (lifecycle == SessionLifecycle.DRAINING && pendingSubmissionIndices.isEmpty()) {
+        if (lifecycle == SessionLifecycle.DRAINING && pendingSubmissionIndex == null) {
             deadlineHandle?.dispose()
             deadlineHandle = null
             ledger.accept(SessionEvent.StopRequested)
@@ -351,13 +350,11 @@ class SessionRunner(
 
     private fun seal(): SealedSessionSnapshot {
         sealedSnapshot?.let { return it }
-        check(pendingSubmissionIndices.isEmpty()) { "cannot seal with pending submissions" }
+        check(pendingSubmissionIndex == null) { "cannot seal with pending submissions" }
         val ledgerSnapshot = ledger.snapshot()
         return SealedSessionSnapshot(
             counts = ledgerSnapshot.counts,
-            records = ledgerSnapshot.records,
-            failures = ledgerSnapshot.failures,
-            terminalMap = terminalStates,
+            boundedState = ledgerSnapshot.boundedState,
         ).also {
             sealedSnapshot = it
             if (lifecycle == SessionLifecycle.DRAINING) transitionTo(SessionLifecycle.SEALED)
@@ -369,9 +366,17 @@ class SessionRunner(
             val ledgerSnapshot = ledger.snapshot()
             sealedSnapshot = SealedSessionSnapshot(
                 counts = ledgerSnapshot.counts,
-                records = ledgerSnapshot.records,
-                failures = ledgerSnapshot.failures,
-                terminalMap = terminalStates,
+                boundedState = ledgerSnapshot.boundedState,
+            )
+        }
+        runCatching {
+            (finalizer as? SessionAborter)?.abort(checkNotNull(sealedSnapshot), "session_failed")
+        }
+        if (!abandonedBeforeFinalization && finalizationResult == null) {
+            finalizationResult = FinalizationResult.Failed(
+                sealedSnapshot = checkNotNull(sealedSnapshot),
+                failureCode = "session_aborted",
+                detail = "session aborted before publication",
             )
         }
         if (lifecycle != SessionLifecycle.FAILED) transitionTo(SessionLifecycle.FAILED)
@@ -426,7 +431,7 @@ class SessionRunner(
             transitionHistory = transitionHistory.toList(),
             drainDeadlineNs = drainDeadlineNs,
             counts = sealedSnapshot?.counts ?: ledgerSnapshot.counts,
-            records = sealedSnapshot?.records ?: ledgerSnapshot.records,
+            boundedState = sealedSnapshot?.boundedState ?: ledgerSnapshot.boundedState,
             failures = sealedSnapshot?.failures ?: ledgerSnapshot.failures,
             diagnosticDropsAfterSeal = diagnosticDropsAfterSeal,
             sealedSnapshot = sealedSnapshot,

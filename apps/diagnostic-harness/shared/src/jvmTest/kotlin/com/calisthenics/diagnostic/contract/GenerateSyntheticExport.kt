@@ -7,6 +7,8 @@ import com.calisthenics.diagnostic.export.StagingAttempt
 import com.calisthenics.diagnostic.export.StagingResidue
 import com.calisthenics.diagnostic.export.StorageFile
 import com.calisthenics.diagnostic.export.StoragePort
+import com.calisthenics.diagnostic.export.DurableArtifact
+import com.calisthenics.diagnostic.export.ArtifactReconciliation
 import com.calisthenics.diagnostic.export.StorageRoots
 import com.calisthenics.diagnostic.export.StreamReconciliation
 import com.calisthenics.diagnostic.session.DeterministicCore
@@ -165,12 +167,63 @@ private class FileStorage(
             }
         }
 
+    override fun appendArtifact(attempt: StagingAttempt, artifact: DurableArtifact, bytes: ByteArray) {
+        Files.write(
+            artifactPath(attempt, artifact),
+            bytes,
+            StandardOpenOption.CREATE,
+            StandardOpenOption.APPEND,
+        )
+    }
+
+    override fun flushArtifact(attempt: StagingAttempt, artifact: DurableArtifact) = Unit
+
+    override fun fsyncArtifact(attempt: StagingAttempt, artifact: DurableArtifact) {
+        FileChannel.open(artifactPath(attempt, artifact), StandardOpenOption.WRITE, StandardOpenOption.CREATE)
+            .use { it.force(true) }
+    }
+
+    override fun replaceCheckpoint(attempt: StagingAttempt, encodedCheckpoint: String) {
+        val target = fileAttempt(attempt).checkpointPath
+        val temporary = target.resolveSibling("${target.fileName}.tmp")
+        Files.writeString(temporary, encodedCheckpoint, StandardCharsets.UTF_8)
+        FileChannel.open(temporary, StandardOpenOption.WRITE).use { it.force(true) }
+        Files.move(temporary, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        fsyncDirectory(fileAttempt(attempt).directory.toString())
+    }
+
+    override fun reconcileArtifact(attempt: StagingAttempt, artifact: DurableArtifact): ArtifactReconciliation {
+        val bytes = if (Files.exists(artifactPath(attempt, artifact))) {
+            Files.readAllBytes(artifactPath(attempt, artifact))
+        } else {
+            ByteArray(0)
+        }
+        val lines = bytes.toString(Charsets.UTF_8).lineSequence().filter { it.isNotEmpty() }.toList()
+        return ArtifactReconciliation(
+            bytes.size.toLong(),
+            com.calisthenics.diagnostic.hash.Sha256Digest.hex(bytes),
+            lines.size.toLong(),
+            if (artifact == DurableArtifact.POSE_STREAM) {
+                lines.count { decodeFrame("$it\n").posePresent }.toLong()
+            } else {
+                null
+            },
+        )
+    }
+
     private fun fileAttempt(attempt: StagingAttempt): FileAttempt = attempts.getValue(attempt.path)
+
+    private fun artifactPath(attempt: StagingAttempt, artifact: DurableArtifact): Path = when (artifact) {
+        DurableArtifact.POSE_STREAM -> fileAttempt(attempt).framesPath
+        DurableArtifact.TELEMETRY -> fileAttempt(attempt).telemetryPath
+    }
 }
 
 private class FileAttempt(val directory: Path) : StagingAttempt {
     override val path: String = directory.toString()
     val framesPath: Path = directory.resolve("frames.ndjson")
+    val telemetryPath: Path = directory.resolve("telemetry.ndjson")
+    val checkpointPath: Path = directory.resolve("checkpoint")
     val manifestPath: Path = directory.resolve("manifest.json")
     val abortPath: Path = directory.resolve("abort.marker")
     var flushed = false

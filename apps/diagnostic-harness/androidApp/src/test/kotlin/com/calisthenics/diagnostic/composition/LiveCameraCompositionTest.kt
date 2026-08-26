@@ -4,6 +4,7 @@ import com.calisthenics.diagnostic.liveCaptureFailureCodeOr
 import com.calisthenics.diagnostic.toLivePhase
 import com.calisthenics.diagnostic.camera.OwnedYuvFrame
 import com.calisthenics.diagnostic.contract.Landmark
+import com.calisthenics.diagnostic.contract.RawPoseFrame
 import com.calisthenics.diagnostic.mediapipe.PoseLandmarkerConstructionEvidence
 import com.calisthenics.diagnostic.preprocessing.FrameRotation
 import com.calisthenics.diagnostic.preprocessing.YuvColorRange
@@ -15,6 +16,7 @@ import com.calisthenics.diagnostic.session.InferencePort
 import com.calisthenics.diagnostic.session.InferenceResult
 import com.calisthenics.diagnostic.session.SessionFinalizer
 import com.calisthenics.diagnostic.session.SessionRunnerSnapshot
+import com.calisthenics.diagnostic.session.TerminalState
 import com.calisthenics.diagnostic.ui.LiveRunPhase
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.boolean
@@ -473,8 +475,13 @@ class LiveCameraCompositionTest {
             harness.source.emit(frame(timestampNs = 1_000_002_000L))
             harness.inference.completeSuccess()
 
-            val record = assertNotNull(harness.composition.snapshot()).records.single()
+            val snapshot = assertNotNull(harness.composition.snapshot())
+            val record = assertNotNull(harness.emittedRecord)
             val manifest = assertNotNull(harness.composition.manifest())
+            assertEquals(0L, snapshot.boundedState.submittedHighWaterMark)
+            assertEquals(0L, snapshot.boundedState.terminalHighWaterMark)
+            assertEquals(TerminalState.EMITTED, snapshot.boundedState.lastTerminalState)
+            assertEquals(2_000L, snapshot.boundedState.latestInferenceLatencyNs)
             assertEquals(2_000L, record.captureTimestampNs)
             assertEquals(3_000L, record.inferenceStartNs)
             assertEquals(5_000L, record.inferenceEndNs)
@@ -509,7 +516,12 @@ class LiveCameraCompositionTest {
             harness.source.emit(frame(timestampNs = 9_000_002_000L))
             harness.inference.completeSuccess()
 
-            val record = assertNotNull(harness.composition.snapshot()).records.single()
+            val snapshot = assertNotNull(harness.composition.snapshot())
+            val record = assertNotNull(harness.emittedRecord)
+            assertEquals(0L, snapshot.boundedState.submittedHighWaterMark)
+            assertEquals(0L, snapshot.boundedState.terminalHighWaterMark)
+            assertEquals(TerminalState.EMITTED, snapshot.boundedState.lastTerminalState)
+            assertEquals(2_000L, snapshot.boundedState.latestInferenceLatencyNs)
             assertEquals(2_000L, record.captureTimestampNs)
             assertEquals(3_000L, record.inferenceStartNs)
             assertEquals(5_000L, record.inferenceEndNs)
@@ -946,7 +958,10 @@ class LiveCameraCompositionTest {
 
             assertFalse(sourceCallbackThread.isAlive, "source callback deadlocked teardown")
             assertNull(nestedStopFailure.get())
-            assertIs<FinalizationResult.Published>(assertNotNull(nestedCompletion.get()).finalization)
+            val finalization = assertIs<FinalizationResult.Failed>(
+                assertNotNull(nestedCompletion.get()).finalization,
+            )
+            assertEquals("session_aborted", finalization.failureCode)
         } finally {
             if (sourceCallbackThread.isAlive) {
                 sourceCallbackThread.interrupt()
@@ -1019,6 +1034,7 @@ class LiveCameraCompositionTest {
         var finalizerCalls = 0
         var manifestCallbackInvoked = false
         val manifestCallbackInvokedLatch = CountDownLatch(1)
+        var emittedRecord: RawPoseFrame? = null
         lateinit var manifest: com.calisthenics.diagnostic.contract.SessionManifest
         var finalizedManifest: com.calisthenics.diagnostic.contract.SessionManifest? = null
         private var started = false
@@ -1051,7 +1067,11 @@ class LiveCameraCompositionTest {
                     finalizerFailure?.let { throw it }
                     finalizerCreated = true
                     manifest = template
-                    object : SessionFinalizer {
+                    object : SessionFinalizer, com.calisthenics.diagnostic.session.EmittedRecordSink {
+                        override fun appendPose(record: RawPoseFrame) {
+                            emittedRecord = record
+                        }
+
                         override fun finalize(snapshot: com.calisthenics.diagnostic.session.SealedSessionSnapshot): FinalizationResult {
                             finalizerCalls++
                             if (invokeManifestAtFinalization) {

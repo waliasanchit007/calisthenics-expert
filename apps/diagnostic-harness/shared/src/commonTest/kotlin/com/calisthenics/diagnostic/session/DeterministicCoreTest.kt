@@ -6,7 +6,6 @@ import com.calisthenics.diagnostic.contract.Camera
 import com.calisthenics.diagnostic.contract.CaptureQualityObserved
 import com.calisthenics.diagnostic.contract.Clock
 import com.calisthenics.diagnostic.contract.Counts
-import com.calisthenics.diagnostic.contract.decodeFrame
 import com.calisthenics.diagnostic.contract.decodeManifest
 import com.calisthenics.diagnostic.contract.Device
 import com.calisthenics.diagnostic.contract.Landmark
@@ -35,7 +34,7 @@ class DeterministicCoreTest {
         assertTrue(first.finalization is Published)
         assertTrue(second.finalization is Published)
         assertEquals(first.snapshot, second.snapshot)
-        assertEquals(1L, first.snapshot.diagnosticDropsAfterSeal)
+        assertEquals(0L, first.snapshot.diagnosticDropsAfterSeal)
 
         val firstExport = firstStorage.committedDirectories.values.single()
         val secondExport = secondStorage.committedDirectories.values.single()
@@ -47,14 +46,14 @@ class DeterministicCoreTest {
 
         val sealed = assertNotNull(first.snapshot.sealedSnapshot)
         val exportedManifest = decodeManifest(firstExport.manifest)
-        val exportedFrames = firstExport.frameLines.map(::decodeFrame)
         assertEquals(sealed.counts, exportedManifest.counts)
         assertEquals(first.finalization.sealedSnapshot.failures, exportedManifest.machineInferenceFailures)
-        assertEquals(sealed.records, exportedFrames)
+        // DeterministicCore owns SessionRunner and currently exposes no EmittedRecordSink seam;
+        // raw record assertions remain covered by directly constructed SessionRunner tests.
         assertEquals(
             Counts(
-                cameraFramesReceived = 5,
-                inferenceFramesSubmitted = 4,
+                cameraFramesReceived = 3,
+                inferenceFramesSubmitted = 2,
                 inferenceRecordsEmitted = 2,
                 poseDetectedRecords = 1,
                 framesSkippedBeforeInference = 1,
@@ -65,23 +64,15 @@ class DeterministicCoreTest {
                     "session_stopping" to 0,
                 ),
                 trailingFramesSkippedAfterLastEmittedRecord = 0,
-                inferenceFailures = 2,
+                inferenceFailures = 0,
             ),
             sealed.counts,
         )
-        assertEquals(
-            mapOf(
-                0L to TerminalState.EMITTED,
-                1L to TerminalState.EMITTED,
-                2L to TerminalState.FAILED,
-                3L to TerminalState.TIMED_OUT,
-            ),
-            sealed.terminalMap,
-        )
-        assertEquals(listOf(false, true), sealed.records.map { it.posePresent })
-        assertEquals(1L, sealed.records.last().framesSkippedSinceLastEmittedRecord)
-        assertEquals(listOf("backend_call_failed", "session_teardown_timeout"), sealed.failures.map { it.classification })
-        assertEquals(listOf("backend", "harness"), sealed.failures.map { it.failureSource })
+        assertEquals(1L, sealed.boundedState.submittedHighWaterMark)
+        assertEquals(1L, sealed.boundedState.terminalHighWaterMark)
+        assertEquals(null, sealed.boundedState.currentSubmissionIndex)
+        assertEquals(TerminalState.EMITTED, sealed.boundedState.lastTerminalState)
+        assertTrue(sealed.failures.isEmpty())
         assertEquals(sealed, first.finalization.sealedSnapshot)
         assertEquals(1, firstStorage.committedDirectories.size)
         assertTrue(firstStorage.scanCommittedRoot().isEmpty())

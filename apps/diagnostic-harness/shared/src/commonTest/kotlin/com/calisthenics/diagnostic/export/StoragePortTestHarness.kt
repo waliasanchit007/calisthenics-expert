@@ -1,7 +1,7 @@
 package com.calisthenics.diagnostic.export
 
 /**
- * Everything a [StoragePortConformanceSuite] probe needs beyond the twelve production
+ * Everything a [StoragePortConformanceSuite] probe needs beyond the production
  * [StoragePort] methods, implemented once per backend so the identical suite drives both. Per
  * design spec §6.1 point 2 / §6.2, this is a test-only surface: no method here is added to
  * production [StoragePort].
@@ -11,7 +11,7 @@ interface StoragePortTestHarness {
     fun freshPort(): StoragePort
 
     /**
-     * The one deliberate backdoor: creates filesystem state the twelve production methods cannot
+     * The one deliberate backdoor: creates filesystem state the production methods cannot
      * produce on their own — a pre-existing directory at [destinationPath], empty or already
      * carrying a manifest/frame line, entirely outside the port under test.
      */

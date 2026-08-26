@@ -58,22 +58,10 @@ class DeterministicCore(
         runner.skip(1, 133_333_333L, SkipReason.BACKPRESSURE)
         // Selected frame 2: a valid pose-present result.
         runner.submit(2, 166_666_666L, 166_666_667L, canonicalInput)
-        // Selected frame 3: one backend call failure.
-        runner.submit(3, 200_000_000L, 200_000_001L, canonicalInput)
-        // Selected frame 4 remains in flight so drain fencing classifies it as a timeout.
-        runner.submit(4, 233_333_333L, 233_333_334L, canonicalInput)
-
+        // A clean integration run reaches publication. First-failure abort semantics are covered
+        // independently by SessionRunnerTest; mixing that failure into this publication oracle
+        // would make a committed export impossible by design.
         runner.stop(nowNs = 1_000_000_000L)
-        scheduler.fire()
-        // This callback is intentionally after the timeout fence and must be diagnostic-only.
-        inference.deliverLateCallback(
-            submissionIndex = 3L,
-            result = InferenceResult.Success(
-                inferenceEndNs = 1_001_000_001L,
-                posePresent = true,
-                normalizedImageLandmarks = deterministicLandmarks(0.01),
-            ),
-        )
 
         val finalization = runner.finalize()
         return DeterministicCoreResult(
@@ -83,8 +71,6 @@ class DeterministicCore(
     }
 
     private class ScriptedInferencePort : InferencePort {
-        private val callbacks = linkedMapOf<Long, (InferenceResult) -> Unit>()
-
         override fun submit(
             submissionIndex: Long,
             canonicalInput: ByteArray,
@@ -103,14 +89,8 @@ class DeterministicCore(
                         worldLandmarks = deterministicLandmarks(1.0),
                     ),
                 )
-                2L -> callback(InferenceResult.Failure("backend", "backend_call_failed", "synthetic_backend_error"))
-                3L -> callbacks[submissionIndex] = callback
                 else -> error("unexpected scripted submission index: $submissionIndex")
             }
-        }
-
-        fun deliverLateCallback(submissionIndex: Long, result: InferenceResult) {
-            callbacks.getValue(submissionIndex).invoke(result)
         }
     }
 

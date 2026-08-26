@@ -28,10 +28,10 @@ import com.calisthenics.diagnostic.export.SessionExporter
 import com.calisthenics.diagnostic.export.StorageRootsResult
 import com.calisthenics.diagnostic.hash.Sha256Digest
 import com.calisthenics.diagnostic.live.LiveFrameAdmission
+import com.calisthenics.diagnostic.live.LiveCaptureCadenceAccumulator
 import com.calisthenics.diagnostic.live.LiveCaptureCadenceDiagnostics
 import com.calisthenics.diagnostic.live.LiveCaptureThermalObservation
 import com.calisthenics.diagnostic.live.LiveCaptureThermalSummary
-import com.calisthenics.diagnostic.live.achievedInferenceFpsTimeseriesOf
 import com.calisthenics.diagnostic.live.asLiveEvidenceJson
 import com.calisthenics.diagnostic.mediapipe.PoseLandmarkerConstructionEvidence
 import com.calisthenics.diagnostic.mediapipe.PoseLandmarkerLiveAdapterFactory
@@ -300,7 +300,7 @@ class LiveCameraComposition internal constructor(
 
     private var observedSourceGeometry: SourceGeometry? = null
     private var negotiatedSourceResolution: LiveSourceResolution? = null
-    private val admittedCallbackTimestampsNs = mutableListOf<Long>()
+    private val admittedCallbackCadence = LiveCaptureCadenceAccumulator(CameraXFrameSource.TARGET_CAMERA_FPS)
     private var cadenceDiagnostics: LiveCaptureCadenceDiagnostics? = null
     private var stopping = false
     private var stallHandle: Disposable? = null
@@ -425,11 +425,7 @@ class LiveCameraComposition internal constructor(
                             val classificationGap = sealed.counts.cameraFramesReceived -
                                 sealed.counts.inferenceFramesSubmitted -
                                 sealed.counts.framesSkippedBeforeInference
-                            val cadenceDiagnostics = LiveCaptureCadenceDiagnostics.fromAdmittedTimestamps(
-                                timestampsNs = admittedCallbackTimestampsNs,
-                                requestedCameraFps = CameraXFrameSource.TARGET_CAMERA_FPS,
-                                deliveredCallbackClassificationGap = classificationGap,
-                            )
+                            val cadenceDiagnostics = admittedCallbackCadence.snapshot(classificationGap)
                             this@LiveCameraComposition.cadenceDiagnostics = cadenceDiagnostics
                             val activeThermalProbe = checkNotNull(thermalProbe)
                             val thermalObservations = activeThermalProbe.observations()
@@ -450,15 +446,13 @@ class LiveCameraComposition internal constructor(
                                     mirrored = geometry.mirrored,
                                 ),
                                 availableObservations = AvailableObservations(
-                                    normalizedImageLandmarksAvailable = sealed.records.any {
-                                        it.normalizedImageLandmarks != null
-                                    },
-                                    worldLandmarksAvailable = sealed.records.any {
-                                        it.worldLandmarks != null
-                                    },
+                                    normalizedImageLandmarksAvailable =
+                                        sealed.boundedState.normalizedImageLandmarksAvailable,
+                                    worldLandmarksAvailable = sealed.boundedState.worldLandmarksAvailable,
                                 ),
                                 cadence = finalized.cadence.copy(
-                                    achievedInferenceFpsTimeseries = achievedInferenceFpsTimeseriesOf(sealed.records),
+                                    achievedInferenceFpsTimeseries =
+                                        sealed.boundedState.achievedInferenceFpsTimeseries,
                                 ),
                                 clock = finalized.clock.copy(endedAtUtc = dependencies.wallClockUtc()),
                                 studyContext = finalized.studyContext + mapOf(
@@ -642,9 +636,7 @@ class LiveCameraComposition internal constructor(
 
     /** Observed delivery span, used by the physical gate after the first delivered callback. */
     fun observedCaptureSpanNs(): Long? = synchronized(monitor) {
-        admittedCallbackTimestampsNs.firstOrNull()?.let { first ->
-            admittedCallbackTimestampsNs.last() - first
-        }
+        admittedCallbackCadence.observedSpanNs()
     }
 
     fun latestThermalObservation(): LiveThermalObservation? = synchronized(monitor) {
@@ -719,7 +711,7 @@ class LiveCameraComposition internal constructor(
                     canonical = null,
                 )
             }
-            admittedCallbackTimestampsNs += rebasedCaptureNs
+            admittedCallbackCadence.observe(rebasedCaptureNs)
             val negotiated = negotiatedSourceResolution
             if (negotiated == null || frame.width != negotiated.width || frame.height != negotiated.height) {
                 val classification = currentAdmission.classify(rebasedCaptureNs, preprocessingSucceeded = false)
@@ -836,7 +828,7 @@ class LiveCameraComposition internal constructor(
 
     private fun onInferenceTerminal(submissionIndex: Long) {
         val currentRunner = synchronized(monitor) {
-            terminalSubmissionIndices += submissionIndex
+            terminalSubmissionHighWaterMark = maxOf(terminalSubmissionHighWaterMark ?: -1L, submissionIndex)
             try {
                 admission?.completeSubmission()
             } catch (_: IllegalStateException) {
@@ -859,7 +851,7 @@ class LiveCameraComposition internal constructor(
         }
         if (pendingRunner == null || !pendingRunner.hasPendingInference()) return
         val stopWork = synchronized(monitor) {
-            if (stopping || completion != null || terminalSubmissionIndices.contains(submissionIndex)) return
+            if (stopping || completion != null || inferenceTerminalLocked(submissionIndex)) return
             stalled = true
             requestStopLocked()
         }
@@ -903,7 +895,11 @@ class LiveCameraComposition internal constructor(
 
     private fun finishIfSealed(currentRunner: SessionRunner) {
         val state = currentRunner.snapshot()
-        if (state.lifecycle != com.calisthenics.diagnostic.session.SessionLifecycle.SEALED) return
+        if (state.lifecycle != com.calisthenics.diagnostic.session.SessionLifecycle.SEALED &&
+            state.lifecycle != com.calisthenics.diagnostic.session.SessionLifecycle.FAILED
+        ) {
+            return
+        }
         synchronized(monitor) {
             if (finalizationStarted || completion != null || abandonRequested) return
             finalizationStarted = true
@@ -1019,11 +1015,14 @@ class LiveCameraComposition internal constructor(
         stallHandle = null
     }
 
-    private var terminalSubmissionIndices = mutableSetOf<Long>()
+    private var terminalSubmissionHighWaterMark: Long? = null
 
     private fun inferenceTerminal(submissionIndex: Long): Boolean = synchronized(monitor) {
-        terminalSubmissionIndices.contains(submissionIndex)
+        inferenceTerminalLocked(submissionIndex)
     }
+
+    private fun inferenceTerminalLocked(submissionIndex: Long): Boolean =
+        terminalSubmissionHighWaterMark?.let { submissionIndex <= it } ?: false
 
     private fun relativeNowNs(): Long = (dependencies.clock.nowNs() - sessionStartNs).coerceAtLeast(0L)
 
