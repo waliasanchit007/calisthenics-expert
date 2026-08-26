@@ -102,6 +102,64 @@ class PipelineTelemetryTest {
     }
 
     @Test
+    fun batteryReadingsEncodePercentAndMicroampHoursWithStableUnitsInSchemaTwo() {
+        val percent = sampleWithBattery(BatteryReading(BatteryReadingUnit.PERCENT, 75)).encodeNdjson()
+        val chargeCounter = sampleWithBattery(
+            BatteryReading(BatteryReadingUnit.MICROAMP_HOURS, 4_321_000),
+        ).encodeNdjson()
+
+        assertEquals(true, percent.contains("\"schema_version\":\"2.0.0\""))
+        assertEquals(
+            true,
+            percent.contains(
+                "\"battery_level_or_charge\":{\"kind\":\"VALUE\",\"unit\":\"percent\",\"value\":75}",
+            ),
+        )
+        assertEquals(
+            true,
+            chargeCounter.contains(
+                "\"battery_level_or_charge\":{\"kind\":\"VALUE\",\"unit\":\"microamp_hours\",\"value\":4321000}",
+            ),
+        )
+    }
+
+    @Test
+    fun stoppingBeforeASuccessfulStartFailsExplicitly() {
+        val sampler = FixedTelemetrySampler(
+            nowNs = { 0L },
+            scheduler = RecordingFixedScheduler(),
+            probe = { readings() },
+            sink = RecordingTelemetrySink(),
+        )
+
+        assertFailsWith<IllegalStateException> { sampler.stopAndJoinWithTerminalSample() }
+    }
+
+    @Test
+    fun schedulerActionFailureIsRethrownBeforeAnyTerminalSampleIsAppended() {
+        val failure = IllegalStateException("scheduled telemetry action failed")
+        val sink = RecordingTelemetrySink()
+        val scheduler = object : FixedTelemetryScheduler {
+            override fun scheduleAtFixedRate(
+                periodNs: Long,
+                action: () -> Unit,
+            ): FixedTelemetrySchedule = object : FixedTelemetrySchedule {
+                override fun cancel() = Unit
+
+                override fun join(): Unit = throw failure
+            }
+        }
+        val sampler = FixedTelemetrySampler({ 0L }, scheduler, { readings() }, sink)
+        sampler.start()
+
+        assertEquals(
+            failure,
+            assertFailsWith<IllegalStateException> { sampler.stopAndJoinWithTerminalSample() },
+        )
+        assertEquals(listOf(false), sink.records.filterIsInstance<FixedTelemetrySample>().map { it.terminal })
+    }
+
+    @Test
     fun samplerRejectsAClockRegressionRatherThanPublishingAReorderedSample() {
         val clock = FakeClock(2L)
         val scheduler = RecordingFixedScheduler()
@@ -115,13 +173,27 @@ class PipelineTelemetryTest {
     private fun readings() = FixedTelemetryReadings(
         thermal = TelemetryValue.Value(2),
         batteryTemperature = TelemetryValue.Value(320),
-        batteryLevelOrCharge = TelemetryValue.Value(75),
+        batteryLevelOrCharge = TelemetryValue.Value(BatteryReading(BatteryReadingUnit.PERCENT, 75)),
         charging = TelemetryValue.Value(false),
         powerSource = TelemetryValue.Value("battery"),
-        connectivity = TelemetryValue.Value(ConnectivityState("wifi", true, "hashed-network")),
+        connectivity = TelemetryValue.Value(ConnectivityState("wifi", true)),
         keepAwake = TelemetryValue.Value(true),
         brightness = TelemetryValue.Value(BrightnessState("manual", 0.5)),
         lifecycle = TelemetryValue.Value("foreground"),
+    )
+
+    private fun sampleWithBattery(reading: BatteryReading) = FixedTelemetrySample(
+        sequence = 0L,
+        tSessionNs = 0L,
+        thermal = TelemetryValue.Unavailable("thermal_api_unavailable"),
+        batteryTemperature = TelemetryValue.Unavailable("battery_temperature_unavailable"),
+        batteryLevelOrCharge = TelemetryValue.Value(reading),
+        charging = TelemetryValue.Unavailable("charging_state_unavailable"),
+        powerSource = TelemetryValue.Unavailable("power_source_unavailable"),
+        connectivity = TelemetryValue.Unavailable("connectivity_api_unavailable"),
+        keepAwake = TelemetryValue.Unavailable("keep_awake_unavailable"),
+        brightness = TelemetryValue.Unavailable("brightness_unavailable"),
+        lifecycle = TelemetryValue.Unavailable("lifecycle_unavailable"),
     )
 }
 

@@ -323,8 +323,16 @@ sealed interface TelemetryValue<out T> {
 data class ConnectivityState(
     val transport: String,
     val connected: Boolean,
-    /** An opaque, non-SSID/non-BSSID Wi-Fi identity such as a locally salted digest. */
-    val wifiIdentity: String?,
+)
+
+enum class BatteryReadingUnit(val wireValue: String) {
+    PERCENT("percent"),
+    MICROAMP_HOURS("microamp_hours"),
+}
+
+data class BatteryReading(
+    val unit: BatteryReadingUnit,
+    val value: Int,
 )
 
 data class BrightnessState(val mode: String, val value: Double) {
@@ -336,7 +344,7 @@ data class BrightnessState(val mode: String, val value: Double) {
 data class FixedTelemetryReadings(
     val thermal: TelemetryValue<Int>,
     val batteryTemperature: TelemetryValue<Int>,
-    val batteryLevelOrCharge: TelemetryValue<Int>,
+    val batteryLevelOrCharge: TelemetryValue<BatteryReading>,
     val charging: TelemetryValue<Boolean>,
     val powerSource: TelemetryValue<String>,
     val connectivity: TelemetryValue<ConnectivityState>,
@@ -350,7 +358,7 @@ data class FixedTelemetrySample(
     val tSessionNs: Long,
     val thermal: TelemetryValue<Int>,
     val batteryTemperature: TelemetryValue<Int>,
-    val batteryLevelOrCharge: TelemetryValue<Int>,
+    val batteryLevelOrCharge: TelemetryValue<BatteryReading>,
     val charging: TelemetryValue<Boolean>,
     val powerSource: TelemetryValue<String>,
     val connectivity: TelemetryValue<ConnectivityState>,
@@ -368,7 +376,7 @@ data class FixedTelemetrySample(
         append('{')
         stringField("record_type", "fixed_telemetry_sample")
         append(',')
-        stringField("schema_version", SCHEMA_VERSION)
+        stringField("schema_version", FIXED_TELEMETRY_SCHEMA_VERSION)
         append(",\"sequence\":$sequence")
         append(",\"t_session_ns\":$tSessionNs")
         append(",\"terminal\":$terminal")
@@ -377,7 +385,7 @@ data class FixedTelemetrySample(
         append(",\"battery_temperature\":")
         appendIntValue(batteryTemperature)
         append(",\"battery_level_or_charge\":")
-        appendIntValue(batteryLevelOrCharge)
+        appendBatteryReadingValue(batteryLevelOrCharge)
         append(",\"charging\":")
         appendBooleanValue(charging)
         append(",\"power_source\":")
@@ -411,26 +419,31 @@ class FixedTelemetrySampler(
     private val sink: TelemetrySink,
 ) {
     private var schedule: FixedTelemetrySchedule? = null
+    private var started = false
     @kotlin.concurrent.Volatile
     private var stopped = false
+    private var terminalSampleAppended = false
     private var nextSequence = 0L
     private var lastSampleNs = 0L
 
     fun start() {
-        check(schedule == null && !stopped) { "telemetry sampler may only start once" }
+        check(!started && schedule == null && !stopped) { "telemetry sampler may only start once" }
         appendSample(terminal = false)
         schedule = scheduler.scheduleAtFixedRate(SAMPLE_INTERVAL_NS) {
             if (!stopped) appendSample(terminal = false)
         }
+        started = true
     }
 
     fun stopAndJoinWithTerminalSample() {
-        val current = schedule ?: return
-        if (stopped) return
+        check(started) { "telemetry sampler must start successfully before it can stop" }
+        if (terminalSampleAppended) return
+        val current = checkNotNull(schedule)
         stopped = true
         current.cancel()
         current.join()
         appendSample(terminal = true)
+        terminalSampleAppended = true
     }
 
     private fun appendSample(terminal: Boolean) {
@@ -458,6 +471,7 @@ class FixedTelemetrySampler(
 }
 
 private const val SCHEMA_VERSION = "1.0.0"
+private const val FIXED_TELEMETRY_SCHEMA_VERSION = "2.0.0"
 private const val SAMPLE_INTERVAL_NS = 1_000_000_000L
 
 private fun StringBuilder.stringField(name: String, value: String) {
@@ -504,9 +518,15 @@ private fun StringBuilder.appendConnectivityValue(value: TelemetryValue<Connecti
     is TelemetryValue.Value -> {
         append("{\"kind\":\"VALUE\",\"transport\":\"").append(value.value.transport.jsonEscaped())
         append("\",\"connected\":${value.value.connected}")
-        value.value.wifiIdentity?.let { append(",\"wifi_identity\":\"").append(it.jsonEscaped()).append('"') }
         append('}')
     }
+    is TelemetryValue.Unavailable -> appendUnavailable(value)
+}
+
+private fun StringBuilder.appendBatteryReadingValue(value: TelemetryValue<BatteryReading>) = when (value) {
+    is TelemetryValue.Value -> append("{\"kind\":\"VALUE\",\"unit\":\"")
+        .append(value.value.unit.wireValue)
+        .append("\",\"value\":${value.value.value}}")
     is TelemetryValue.Unavailable -> appendUnavailable(value)
 }
 
