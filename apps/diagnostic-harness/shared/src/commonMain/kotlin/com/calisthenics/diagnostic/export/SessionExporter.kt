@@ -7,6 +7,8 @@ import com.calisthenics.diagnostic.session.FinalizationResult
 import com.calisthenics.diagnostic.session.SealedSessionSnapshot
 import com.calisthenics.diagnostic.session.SessionAborter
 import com.calisthenics.diagnostic.session.SessionFinalizer
+import com.calisthenics.diagnostic.telemetry.TelemetryRecord
+import com.calisthenics.diagnostic.telemetry.TelemetrySink
 
 /** Publishes one sealed session using the fixed crash-consistent commit sequence. */
 class SessionExporter(
@@ -17,7 +19,7 @@ class SessionExporter(
         storage = storage,
         sessionId = manifestTemplate.sessionId,
     ),
-) : SessionFinalizer, SessionAborter, EmittedRecordSink {
+) : SessionFinalizer, SessionAborter, EmittedRecordSink, TelemetrySink {
     private var finalizationResult: FinalizationResult? = null
 
     init {
@@ -26,6 +28,10 @@ class SessionExporter(
 
     override fun appendPose(record: com.calisthenics.diagnostic.contract.RawPoseFrame) {
         writer.appendPose(record)
+    }
+
+    override fun append(record: TelemetryRecord) {
+        writer.appendTelemetry(record.encodeNdjson())
     }
 
     override fun abort(snapshot: SealedSessionSnapshot, reason: String) {

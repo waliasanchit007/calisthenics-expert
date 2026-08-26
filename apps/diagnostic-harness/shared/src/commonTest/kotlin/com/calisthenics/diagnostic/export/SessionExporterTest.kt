@@ -20,6 +20,10 @@ import com.calisthenics.diagnostic.contract.decodeManifest
 import com.calisthenics.diagnostic.session.FinalizationResult
 import com.calisthenics.diagnostic.session.BoundedSessionState
 import com.calisthenics.diagnostic.session.SealedSessionSnapshot
+import com.calisthenics.diagnostic.telemetry.PipelineDisposition
+import com.calisthenics.diagnostic.telemetry.PipelineStage
+import com.calisthenics.diagnostic.telemetry.PipelineStageEvent
+import com.calisthenics.diagnostic.telemetry.TelemetrySink
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -34,6 +38,22 @@ import kotlin.test.assertTrue
  * [FakeStorage] and the real `AndroidStoragePort`.
  */
 class SessionExporterTest {
+    @Test
+    fun typedTelemetryIsAppendedToTheDurableTelemetryStreamImmediately() {
+        val storage = FakeStorage()
+        val exporter = SessionExporter(storage, manifest())
+
+        (exporter as TelemetrySink).append(
+            PipelineStageEvent(0L, 5L, 3L, PipelineStage.CAMERA_CALLBACK, PipelineDisposition.RECEIVED),
+        )
+
+        val bytes = storage.attempts.single().artifactBytes.getValue(DurableArtifact.TELEMETRY)
+        assertEquals(
+            "{\"record_type\":\"pipeline_stage_event\",\"schema_version\":\"1.0.0\",\"sequence\":0,\"t_session_ns\":5,\"frame_index\":3,\"stage\":\"CAMERA_CALLBACK\",\"disposition\":\"RECEIVED\"}\n",
+            bytes.decodeToString(),
+        )
+    }
+
     @Test
     fun endedAtManifestValueIsProducedDuringFinalizationAfterReplayFramesAreReconciled() {
         val fake = FakeStorage()
