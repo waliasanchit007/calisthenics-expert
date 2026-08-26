@@ -24,6 +24,8 @@ import com.calisthenics.diagnostic.telemetry.FixedTelemetrySample
 import com.calisthenics.diagnostic.telemetry.PipelineDisposition
 import com.calisthenics.diagnostic.telemetry.PipelineStage
 import com.calisthenics.diagnostic.telemetry.PipelineStageEvent
+import com.calisthenics.diagnostic.telemetry.PipelineStageCount
+import com.calisthenics.diagnostic.telemetry.SustainedStageCounterSample
 import com.calisthenics.diagnostic.telemetry.TelemetrySink
 import com.calisthenics.diagnostic.telemetry.TelemetryValue
 import kotlin.test.Test
@@ -106,6 +108,42 @@ class SessionExporterTest {
             .decodeToString().lineSequence().filter { it.isNotEmpty() }.toList()
         assertTrue(lines[0].contains("\"sequence\":0"))
         assertTrue(lines[0].contains("\"t_session_ns\":5"))
+        assertTrue(lines[1].contains("\"sequence\":1"))
+        assertTrue(lines[1].contains("\"t_session_ns\":5"))
+    }
+
+    @Test
+    fun sustainedStageCountersShareTheDurableTelemetrySequenceAndMonotonicClock() {
+        val storage = FakeStorage()
+        val exporter = SessionExporter(storage, manifest())
+
+        exporter.append(
+            FixedTelemetrySample(
+                sequence = 0L,
+                tSessionNs = 5L,
+                thermal = TelemetryValue.Unavailable("thermal_api_unavailable"),
+                batteryTemperature = TelemetryValue.Unavailable("battery_temperature_unavailable"),
+                batteryLevelOrCharge = TelemetryValue.Unavailable("battery_level_unavailable"),
+                charging = TelemetryValue.Unavailable("charging_state_unavailable"),
+                powerSource = TelemetryValue.Unavailable("power_source_unavailable"),
+                connectivity = TelemetryValue.Unavailable("connectivity_api_unavailable"),
+                keepAwake = TelemetryValue.Unavailable("keep_awake_unavailable"),
+                brightness = TelemetryValue.Unavailable("brightness_unavailable"),
+                lifecycle = TelemetryValue.Unavailable("lifecycle_unavailable"),
+            ),
+        )
+        exporter.append(
+            SustainedStageCounterSample(
+                sequence = 0L,
+                tSessionNs = 4L,
+                fixedTelemetrySequence = 0L,
+                counts = listOf(PipelineStageCount(PipelineStage.CADENCE, PipelineDisposition.CADENCE_SELECTION, 1L)),
+            ),
+        )
+
+        val lines = storage.attempts.single().artifactBytes.getValue(DurableArtifact.TELEMETRY)
+            .decodeToString().lineSequence().filter { it.isNotEmpty() }.toList()
+        assertTrue(lines[1].contains("\"record_type\":\"sustained_stage_counter\""))
         assertTrue(lines[1].contains("\"sequence\":1"))
         assertTrue(lines[1].contains("\"t_session_ns\":5"))
     }

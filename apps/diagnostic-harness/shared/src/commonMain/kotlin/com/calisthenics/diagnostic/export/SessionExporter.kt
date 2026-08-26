@@ -9,8 +9,12 @@ import com.calisthenics.diagnostic.session.SessionAborter
 import com.calisthenics.diagnostic.session.SessionFinalizer
 import com.calisthenics.diagnostic.telemetry.FixedTelemetrySample
 import com.calisthenics.diagnostic.telemetry.PipelineStageEvent
+import com.calisthenics.diagnostic.telemetry.SustainedStageCounterSample
 import com.calisthenics.diagnostic.telemetry.TelemetryRecord
 import com.calisthenics.diagnostic.telemetry.TelemetrySink
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** Composition-owned aborts call this only after callback and telemetry producers are fenced. */
 fun interface DeferredSessionAbort {
@@ -32,6 +36,7 @@ class SessionExporter(
     private var pendingAbort: Pair<SealedSessionSnapshot, String>? = null
     private var nextTelemetrySequence = 0L
     private var lastTelemetryTimeNs = 0L
+    private val telemetryMutex = Mutex()
 
     init {
         writer.open()
@@ -41,11 +46,11 @@ class SessionExporter(
         writer.appendPose(record)
     }
 
-    @Synchronized
-    override fun append(record: TelemetryRecord) {
+    override fun append(record: TelemetryRecord) = serialized {
         val recordTimeNs = when (record) {
             is FixedTelemetrySample -> record.tSessionNs
             is PipelineStageEvent -> record.tSessionNs
+            is SustainedStageCounterSample -> record.tSessionNs
         }
         val orderedTimeNs = maxOf(lastTelemetryTimeNs, recordTimeNs)
         val orderedRecord = when (record) {
@@ -57,26 +62,29 @@ class SessionExporter(
                 sequence = nextTelemetrySequence,
                 tSessionNs = orderedTimeNs,
             )
+            is SustainedStageCounterSample -> record.copy(
+                sequence = nextTelemetrySequence,
+                tSessionNs = orderedTimeNs,
+            )
         }
         writer.appendTelemetry(orderedRecord.encodeNdjson())
         nextTelemetrySequence += 1L
         lastTelemetryTimeNs = orderedTimeNs
     }
 
-    @Synchronized
-    override fun abort(snapshot: SealedSessionSnapshot, reason: String) {
+    override fun abort(snapshot: SealedSessionSnapshot, reason: String) = serialized {
         if (deferAbortUntilFence) {
             if (pendingAbort == null) pendingAbort = snapshot to reason
-            return
+        } else {
+            abortNow(snapshot, reason)
         }
-        abortNow(snapshot, reason)
     }
 
-    @Synchronized
-    override fun completePendingAbort() {
-        val pending = pendingAbort ?: return
-        pendingAbort = null
-        abortNow(pending.first, pending.second)
+    override fun completePendingAbort(): Unit = serialized {
+        pendingAbort?.let { pending ->
+            pendingAbort = null
+            abortNow(pending.first, pending.second)
+        }
     }
 
     private fun abortNow(snapshot: SealedSessionSnapshot, reason: String) {
@@ -179,6 +187,8 @@ class SessionExporter(
 
     private fun sanitizedDetail(reason: String): String =
         "$reason for pseudonym=${manifestTemplate.participantPseudonymId}"
+
+    private fun <T> serialized(block: () -> T): T = runBlocking { telemetryMutex.withLock { block() } }
 
     private object StreamReconciliationMismatch : IllegalStateException()
 

@@ -3,6 +3,7 @@ package com.calisthenics.diagnostic.composition
 import com.calisthenics.diagnostic.liveCaptureFailureCodeOr
 import com.calisthenics.diagnostic.toLivePhase
 import com.calisthenics.diagnostic.camera.OwnedYuvFrame
+import com.calisthenics.diagnostic.camera.CameraXFrameSource
 import com.calisthenics.diagnostic.contract.Landmark
 import com.calisthenics.diagnostic.contract.RawPoseFrame
 import com.calisthenics.diagnostic.mediapipe.PoseLandmarkerConstructionEvidence
@@ -25,6 +26,8 @@ import com.calisthenics.diagnostic.telemetry.FixedTelemetryScheduler
 import com.calisthenics.diagnostic.telemetry.PipelineDisposition
 import com.calisthenics.diagnostic.telemetry.PipelineStage
 import com.calisthenics.diagnostic.telemetry.PipelineStageEvent
+import com.calisthenics.diagnostic.telemetry.PipelineTelemetryRecordingMode
+import com.calisthenics.diagnostic.telemetry.SustainedStageCounterSample
 import com.calisthenics.diagnostic.telemetry.TelemetryRecord
 import com.calisthenics.diagnostic.telemetry.TelemetrySink
 import com.calisthenics.diagnostic.telemetry.TelemetryValue
@@ -53,6 +56,31 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.system.measureTimeMillis
 
 class LiveCameraCompositionTest {
+    @Test
+    fun explicitRecordingModesKeepFullStageEventsShortAndUseBoundedCountersForSustainedRuns() {
+        withHarness(Harness()) { short ->
+            assertIs<LiveCameraStartResult.Started>(
+                short.start(10, recordingMode = PipelineTelemetryRecordingMode.SHORT_ATTRIBUTION),
+            )
+            short.source.emit(frame(timestampNs = 1_000_002_000L))
+            short.inference.completeSuccess()
+            short.composition.stop()
+            assertTrue(short.telemetryRecords.any { it is PipelineStageEvent })
+            assertTrue(short.telemetryRecords.none { it is SustainedStageCounterSample })
+        }
+        withHarness(Harness()) { sustained ->
+            assertIs<LiveCameraStartResult.Started>(
+                sustained.start(10, recordingMode = PipelineTelemetryRecordingMode.SUSTAINED),
+            )
+            sustained.source.emit(frame(timestampNs = 1_000_002_000L))
+            sustained.inference.completeSuccess()
+            sustained.composition.stop()
+            assertTrue(sustained.telemetryRecords.none { it is PipelineStageEvent })
+            assertTrue(sustained.telemetryRecords.any { it is SustainedStageCounterSample })
+        }
+        assertEquals(30, CameraXFrameSource.TARGET_CAMERA_FPS)
+    }
+
     @Test
     fun liveManifestDoesNotEmitACallerSelectedParticipantIdentity() {
         withHarness(Harness()) { harness ->
@@ -1302,11 +1330,13 @@ class LiveCameraCompositionTest {
 
         fun start(
             fps: Int,
+            recordingMode: PipelineTelemetryRecordingMode = PipelineTelemetryRecordingMode.SHORT_ATTRIBUTION,
             onProgress: (SessionRunnerSnapshot) -> Unit = {},
         ): LiveCameraStartResult = composition.start(
             fps,
             operatorAttestedNoPerson = true,
             onProgress = onProgress,
+            recordingMode = recordingMode,
         ).also { result ->
             if (result is LiveCameraStartResult.Started) started = true
         }

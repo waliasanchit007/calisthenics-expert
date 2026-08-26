@@ -68,7 +68,9 @@ import com.calisthenics.diagnostic.telemetry.FixedTelemetryScheduler
 import com.calisthenics.diagnostic.telemetry.PipelineDisposition
 import com.calisthenics.diagnostic.telemetry.PipelineStage
 import com.calisthenics.diagnostic.telemetry.PipelineStageRecorder
+import com.calisthenics.diagnostic.telemetry.PipelineTelemetryRecordingMode
 import com.calisthenics.diagnostic.telemetry.TelemetrySink
+import com.calisthenics.diagnostic.telemetry.pipelineTerminalEvent
 import com.calisthenics.diagnostic.telemetry.AndroidFixedTelemetryProbe
 import com.calisthenics.diagnostic.study.M05Admission
 import com.calisthenics.diagnostic.study.M05AdmissionEvidence
@@ -358,6 +360,7 @@ class LiveCameraComposition internal constructor(
     fun start(
         configuredInferenceFps: Int,
         operatorAttestedNoPerson: Boolean,
+        recordingMode: PipelineTelemetryRecordingMode = PipelineTelemetryRecordingMode.SHORT_ATTRIBUTION,
         onProgress: (SessionRunnerSnapshot) -> Unit = {},
     ): LiveCameraStartResult {
         var unavailable: LiveCameraStartResult.Unavailable? = null
@@ -443,12 +446,13 @@ class LiveCameraComposition internal constructor(
                     "live session finalizer must expose the narrow telemetry sink"
                 }
                 sessionFinalizer = createdFinalizer
-                stageRecorder = PipelineStageRecorder(::relativeNowNs, createdFinalizer)
+                val recorder = PipelineStageRecorder(::relativeNowNs, createdFinalizer, recordingMode)
+                stageRecorder = recorder
                 telemetryController = LiveTelemetryController(
                     nowNs = ::relativeNowNs,
                     scheduler = dependencies.telemetrySchedulerFactory(),
                     probe = dependencies.telemetryProbeFactory(),
-                    sink = createdFinalizer,
+                    sink = recorder,
                 )
                 val trackedInference = TerminalTrackingInferencePort(
                     delegate = liveInference.port,
@@ -941,8 +945,8 @@ class LiveCameraComposition internal constructor(
         disposition: CallbackTerminalDisposition,
     ) {
         deliveredCallbacks.close(index, disposition)
-        val (stage, stageDisposition) = disposition.pipelineTerminal()
-        stageRecorder?.record(index, stage, stageDisposition)
+        val terminal = disposition.pipelineTerminalEvent()
+        stageRecorder?.record(index, terminal.stage, terminal.disposition)
     }
 
     internal fun callbackAccounting(): DeliveredCallbackAccounting = synchronized(monitor) {
@@ -994,21 +998,6 @@ class LiveCameraComposition internal constructor(
             com.calisthenics.diagnostic.live.LiveFrameClassification.SUBMIT ->
                 error("submitted frame is not terminal before inference")
         }
-
-    private fun CallbackTerminalDisposition.pipelineTerminal(): Pair<PipelineStage, PipelineDisposition> = when (this) {
-        CallbackTerminalDisposition.SOURCE_NOT_READY -> PipelineStage.CAMERA_CALLBACK to PipelineDisposition.SOURCE_LOSS
-        CallbackTerminalDisposition.CLOCK_FAULT -> PipelineStage.CAMERA_CALLBACK to PipelineDisposition.FAILED
-        CallbackTerminalDisposition.SOURCE_LOSS -> PipelineStage.YUV_OWNERSHIP to PipelineDisposition.SOURCE_LOSS
-        CallbackTerminalDisposition.PREPROCESSING_FAILED -> PipelineStage.PREPROCESSING to PipelineDisposition.FAILED
-        CallbackTerminalDisposition.CADENCE_SELECTION -> PipelineStage.CADENCE to PipelineDisposition.CADENCE_SELECTION
-        CallbackTerminalDisposition.BACKPRESSURE -> PipelineStage.CADENCE to PipelineDisposition.BACKPRESSURE
-        CallbackTerminalDisposition.SESSION_STOPPING -> PipelineStage.CADENCE to PipelineDisposition.SESSION_STOPPING
-        CallbackTerminalDisposition.INFERENCE_FAILED -> PipelineStage.INFERENCE to PipelineDisposition.FAILED
-        CallbackTerminalDisposition.INFERENCE_COMPLETED -> PipelineStage.INFERENCE to PipelineDisposition.COMPLETED
-        CallbackTerminalDisposition.ENCODER_ACCEPTED -> PipelineStage.ENCODER to PipelineDisposition.ENCODER_ACCEPTED
-        CallbackTerminalDisposition.ENCODER_DROPPED -> PipelineStage.ENCODER to PipelineDisposition.ENCODER_DROPPED
-        CallbackTerminalDisposition.ENCODER_WRITTEN -> PipelineStage.ENCODER to PipelineDisposition.ENCODER_WRITTEN
-    }
 
     private fun onInferenceResult(submissionIndex: Long, result: InferenceResult) {
         synchronized(monitor) {
@@ -1283,6 +1272,7 @@ class LiveCameraComposition internal constructor(
         controller?.stopAndJoinBeforeSeal()
         synchronized(monitor) {
             deliveredCallbacks.assertClosed(callbacksForwardedToRunner)
+            stageRecorder?.assertReconciles(deliveredCallbacks.snapshot())
             finalizationFenceCompleted = true
         }
     }

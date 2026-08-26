@@ -1,5 +1,9 @@
 package com.calisthenics.diagnostic.telemetry
 
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+
 /** Versioned records that are appended directly to the durable telemetry NDJSON stream. */
 sealed interface TelemetryRecord {
     fun encodeNdjson(): String
@@ -22,6 +26,8 @@ enum class PipelineStage {
 
 enum class PipelineDisposition {
     RECEIVED,
+    SOURCE_NOT_READY,
+    CLOCK_FAULT,
     ACQUIRED,
     RELEASED,
     STARTED,
@@ -54,6 +60,46 @@ enum class CallbackTerminalDisposition {
     ENCODER_ACCEPTED,
     ENCODER_DROPPED,
     ENCODER_WRITTEN,
+}
+
+enum class PipelineTelemetryRecordingMode {
+    /** Short 10/15/30 attribution runs retain every durable stage event. */
+    SHORT_ATTRIBUTION,
+
+    /** Sustained runs retain only finite one-second buckets aligned with fixed telemetry samples. */
+    SUSTAINED,
+}
+
+data class PipelineTerminalEvent(
+    val stage: PipelineStage,
+    val disposition: PipelineDisposition,
+)
+
+fun CallbackTerminalDisposition.pipelineTerminalEvent(): PipelineTerminalEvent = when (this) {
+    CallbackTerminalDisposition.SOURCE_NOT_READY ->
+        PipelineTerminalEvent(PipelineStage.CAMERA_CALLBACK, PipelineDisposition.SOURCE_NOT_READY)
+    CallbackTerminalDisposition.CLOCK_FAULT ->
+        PipelineTerminalEvent(PipelineStage.CAMERA_CALLBACK, PipelineDisposition.CLOCK_FAULT)
+    CallbackTerminalDisposition.SOURCE_LOSS ->
+        PipelineTerminalEvent(PipelineStage.YUV_OWNERSHIP, PipelineDisposition.SOURCE_LOSS)
+    CallbackTerminalDisposition.PREPROCESSING_FAILED ->
+        PipelineTerminalEvent(PipelineStage.PREPROCESSING, PipelineDisposition.FAILED)
+    CallbackTerminalDisposition.CADENCE_SELECTION ->
+        PipelineTerminalEvent(PipelineStage.CADENCE, PipelineDisposition.CADENCE_SELECTION)
+    CallbackTerminalDisposition.BACKPRESSURE ->
+        PipelineTerminalEvent(PipelineStage.CADENCE, PipelineDisposition.BACKPRESSURE)
+    CallbackTerminalDisposition.SESSION_STOPPING ->
+        PipelineTerminalEvent(PipelineStage.CADENCE, PipelineDisposition.SESSION_STOPPING)
+    CallbackTerminalDisposition.INFERENCE_FAILED ->
+        PipelineTerminalEvent(PipelineStage.INFERENCE, PipelineDisposition.FAILED)
+    CallbackTerminalDisposition.INFERENCE_COMPLETED ->
+        PipelineTerminalEvent(PipelineStage.INFERENCE, PipelineDisposition.COMPLETED)
+    CallbackTerminalDisposition.ENCODER_ACCEPTED ->
+        PipelineTerminalEvent(PipelineStage.ENCODER, PipelineDisposition.ENCODER_ACCEPTED)
+    CallbackTerminalDisposition.ENCODER_DROPPED ->
+        PipelineTerminalEvent(PipelineStage.ENCODER, PipelineDisposition.ENCODER_DROPPED)
+    CallbackTerminalDisposition.ENCODER_WRITTEN ->
+        PipelineTerminalEvent(PipelineStage.ENCODER, PipelineDisposition.ENCODER_WRITTEN)
 }
 
 data class DeliveredCallbackAccounting(
@@ -142,24 +188,126 @@ data class PipelineStageEvent(
 class PipelineStageRecorder(
     private val nowNs: () -> Long,
     private val sink: TelemetrySink,
-) {
+    val recordingMode: PipelineTelemetryRecordingMode = PipelineTelemetryRecordingMode.SHORT_ATTRIBUTION,
+) : TelemetrySink {
     private var nextSequence = 0L
     private var lastTimeNs = 0L
     private val mutableCounts = mutableMapOf<Pair<PipelineStage, PipelineDisposition>, Long>()
+    private val currentBucketCounts = mutableMapOf<Pair<PipelineStage, PipelineDisposition>, Long>()
+    private var nextCounterSequence = 0L
+    private var lastFixedSampleSequence = -1L
+    private var lastFixedSampleTimeNs = -1L
+    private val recorderMutex = Mutex()
 
     val counts: Map<Pair<PipelineStage, PipelineDisposition>, Long>
         get() = mutableCounts.toMap()
 
-    fun record(frameIndex: Long, stage: PipelineStage, disposition: PipelineDisposition): PipelineStageEvent {
+    val retainedStageCount: Int
+        get() = serialized { mutableCounts.size }
+
+    fun record(frameIndex: Long, stage: PipelineStage, disposition: PipelineDisposition): PipelineStageEvent = serialized {
         val timeNs = nowNs()
         check(timeNs >= lastTimeNs) { "pipeline stage clock regressed" }
         val event = PipelineStageEvent(nextSequence++, timeNs, frameIndex, stage, disposition)
-        sink.append(event)
         lastTimeNs = timeNs
         val key = stage to disposition
         mutableCounts[key] = (mutableCounts[key] ?: 0L) + 1L
-        return event
+        currentBucketCounts[key] = (currentBucketCounts[key] ?: 0L) + 1L
+        event
+    }.also { event ->
+        if (recordingMode == PipelineTelemetryRecordingMode.SHORT_ATTRIBUTION) sink.append(event)
     }
+
+    override fun append(record: TelemetryRecord) {
+        if (recordingMode != PipelineTelemetryRecordingMode.SUSTAINED || record !is FixedTelemetrySample) {
+            sink.append(record)
+            return
+        }
+        val bucket = serialized {
+            check(record.sequence == lastFixedSampleSequence + 1L) { "fixed telemetry sequence must be contiguous" }
+            check(record.tSessionNs >= lastFixedSampleTimeNs) { "fixed telemetry time regressed" }
+            SustainedStageCounterSample(
+                sequence = nextCounterSequence++,
+                tSessionNs = record.tSessionNs,
+                fixedTelemetrySequence = record.sequence,
+                counts = currentBucketCounts.entries
+                    .filter { it.value > 0L }
+                    .sortedWith(compareBy({ it.key.first.ordinal }, { it.key.second.ordinal }))
+                    .map { (key, count) -> PipelineStageCount(key.first, key.second, count) },
+            ).also {
+                currentBucketCounts.clear()
+                lastFixedSampleSequence = record.sequence
+                lastFixedSampleTimeNs = record.tSessionNs
+            }
+        }
+        sink.append(record)
+        sink.append(bucket)
+    }
+
+    fun assertReconciles(accounting: DeliveredCallbackAccounting) = serialized {
+        check(accounting.unclosedCallbacks == 0L) { "delivered callbacks remain unclosed" }
+        check(accounting.counts.values.sum() == accounting.deliveredCallbacks) {
+            "callback terminal counts do not equal delivered callbacks"
+        }
+        accounting.counts.forEach { (terminal, expected) ->
+            val event = terminal.pipelineTerminalEvent()
+            check((mutableCounts[event.stage to event.disposition] ?: 0L) == expected) {
+                "stage counts do not reconcile for $terminal"
+            }
+        }
+    }
+
+    private fun <T> serialized(block: () -> T): T = runBlocking { recorderMutex.withLock { block() } }
+}
+
+data class PipelineStageCount(
+    val stage: PipelineStage,
+    val disposition: PipelineDisposition,
+    val count: Long,
+) {
+    init {
+        require(count > 0L) { "sustained stage counts must be positive" }
+    }
+}
+
+data class SustainedStageCounterSample(
+    val sequence: Long,
+    val tSessionNs: Long,
+    val fixedTelemetrySequence: Long,
+    val counts: List<PipelineStageCount>,
+) : TelemetryRecord {
+    init {
+        require(sequence >= 0L) { "sustained counter sequence must be non-negative" }
+        require(tSessionNs >= 0L) { "sustained counter time must be non-negative" }
+        require(fixedTelemetrySequence >= 0L) { "fixed telemetry sequence must be non-negative" }
+    }
+
+    override fun encodeNdjson(): String = buildString {
+        append('{')
+        stringField("record_type", "sustained_stage_counter")
+        append(',')
+        stringField("schema_version", SCHEMA_VERSION)
+        append(",\"sequence\":$sequence")
+        append(",\"t_session_ns\":$tSessionNs")
+        append(",\"fixed_telemetry_sequence\":$fixedTelemetrySequence")
+        append(",\"counts\":[")
+        counts.forEachIndexed { index, value ->
+            if (index > 0) append(',')
+            append('{')
+            stringField("stage", value.stage.name)
+            append(',')
+            stringField("disposition", value.disposition.name)
+            append(",\"count\":${value.count}}")
+        }
+        append("]}\n")
+    }
+}
+
+object SustainedTelemetryLimits {
+    const val MAX_SESSION_SECONDS = 1_500L
+    /** Initial sample, one sample per full second, and the mandatory terminal sample. */
+    const val MAX_FIXED_SAMPLES_FOR_1500_SECONDS = MAX_SESSION_SECONDS + 2L
+    const val MAX_RECORDS_FOR_1500_SECONDS = MAX_FIXED_SAMPLES_FOR_1500_SECONDS * 2L
 }
 
 sealed interface TelemetryValue<out T> {
@@ -263,7 +411,7 @@ class FixedTelemetrySampler(
     private val sink: TelemetrySink,
 ) {
     private var schedule: FixedTelemetrySchedule? = null
-    @Volatile
+    @kotlin.concurrent.Volatile
     private var stopped = false
     private var nextSequence = 0L
     private var lastSampleNs = 0L

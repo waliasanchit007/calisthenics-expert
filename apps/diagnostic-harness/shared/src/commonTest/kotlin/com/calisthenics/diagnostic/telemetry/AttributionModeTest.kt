@@ -1,0 +1,128 @@
+package com.calisthenics.diagnostic.telemetry
+
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+
+class AttributionModeTest {
+    @Test
+    fun shortModeStreamsEveryStageEventWhileSustainedModeOnlyEmitsCountersAtFixedSamples() {
+        val shortSink = RecordingSink()
+        val short = PipelineStageRecorder(
+            nowNs = { 4L },
+            sink = shortSink,
+            recordingMode = PipelineTelemetryRecordingMode.SHORT_ATTRIBUTION,
+        )
+        short.record(0L, PipelineStage.CAMERA_CALLBACK, PipelineDisposition.RECEIVED)
+        short.record(0L, PipelineStage.INFERENCE, PipelineDisposition.SUBMITTED)
+
+        val sustainedSink = RecordingSink()
+        val sustained = PipelineStageRecorder(
+            nowNs = { 4L },
+            sink = sustainedSink,
+            recordingMode = PipelineTelemetryRecordingMode.SUSTAINED,
+        )
+        sustained.record(0L, PipelineStage.CAMERA_CALLBACK, PipelineDisposition.RECEIVED)
+        sustained.record(0L, PipelineStage.INFERENCE, PipelineDisposition.SUBMITTED)
+        sustained.append(sample(sequence = 0L, tSessionNs = 5L))
+
+        assertEquals(2, shortSink.records.filterIsInstance<PipelineStageEvent>().size)
+        assertTrue(sustainedSink.records.none { it is PipelineStageEvent })
+        val counter = sustainedSink.records.single { it is SustainedStageCounterSample }
+            as SustainedStageCounterSample
+        assertEquals(0L, counter.fixedTelemetrySequence)
+        assertEquals(5L, counter.tSessionNs)
+        assertEquals(
+            listOf(
+                PipelineStageCount(PipelineStage.CAMERA_CALLBACK, PipelineDisposition.RECEIVED, 1L),
+                PipelineStageCount(PipelineStage.INFERENCE, PipelineDisposition.SUBMITTED, 1L),
+            ),
+            counter.counts,
+        )
+    }
+
+    @Test
+    fun sustainedModeHasAFixedMaximumForAFifteenHundredSecondRunAndCountersAlignToSamples() {
+        val sink = RecordingSink()
+        val recorder = PipelineStageRecorder(
+            nowNs = { 1L },
+            sink = sink,
+            recordingMode = PipelineTelemetryRecordingMode.SUSTAINED,
+        )
+
+        repeat(100_000) { index ->
+            recorder.record(index.toLong(), PipelineStage.CADENCE, PipelineDisposition.CADENCE_SELECTION)
+        }
+        repeat(SustainedTelemetryLimits.MAX_FIXED_SAMPLES_FOR_1500_SECONDS.toInt()) { sequence ->
+            recorder.append(sample(sequence.toLong(), sequence * 1_000_000_000L))
+        }
+
+        val samples = sink.records.filterIsInstance<FixedTelemetrySample>()
+        val counters = sink.records.filterIsInstance<SustainedStageCounterSample>()
+        assertEquals(SustainedTelemetryLimits.MAX_FIXED_SAMPLES_FOR_1500_SECONDS, samples.size.toLong())
+        assertEquals(samples.map { it.sequence }, counters.map { it.fixedTelemetrySequence })
+        assertEquals(samples.map { it.tSessionNs }, counters.map { it.tSessionNs })
+        assertEquals(SustainedTelemetryLimits.MAX_RECORDS_FOR_1500_SECONDS, sink.records.size.toLong())
+        assertTrue(sink.records.none { it is PipelineStageEvent })
+        assertTrue(recorder.retainedStageCount <= PipelineStage.entries.size * PipelineDisposition.entries.size)
+    }
+
+    @Test
+    fun stageCountsReconcileWithTheClosedCallbackDispositionLattice() {
+        val sink = RecordingSink()
+        val recorder = PipelineStageRecorder({ 7L }, sink, PipelineTelemetryRecordingMode.SHORT_ATTRIBUTION)
+        val ledger = DeliveredCallbackLedger()
+        var frameIndex = 0L
+        CallbackTerminalDisposition.entries.forEachIndexed { terminalIndex, disposition ->
+            repeat(terminalIndex + 1) {
+                ledger.begin(frameIndex)
+                recorder.record(frameIndex, PipelineStage.CAMERA_CALLBACK, PipelineDisposition.RECEIVED)
+                ledger.close(frameIndex, disposition)
+                val terminal = expectedTerminalEvents.getValue(disposition)
+                recorder.record(frameIndex, terminal.stage, terminal.disposition)
+                frameIndex += 1L
+            }
+        }
+
+        recorder.assertReconciles(ledger.snapshot())
+        assertFalse(sink.records.isEmpty())
+    }
+
+    private fun sample(sequence: Long, tSessionNs: Long) = FixedTelemetrySample(
+        sequence = sequence,
+        tSessionNs = tSessionNs,
+        thermal = TelemetryValue.Unavailable("thermal"),
+        batteryTemperature = TelemetryValue.Unavailable("battery_temperature"),
+        batteryLevelOrCharge = TelemetryValue.Unavailable("battery_level"),
+        charging = TelemetryValue.Unavailable("charging"),
+        powerSource = TelemetryValue.Unavailable("power"),
+        connectivity = TelemetryValue.Unavailable("connectivity"),
+        keepAwake = TelemetryValue.Unavailable("keep_awake"),
+        brightness = TelemetryValue.Unavailable("brightness"),
+        lifecycle = TelemetryValue.Unavailable("lifecycle"),
+    )
+
+    private val expectedTerminalEvents = mapOf(
+        CallbackTerminalDisposition.SOURCE_NOT_READY to PipelineTerminalEvent(PipelineStage.CAMERA_CALLBACK, PipelineDisposition.SOURCE_NOT_READY),
+        CallbackTerminalDisposition.CLOCK_FAULT to PipelineTerminalEvent(PipelineStage.CAMERA_CALLBACK, PipelineDisposition.CLOCK_FAULT),
+        CallbackTerminalDisposition.SOURCE_LOSS to PipelineTerminalEvent(PipelineStage.YUV_OWNERSHIP, PipelineDisposition.SOURCE_LOSS),
+        CallbackTerminalDisposition.PREPROCESSING_FAILED to PipelineTerminalEvent(PipelineStage.PREPROCESSING, PipelineDisposition.FAILED),
+        CallbackTerminalDisposition.CADENCE_SELECTION to PipelineTerminalEvent(PipelineStage.CADENCE, PipelineDisposition.CADENCE_SELECTION),
+        CallbackTerminalDisposition.BACKPRESSURE to PipelineTerminalEvent(PipelineStage.CADENCE, PipelineDisposition.BACKPRESSURE),
+        CallbackTerminalDisposition.SESSION_STOPPING to PipelineTerminalEvent(PipelineStage.CADENCE, PipelineDisposition.SESSION_STOPPING),
+        CallbackTerminalDisposition.INFERENCE_FAILED to PipelineTerminalEvent(PipelineStage.INFERENCE, PipelineDisposition.FAILED),
+        CallbackTerminalDisposition.INFERENCE_COMPLETED to PipelineTerminalEvent(PipelineStage.INFERENCE, PipelineDisposition.COMPLETED),
+        CallbackTerminalDisposition.ENCODER_ACCEPTED to PipelineTerminalEvent(PipelineStage.ENCODER, PipelineDisposition.ENCODER_ACCEPTED),
+        CallbackTerminalDisposition.ENCODER_DROPPED to PipelineTerminalEvent(PipelineStage.ENCODER, PipelineDisposition.ENCODER_DROPPED),
+        CallbackTerminalDisposition.ENCODER_WRITTEN to PipelineTerminalEvent(PipelineStage.ENCODER, PipelineDisposition.ENCODER_WRITTEN),
+    )
+
+    private class RecordingSink : TelemetrySink {
+        val records = mutableListOf<TelemetryRecord>()
+
+        override fun append(record: TelemetryRecord) {
+            records += record
+        }
+    }
+}
