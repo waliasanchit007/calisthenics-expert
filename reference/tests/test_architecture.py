@@ -30,10 +30,13 @@ def test_m05_operating_gate_is_wired_into_make_and_preserves_required_job() -> N
     assert "fetch-model-asset" not in makefile.split("verify:", 1)[1]
 
     assert "docs/superpowers/specs/2026-08-24-m0-5-study-readiness-design.md" in agents
+    assert "docs/superpowers/specs/2026-08-24-m0-5b-instrument-prerequisites-design.md" in agents
     assert "ca623d32837dec99d8229083c9159bfd140b1843" in agents
+    assert "789af8eddc0cdb81a3e4ad96ad119dd28111fa7b" in agents
     assert "participant capture" in agents.lower()
     assert "participant data" in agents.lower()
-    assert "M0.5B/C" in agents
+    assert "M0.5B permits only the non-participant Android instrument work" in agents
+    assert "M0.5C remains a separate approved slice" in agents
     assert "numeric reliability threshold" in agents
     assert "iOS-equivalence" in agents
 

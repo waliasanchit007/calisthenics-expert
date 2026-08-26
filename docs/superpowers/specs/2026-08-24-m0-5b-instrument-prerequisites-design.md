@@ -1,6 +1,6 @@
 # M0.5B Instrument Prerequisites Design
 
-Status: Proposed for review
+Status: Accepted for implementation at merged commit `789af8eddc0cdb81a3e4ad96ad119dd28111fa7b`
 
 Date: 2026-08-24
 
