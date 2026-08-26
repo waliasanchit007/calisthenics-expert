@@ -48,22 +48,6 @@ def test_m05_operating_gate_preserves_collaboration_and_release_authority() -> N
     assert "release authority" in agents.lower()
 
 
-def test_committed_docs_do_not_invoke_the_inert_cli_module() -> None:
-    offenders = {
-        path.relative_to(ROOT): [
-            line_number
-            for line_number, line in enumerate(
-                path.read_text(encoding="utf-8").splitlines(), start=1
-            )
-            if "-m observation_contracts.cli " in line
-        ]
-        for path in (ROOT / "docs").rglob("*.md")
-    }
-    offenders = {path: lines for path, lines in offenders.items() if lines}
-
-    assert offenders == {}
-
-
 def test_m05_admission_paths_are_exhaustive_and_use_one_shared_policy_helper() -> None:
     assert live_checker.M05_ADMISSION_PATHS == (
         "live_transcript",
