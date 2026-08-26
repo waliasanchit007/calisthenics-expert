@@ -10,6 +10,8 @@ import com.calisthenics.diagnostic.export.StoragePort
 import com.calisthenics.diagnostic.export.DurableArtifact
 import com.calisthenics.diagnostic.export.ArtifactReconciliation
 import com.calisthenics.diagnostic.export.StorageRoots
+import com.calisthenics.diagnostic.export.StorageLocationId
+import com.calisthenics.diagnostic.export.StorageLocationRegistry
 import com.calisthenics.diagnostic.export.StreamReconciliation
 import com.calisthenics.diagnostic.session.DeterministicCore
 import com.calisthenics.diagnostic.session.FinalizationResult
@@ -34,10 +36,14 @@ fun main(args: Array<String>) {
 
     deleteTree(output)
     val buildOutput = output.parent
-    val stagingRoot = buildOutput.resolve(".deterministic-core-staging")
-    val exportsRoot = buildOutput.resolve(".deterministic-core-exports")
-    deleteTree(stagingRoot)
-    deleteTree(exportsRoot)
+    val diagnosticHarnessRoot = buildOutput.resolve(".deterministic-core-storage")
+    val stagingRoot = diagnosticHarnessRoot.resolve(
+        StorageLocationRegistry.androidChild(StorageLocationId.DEVICE_STAGING),
+    )
+    val exportsRoot = diagnosticHarnessRoot.resolve(
+        StorageLocationRegistry.androidChild(StorageLocationId.DEVICE_EXPORT),
+    )
+    deleteTree(diagnosticHarnessRoot)
     Files.createDirectories(output)
     val storage = FileStorage(buildOutput, stagingRoot, exportsRoot)
 
@@ -66,8 +72,7 @@ fun main(args: Array<String>) {
     Files.readAllLines(output.resolve("frames.ndjson"), StandardCharsets.UTF_8)
         .filter { it.isNotEmpty() }
         .forEach(::decodeFrame)
-    deleteTree(stagingRoot)
-    deleteTree(exportsRoot)
+    deleteTree(diagnosticHarnessRoot)
     println("generated ${output.resolve("manifest.json")}")
     println("generated ${output.resolve("frames.ndjson")}")
 }
