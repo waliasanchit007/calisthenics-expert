@@ -187,6 +187,7 @@ dependencies {
     implementation(libs.mediapipe.tasks.vision)
     testImplementation(libs.kotlin.test)
     testImplementation(libs.junit4)
+    testImplementation("org.robolectric:robolectric:4.16.1")
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.core)
     androidTestImplementation(libs.kotlin.test)
