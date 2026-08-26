@@ -18,8 +18,12 @@ from check_camera_capability_probe import (
     satisfies_live_admission,
     verify_recorded_ledger,
 )
+from check_container_timestamp_probe import (
+    verify_recorded_ledger as verify_container_timestamp_ledger,
+)
 
 CAMERA_LEDGER = "docs/evidence/device-probes/s25-ultra-camera-capability-ledger.json"
+CONTAINER_TIMESTAMP_LEDGER = "docs/evidence/device-probes/s25-ultra-container-timestamp-ledger.json"
 LIVE_CAPTURE_LEDGER = "docs/evidence/live-capture/s25-ultra-live-capture-ledger.json"
 
 
@@ -299,6 +303,26 @@ def test_s25_camera_capability_ledger_reports_pending_or_recorded_status() -> No
     # The same entry, checked by the shared implementation the Make target's checker uses, so the
     # ledger and the wrapper can never disagree about what a recorded entry has to satisfy.
     verify_recorded_ledger(ROOT, CAMERA_LEDGER)
+
+
+def test_s25_container_timestamp_ledger_reports_pending_or_verifies_recorded_content() -> None:
+    ledger = json.loads((ROOT / CONTAINER_TIMESTAMP_LEDGER).read_text(encoding="utf-8"))
+    assert ledger["status"] in {"pending", "recorded"}
+    verified = verify_container_timestamp_ledger(ROOT, CONTAINER_TIMESTAMP_LEDGER)
+    assert verified["record_kind"] == "container_timestamp_probe_device_gate_observation"
+    if ledger["status"] == "pending":
+        assert ledger["missing_precondition"]
+        return
+
+    # The verifier opens the named evidence, validates its digest and record kind, reapplies the
+    # physical-target rule, and recomputes the timestamp admission classification.
+    assert ledger["evidence_file"]
+    assert ledger["evidence_sha256"]
+    assert ledger["device_identity"]
+    assert ledger["api_level"] > 0
+    assert ledger["android_release"]
+    assert ledger["timestamp_admission"] in {"admitted", "blocked"}
+    assert verified["timestamp_admission"] == ledger["timestamp_admission"]
 
 
 def test_s25_live_capture_ledger_reports_pending_or_verifies_recorded_content() -> None:

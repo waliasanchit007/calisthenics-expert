@@ -6,7 +6,7 @@ done; printf '%s' python3)
 VENV_PYTHON := .venv/bin/python
 CLI := $(VENV_PYTHON) -m observation_contracts
 
-.PHONY: bootstrap verify verify-study-readiness verify-harness-jvm verify-harness-ios verify-harness-foundation verify-kotlin-export verify-harness-android-export-parity verify-harness-detection-replay verify-harness-s25-process-kill verify-harness-replay-export verify-harness-s25-five-run-replay verify-harness-s25-camera-probe verify-harness-s25-storage-exclusion verify-harness-s25-live-capture fetch-model-asset prepare-harness-gradle-dependencies
+.PHONY: bootstrap verify verify-study-readiness verify-harness-jvm verify-harness-ios verify-harness-foundation verify-kotlin-export verify-harness-android-export-parity verify-harness-detection-replay verify-harness-s25-process-kill verify-harness-replay-export verify-harness-s25-five-run-replay verify-harness-s25-camera-probe verify-harness-s25-container-timestamp-probe verify-harness-s25-storage-exclusion verify-harness-s25-live-capture fetch-model-asset prepare-harness-gradle-dependencies
 
 bootstrap:
 	@command -v "$(PYTHON)" >/dev/null 2>&1 || { echo "error: Python interpreter '$(PYTHON)' was not found" >&2; exit 1; }
@@ -356,6 +356,61 @@ verify-harness-s25-camera-probe:
 		exit "$$instrument_status"; \
 	fi; \
 	cd ../.. && $(VENV_PYTHON) tools/check_camera_capability_probe.py "$$transcript"
+
+# M0.5B Task 3 prerequisite: measure the real encoder -> MP4 muxer -> extractor timestamp
+# transform before releasing SessionManifest 1.2. The synthetic source PTS are non-zero. A
+# trustworthy non-constant transform is reported by the checker with exit 3 and blocks the
+# contract release; it is not weakened into a fitted tolerance. This target prints evidence only
+# and never writes the pending/recorded ledger.
+verify-harness-s25-container-timestamp-probe:
+	@set -eu; \
+	device_count=$$(adb devices -l | tail -n +2 | awk '$$2=="device"' | wc -l | tr -d ' '); \
+	if [ "$$device_count" -ne 1 ]; then \
+		echo "error: verify-harness-s25-container-timestamp-probe requires exactly one authorized attached device, found $$device_count" >&2; \
+		exit 1; \
+	fi; \
+	serial=$$(adb devices -l | tail -n +2 | awk '$$2=="device" {print $$1}'); \
+	case "$$serial" in \
+		emulator-*) \
+			echo "error: attached target '$$serial' is an emulator; only a physical Samsung Galaxy S25 Ultra is authorized" >&2; \
+			exit 1; \
+			;; \
+	esac; \
+	manufacturer=$$(adb -s "$$serial" shell getprop ro.product.manufacturer | tr -d '\r'); \
+	manufacturer_lower=$$(printf '%s' "$$manufacturer" | tr '[:upper:]' '[:lower:]'); \
+	marketing_name=$$(adb -s "$$serial" shell getprop ro.config.marketing_name | tr -d '\r'); \
+	model=$$(adb -s "$$serial" shell getprop ro.product.model | tr -d '\r'); \
+	model_upper=$$(printf '%s' "$$model" | tr '[:lower:]' '[:upper:]'); \
+	if [ "$$manufacturer_lower" != "samsung" ]; then \
+		echo "error: attached target '$$serial' has manufacturer '$$manufacturer', not Samsung" >&2; \
+		exit 1; \
+	fi; \
+	authorized=0; \
+	case "$$model_upper" in SM-S938*) authorized=1 ;; esac; \
+	case "$$marketing_name" in *"S25 Ultra"*) authorized=1 ;; esac; \
+	if [ "$$authorized" -ne 1 ]; then \
+		echo "error: attached target '$$serial' model '$$model' marketing name '$$marketing_name' is not the authorized S25 Ultra" >&2; \
+		exit 1; \
+	fi; \
+	printf 'container timestamp probe target: serial=%s model=%s marketing_name=%s api=%s\n' \
+		"$$serial" "$$model" "$$marketing_name" \
+		"$$(adb -s "$$serial" shell getprop ro.build.version.sdk | tr -d '\r')"; \
+	cd apps/diagnostic-harness && ./gradlew --no-daemon :androidApp:assembleDebug :androidApp:assembleDebugAndroidTest; \
+	adb -s "$$serial" install -r androidApp/build/outputs/apk/debug/androidApp-debug.apk; \
+	adb -s "$$serial" install -r androidApp/build/outputs/apk/androidTest/debug/androidApp-debug-androidTest.apk; \
+	transcript=$$(mktemp); \
+	trap 'rm -f "$$transcript"' EXIT INT TERM; \
+	set +e; \
+	adb -s "$$serial" shell am instrument -w -r -e class com.calisthenics.diagnostic.probe.ContainerTimestampProbeTest com.calisthenics.diagnostic.android.test/androidx.test.runner.AndroidJUnitRunner >"$$transcript" 2>&1; \
+	instrument_status=$$?; \
+	set -e; \
+	cat "$$transcript"; \
+	printf 'container timestamp probe instrumentation exit status: %s\n' "$$instrument_status"; \
+	if [ "$$instrument_status" -ne 0 ]; then \
+		echo "error: am instrument exited $$instrument_status; transcript is untrustworthy" >&2; \
+		exit "$$instrument_status"; \
+	fi; \
+	cd ../.. && $(VENV_PYTHON) tools/check_container_timestamp_probe.py "$$transcript"
 
 # M0.5B Task 1 physical evidence. Static tests prove the source manifest and both extraction-rule
 # domains; this target proves the packaged app reports backup disabled, the packaged rule resource

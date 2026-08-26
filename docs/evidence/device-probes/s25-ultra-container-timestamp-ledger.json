@@ -1,0 +1,6 @@
+{
+  "missing_precondition": "No authorized physical Samsung Galaxy S25 Ultra is attached to run the container timestamp probe.",
+  "note": "The recorded branch must name and hash the sanitized probe record, then preserve its device identity, API level, Android release, and recomputed admitted/blocked result.",
+  "record_kind": "container_timestamp_probe_device_gate_observation",
+  "status": "pending"
+}

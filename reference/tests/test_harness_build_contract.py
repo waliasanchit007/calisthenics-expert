@@ -438,7 +438,7 @@ def test_s25_camera_probe_target_delegates_its_verdict_to_the_checker() -> None:
         / "androidApp/src/androidTest/kotlin/com/calisthenics/diagnostic/probe/CameraCapabilityProbeTest.kt"
     )
     target = makefile.split("verify-harness-s25-camera-probe:", 1)[1].split(
-        "\nverify-harness-s25-storage-exclusion:", 1
+        "\nverify-harness-s25-container-timestamp-probe:", 1
     )[0]
 
     assert probe_test.is_file()
@@ -518,6 +518,33 @@ def test_s25_storage_exclusion_target_clears_state_and_delegates_to_typed_checke
     assert "shell pm clear com.calisthenics.diagnostic.android" in target
     assert 'clear_result" != "Success"' in target
     assert "tools/check_storage_exclusion.py" in target
+
+
+def test_s25_container_timestamp_target_is_physical_class_isolated_and_checker_owned() -> None:
+    makefile = (ROOT / "Makefile").read_text()
+    target = makefile.split("verify-harness-s25-container-timestamp-probe:", 1)[1].split(
+        "\nverify-harness-s25-storage-exclusion:", 1
+    )[0]
+
+    phony_line = makefile.split("\n.PHONY", 1)[1].split("\n", 1)[0]
+    assert "verify-harness-s25-container-timestamp-probe" in phony_line
+    assert target.lstrip().startswith("@set -eu")
+    assert "awk '$$2==\"device\"'" in target
+    assert 'device_count" -ne 1' in target
+    assert "emulator-*)" in target
+    assert 'manufacturer_lower" != "samsung"' in target
+    assert "SM-S938*)" in target
+    assert '*"S25 Ultra"*)' in target
+    assert "com.calisthenics.diagnostic.probe.ContainerTimestampProbeTest" in target
+    assert "am instrument -w -r" in target
+    assert "instrument_status" in target
+    assert "tools/check_container_timestamp_probe.py" in target
+    checker_line = next(
+        line for line in target.splitlines() if "check_container_timestamp_probe.py" in line
+    )
+    assert "||" not in checker_line and "; true" not in checker_line
+    assert "grep -q '^OK ('" not in target
+    assert "s25-ultra-container-timestamp-ledger.json" not in target
 
 
 def test_android_storage_probe_has_executable_instrumentation_wiring() -> None:
