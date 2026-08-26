@@ -30,8 +30,8 @@ sealed interface StorageProbeOutcome {
 
 /**
  * Non-participant evidence that the storage primitives [AndroidStoragePort] relies on actually
- * work on this device's filesystem. Runs against its own scratch subtree under [Context.filesDir]
- * — sibling to, never inside, [AndroidStorageRoots]'s production staging/exports roots — so the
+ * work on this device's filesystem. Runs against its own scratch subtree under the registered
+ * staging root — never inside a committed export root — so the
  * probe can never corrupt a real session.
  */
 class StorageCapabilityProbe(
@@ -43,13 +43,12 @@ class StorageCapabilityProbe(
     }
 
     fun run(): StorageProbeOutcome {
-        val filesDir = when (val rootsResult = AndroidStorageRoots.from(context)) {
-            is StorageRootsResult.Ready -> rootsResult.roots.filesDir
+        val productionRoots = when (val rootsResult = AndroidStorageRoots.from(context)) {
+            is StorageRootsResult.Ready -> rootsResult.roots
             is StorageRootsResult.Unavailable -> return StorageProbeOutcome.Unavailable(rootsResult.reason)
         }
         val runId = UUID.randomUUID().toString()
-        val base = "$filesDir/diagnostic-harness-storage-probe/$runId"
-        val roots = StorageRoots(filesDir, "$base/staging", "$base/exports")
+        val roots = AndroidStorageRoots.forProbe(productionRoots, runId)
         Files.createDirectories(Paths.get(roots.exportsRoot))
         val port = AndroidStoragePort(roots)
         val sessionId = Uuid(runId)
@@ -90,7 +89,7 @@ class StorageCapabilityProbe(
             StorageProbeResult(
                 deviceModel = Build.MODEL,
                 osBuild = Build.DISPLAY,
-                filesystemType = filesystemType(filesDir),
+                filesystemType = filesystemType(roots.filesDir),
                 probeGitSha = probeGitSha,
                 appendFlushFsyncSupported = appendFlushFsyncSupported,
                 directoryFsyncSupported = directoryFsyncSupported,

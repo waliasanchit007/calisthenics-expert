@@ -86,6 +86,17 @@ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 _ERROR_CODE_RE = re.compile(r"^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*\.[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*$")
 _ERROR_CODE_REGISTRY_PATH = "contracts/tooling/validator_error_codes.v1.json"
+_ANDROID_STORAGE_FACTORY_PATH = (
+    "apps/diagnostic-harness/shared/src/androidMain/kotlin/"
+    "com/calisthenics/diagnostic/export/AndroidStorageRoots.kt"
+)
+_ANDROID_PRODUCTION_SOURCE_RE = re.compile(
+    r"^apps/diagnostic-harness/(?:androidApp/src/main|shared/src/androidMain)/.+\.kt$"
+)
+_ANDROID_STORAGE_BYPASS_RE = re.compile(
+    rb"(?:\b(?:context|applicationContext)\.filesDir\b|\.getDir\s*\(|"
+    rb"\bStorageRoots\s*\(|diagnostic-harness)"
+)
 _POSITIVE_SESSION_ARTIFACT_NAMES = frozenset(
     {
         "manifest.json",
@@ -181,6 +192,10 @@ def guard_repository(root: Path, mode: GuardMode = "tracked") -> list[Validation
     issues.extend(fixture_issues)
 
     for relative_path in safe_paths:
+        storage_factory_issue = _android_storage_factory_issue(source, relative_path)
+        if storage_factory_issue is not None:
+            issues.append(storage_factory_issue)
+            continue
         group = _fixture_group(relative_path)
         if group is not None:
             admission = fixture_admissions.get(group.root, False)
@@ -202,6 +217,23 @@ def guard_repository(root: Path, mode: GuardMode = "tracked") -> list[Validation
             issues.append(prohibited)
 
     return sorted(issues, key=lambda issue: (issue.artifact_path, issue.code, issue.message))
+
+
+def _android_storage_factory_issue(
+    source: _RepositoryContent, relative_path: str
+) -> ValidationIssue | None:
+    if (
+        relative_path == _ANDROID_STORAGE_FACTORY_PATH
+        or _ANDROID_PRODUCTION_SOURCE_RE.fullmatch(relative_path) is None
+    ):
+        return None
+    prefix = source.read_prefix(relative_path)
+    if prefix is None or _ANDROID_STORAGE_BYPASS_RE.search(prefix) is None:
+        return None
+    return _content_issue_for(
+        relative_path,
+        "Android app-private roots must be resolved through AndroidStorageRoots",
+    )
 
 
 def _git_paths(root: Path, mode: GuardMode) -> list[str]:

@@ -199,6 +199,44 @@ def test_accepts_documentation_containing_benign_consent_word(tmp_path: Path) ->
     assert guard_repository(root, mode="staged") == []
 
 
+@pytest.mark.parametrize(
+    "source",
+    [
+        'val root = context.filesDir.resolve("exports")\n',
+        'val root = context.getDir("exports", 0)\n',
+        'val root = "/data/diagnostic-harness/exports"\n',
+        'val roots = StorageRoots("/files", "/files/staging", "/files/exports")\n',
+    ],
+)
+def test_rejects_production_android_storage_root_factory_bypasses(
+    tmp_path: Path, source: str
+) -> None:
+    root = _repository(tmp_path)
+    relative_path = "apps/diagnostic-harness/androidApp/src/main/kotlin/example/Bypass.kt"
+    _write(root, relative_path, source)
+    _stage(root)
+
+    assert _codes(root, mode="staged") == [
+        (relative_path, "REPOSITORY.PROHIBITED_CONTENT"),
+    ]
+
+
+def test_allows_storage_root_construction_in_the_single_factory(tmp_path: Path) -> None:
+    root = _repository(tmp_path)
+    relative_path = (
+        "apps/diagnostic-harness/shared/src/androidMain/kotlin/"
+        "com/calisthenics/diagnostic/export/AndroidStorageRoots.kt"
+    )
+    _write(
+        root,
+        relative_path,
+        'val files = context.filesDir\nval base = "$files/diagnostic-harness"\n',
+    )
+    _stage(root)
+
+    assert guard_repository(root, mode="staged") == []
+
+
 def test_admits_all_three_declared_synthetic_fixture_classes(tmp_path: Path) -> None:
     root = _repository(tmp_path)
 

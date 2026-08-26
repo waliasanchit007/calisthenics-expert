@@ -1,0 +1,97 @@
+{
+  "storage_location_registry_schema_version": "1.0.0",
+  "registry_version": "1.0.0",
+  "locations": [
+    {
+      "location_id": "device_export",
+      "owner": "android_app",
+      "relative_root": "exports",
+      "artifact_classes": ["session_bundle"],
+      "publishable": true,
+      "device_purge": true,
+      "host_rehearsal_purge": false,
+      "cloud_backup": "excluded",
+      "device_transfer": "excluded",
+      "tombstone_eligible": true,
+      "post_purge_scan": true
+    },
+    {
+      "location_id": "device_staging",
+      "owner": "android_app",
+      "relative_root": "staging",
+      "artifact_classes": ["staging_attempt"],
+      "publishable": false,
+      "device_purge": true,
+      "host_rehearsal_purge": false,
+      "cloud_backup": "excluded",
+      "device_transfer": "excluded",
+      "tombstone_eligible": true,
+      "post_purge_scan": true
+    },
+    {
+      "location_id": "device_transfer_staging",
+      "owner": "android_app",
+      "relative_root": "transfer-staging",
+      "artifact_classes": ["transfer_bundle"],
+      "publishable": false,
+      "device_purge": true,
+      "host_rehearsal_purge": false,
+      "cloud_backup": "excluded",
+      "device_transfer": "excluded",
+      "tombstone_eligible": true,
+      "post_purge_scan": true
+    },
+    {
+      "location_id": "study_store_source",
+      "owner": "external_study_store",
+      "relative_root": "source",
+      "artifact_classes": ["source_artifact"],
+      "publishable": false,
+      "device_purge": false,
+      "host_rehearsal_purge": true,
+      "cloud_backup": "not_applicable",
+      "device_transfer": "not_applicable",
+      "tombstone_eligible": true,
+      "post_purge_scan": true
+    },
+    {
+      "location_id": "study_store_derived",
+      "owner": "external_study_store",
+      "relative_root": "derived",
+      "artifact_classes": ["derived_artifact"],
+      "publishable": false,
+      "device_purge": false,
+      "host_rehearsal_purge": true,
+      "cloud_backup": "not_applicable",
+      "device_transfer": "not_applicable",
+      "tombstone_eligible": true,
+      "post_purge_scan": true
+    },
+    {
+      "location_id": "study_store_report",
+      "owner": "external_study_store",
+      "relative_root": "report",
+      "artifact_classes": ["study_report"],
+      "publishable": false,
+      "device_purge": false,
+      "host_rehearsal_purge": true,
+      "cloud_backup": "not_applicable",
+      "device_transfer": "not_applicable",
+      "tombstone_eligible": true,
+      "post_purge_scan": true
+    },
+    {
+      "location_id": "tombstone",
+      "owner": "android_app",
+      "relative_root": "tombstones",
+      "artifact_classes": ["purge_tombstone"],
+      "publishable": false,
+      "device_purge": false,
+      "host_rehearsal_purge": false,
+      "cloud_backup": "excluded",
+      "device_transfer": "excluded",
+      "tombstone_eligible": false,
+      "post_purge_scan": false
+    }
+  ]
+}

@@ -437,7 +437,7 @@ def test_s25_camera_probe_target_delegates_its_verdict_to_the_checker() -> None:
         / "androidApp/src/androidTest/kotlin/com/calisthenics/diagnostic/probe/CameraCapabilityProbeTest.kt"
     )
     target = makefile.split("verify-harness-s25-camera-probe:", 1)[1].split(
-        "\n# Task 5's bounded physical live-capture evidence gate.", 1
+        "\nverify-harness-s25-storage-exclusion:", 1
     )[0]
 
     assert probe_test.is_file()
@@ -505,6 +505,18 @@ def test_s25_camera_probe_target_delegates_its_verdict_to_the_checker() -> None:
         "catches the camera gate mutating the pending evidence ledger itself; the ledger is only "
         "ever updated by a human copying the printed sanitized record"
     )
+
+
+def test_s25_storage_exclusion_target_clears_state_and_delegates_to_typed_checker() -> None:
+    makefile = (ROOT / "Makefile").read_text()
+    target = makefile.split("verify-harness-s25-storage-exclusion:", 1)[1].split(
+        "\n# Task 5's bounded physical live-capture evidence gate.", 1
+    )[0]
+
+    assert "StorageExclusionDeviceGateTest" in target
+    assert "shell pm clear com.calisthenics.diagnostic.android" in target
+    assert 'clear_result" != "Success"' in target
+    assert "tools/check_storage_exclusion.py" in target
 
 
 def test_android_storage_probe_has_executable_instrumentation_wiring() -> None:

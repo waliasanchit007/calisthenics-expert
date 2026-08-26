@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://calisthenics-expert.local/contracts/tooling/storage_location_registry.v1.schema.json",
+  "title": "M0.5B storage-location registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["storage_location_registry_schema_version", "registry_version", "locations"],
+  "properties": {
+    "storage_location_registry_schema_version": {"const": "1.0.0"},
+    "registry_version": {"const": "1.0.0"},
+    "locations": {
+      "type": "array",
+      "minItems": 7,
+      "maxItems": 7,
+      "items": {"$ref": "#/$defs/location"}
+    }
+  },
+  "$defs": {
+    "location": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "location_id",
+        "owner",
+        "relative_root",
+        "artifact_classes",
+        "publishable",
+        "device_purge",
+        "host_rehearsal_purge",
+        "cloud_backup",
+        "device_transfer",
+        "tombstone_eligible",
+        "post_purge_scan"
+      ],
+      "properties": {
+        "location_id": {
+          "enum": [
+            "device_export",
+            "device_staging",
+            "device_transfer_staging",
+            "study_store_source",
+            "study_store_derived",
+            "study_store_report",
+            "tombstone"
+          ]
+        },
+        "owner": {"enum": ["android_app", "host_transfer", "external_study_store"]},
+        "relative_root": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+        "artifact_classes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "session_bundle",
+              "staging_attempt",
+              "transfer_bundle",
+              "source_artifact",
+              "derived_artifact",
+              "study_report",
+              "purge_tombstone"
+            ]
+          }
+        },
+        "publishable": {"type": "boolean"},
+        "device_purge": {"type": "boolean"},
+        "host_rehearsal_purge": {"type": "boolean"},
+        "cloud_backup": {"enum": ["excluded", "not_applicable"]},
+        "device_transfer": {"enum": ["excluded", "not_applicable"]},
+        "tombstone_eligible": {"type": "boolean"},
+        "post_purge_scan": {"type": "boolean"}
+      }
+    }
+  }
+}

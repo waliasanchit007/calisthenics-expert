@@ -4,7 +4,11 @@ from pathlib import Path
 import pytest
 from jsonschema import Draft202012Validator
 
-from observation_contracts.schema_loader import ARTIFACT_KINDS, load_schema
+from observation_contracts.schema_loader import (
+    ARTIFACT_KINDS,
+    load_schema,
+    load_storage_location_registry_schema,
+)
 from observation_contracts.structural import json_pointer, validate_document, validate_ndjson
 from tests.samples import (
     ANNOTATION_ID_A,
@@ -80,6 +84,12 @@ def test_every_artifact_schema_is_draft_2020_12() -> None:
         schema = load_schema(kind)
         assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
         Draft202012Validator.check_schema(schema)
+
+
+def test_storage_location_registry_schema_is_valid_draft_2020_12() -> None:
+    schema = load_storage_location_registry_schema()
+    assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
+    Draft202012Validator.check_schema(schema)
 
 
 def test_load_schema_rejects_an_unpublished_major() -> None:

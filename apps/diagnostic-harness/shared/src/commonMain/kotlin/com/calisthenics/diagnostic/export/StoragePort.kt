@@ -11,16 +11,36 @@ data class StorageRoots(
     val filesDir: String,
     val stagingRoot: String,
     val exportsRoot: String,
+    val diagnosticHarnessRoot: String = parentOf(stagingRoot),
+    val transferStagingRoot: String = "$diagnosticHarnessRoot/${StorageLocationRegistry.androidChild(StorageLocationId.DEVICE_TRANSFER_STAGING)}",
+    val tombstoneRoot: String = "$diagnosticHarnessRoot/${StorageLocationRegistry.androidChild(StorageLocationId.TOMBSTONE)}",
 ) {
+    val registeredAndroidRoots: List<String>
+        get() = listOf(exportsRoot, stagingRoot, transferStagingRoot, tombstoneRoot)
+
     init {
         require(filesDir.startsWith('/') && !filesDir.endsWith('/')) { "filesDir must be a normalized absolute path" }
-        require(isBelow(filesDir, stagingRoot)) { "staging root must be below filesDir" }
-        require(isBelow(filesDir, exportsRoot)) { "exports root must be below filesDir" }
-        require(stagingRoot != exportsRoot) { "staging and exports roots must be distinct" }
+        require(diagnosticHarnessRoot == filesDir || isBelow(filesDir, diagnosticHarnessRoot)) {
+            "diagnostic harness root must be at or below filesDir"
+        }
+        val expected = mapOf(
+            exportsRoot to StorageLocationId.DEVICE_EXPORT,
+            stagingRoot to StorageLocationId.DEVICE_STAGING,
+            transferStagingRoot to StorageLocationId.DEVICE_TRANSFER_STAGING,
+            tombstoneRoot to StorageLocationId.TOMBSTONE,
+        )
+        require(expected.keys.size == expected.size) { "registered Android roots must be distinct" }
+        expected.forEach { (root, id) ->
+            require(root == "$diagnosticHarnessRoot/${StorageLocationRegistry.androidChild(id)}") {
+                "$id root must be the registry-derived child of diagnosticHarnessRoot"
+            }
+        }
     }
 
     private companion object {
         fun isBelow(parent: String, child: String): Boolean = child.startsWith("$parent/")
+
+        fun parentOf(path: String): String = path.substringBeforeLast('/')
     }
 }
 

@@ -6,7 +6,7 @@ done; printf '%s' python3)
 VENV_PYTHON := .venv/bin/python
 CLI := $(VENV_PYTHON) -m observation_contracts
 
-.PHONY: bootstrap verify verify-study-readiness verify-harness-jvm verify-harness-ios verify-harness-foundation verify-kotlin-export verify-harness-android-export-parity verify-harness-detection-replay verify-harness-s25-process-kill verify-harness-replay-export verify-harness-s25-five-run-replay verify-harness-s25-camera-probe verify-harness-s25-live-capture fetch-model-asset prepare-harness-gradle-dependencies
+.PHONY: bootstrap verify verify-study-readiness verify-harness-jvm verify-harness-ios verify-harness-foundation verify-kotlin-export verify-harness-android-export-parity verify-harness-detection-replay verify-harness-s25-process-kill verify-harness-replay-export verify-harness-s25-five-run-replay verify-harness-s25-camera-probe verify-harness-s25-storage-exclusion verify-harness-s25-live-capture fetch-model-asset prepare-harness-gradle-dependencies
 
 bootstrap:
 	@command -v "$(PYTHON)" >/dev/null 2>&1 || { echo "error: Python interpreter '$(PYTHON)' was not found" >&2; exit 1; }
@@ -356,6 +356,51 @@ verify-harness-s25-camera-probe:
 		exit "$$instrument_status"; \
 	fi; \
 	cd ../.. && $(VENV_PYTHON) tools/check_camera_capability_probe.py "$$transcript"
+
+# M0.5B Task 1 physical evidence. Static tests prove the source manifest and both extraction-rule
+# domains; this target proves the packaged app reports backup disabled, the packaged rule resource
+# parses to the same complete-parent exclusions, and the app-private parent contains exactly the
+# four registry-derived children on the authorized S25. It clears app data after installation so
+# no pre-rule state can be mistaken for a post-rule observation. The typed record is printed only;
+# this target never edits an evidence ledger.
+verify-harness-s25-storage-exclusion:
+	@set -eu; \
+	device_count=$$(adb devices -l | tail -n +2 | awk '$$2 == "device"' | wc -l | tr -d ' '); \
+	if [ "$$device_count" -ne 1 ]; then \
+		echo "error: verify-harness-s25-storage-exclusion requires exactly one authorized attached device, found $$device_count" >&2; \
+		exit 1; \
+	fi; \
+	serial=$$(adb devices -l | tail -n +2 | awk '$$2 == "device" {print $$1}'); \
+	case "$$serial" in emulator-*) echo "error: emulator is not authorized for this gate" >&2; exit 1 ;; esac; \
+	manufacturer=$$(adb -s "$$serial" shell getprop ro.product.manufacturer | tr -d '\r'); \
+	model=$$(adb -s "$$serial" shell getprop ro.product.model | tr -d '\r'); \
+	marketing_name=$$(adb -s "$$serial" shell getprop ro.config.marketing_name | tr -d '\r'); \
+	manufacturer_lower=$$(printf '%s' "$$manufacturer" | tr '[:upper:]' '[:lower:]'); \
+	model_upper=$$(printf '%s' "$$model" | tr '[:lower:]' '[:upper:]'); \
+	authorized=0; \
+	case "$$model_upper" in SM-S938*) authorized=1 ;; esac; \
+	case "$$marketing_name" in *"S25 Ultra"*) authorized=1 ;; esac; \
+	if [ "$$manufacturer_lower" != samsung ] || [ "$$authorized" -ne 1 ]; then \
+		echo "error: attached target is not the authorized Samsung Galaxy S25 Ultra" >&2; \
+		exit 1; \
+	fi; \
+	cd apps/diagnostic-harness && ./gradlew --no-daemon :androidApp:assembleDebug :androidApp:assembleDebugAndroidTest; \
+	adb -s "$$serial" install -r androidApp/build/outputs/apk/debug/androidApp-debug.apk; \
+	adb -s "$$serial" install -r androidApp/build/outputs/apk/androidTest/debug/androidApp-debug-androidTest.apk; \
+	clear_result=$$(adb -s "$$serial" shell pm clear com.calisthenics.diagnostic.android | tr -d '\r'); \
+	if [ "$$clear_result" != "Success" ]; then \
+		echo "error: pm clear returned '$$clear_result'" >&2; \
+		exit 1; \
+	fi; \
+	transcript=$$(mktemp); \
+	trap 'rm -f "$$transcript"' EXIT INT TERM; \
+	set +e; \
+	adb -s "$$serial" shell am instrument -w -r -e class com.calisthenics.diagnostic.probe.StorageExclusionDeviceGateTest com.calisthenics.diagnostic.android.test/androidx.test.runner.AndroidJUnitRunner >"$$transcript" 2>&1; \
+	instrument_status=$$?; \
+	set -e; \
+	cat "$$transcript"; \
+	if [ "$$instrument_status" -ne 0 ]; then exit "$$instrument_status"; fi; \
+	cd ../.. && $(VENV_PYTHON) tools/check_storage_exclusion.py "$$transcript"
 
 # Task 5's bounded physical live-capture evidence gate. The device test emits one typed record;
 # the host checker pulls and validates the exact export before deriving the final verdict. This

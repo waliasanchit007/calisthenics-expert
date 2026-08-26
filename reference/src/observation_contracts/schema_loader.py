@@ -81,6 +81,11 @@ def study_condition_matrix_schema_path() -> Path:
     return repository_root() / "contracts" / "tooling" / "study_condition_matrix.v1.schema.json"
 
 
+def storage_location_registry_schema_path() -> Path:
+    """Return the released M0.5B storage-location registry tooling schema path."""
+    return repository_root() / "contracts" / "tooling" / "storage_location_registry.v1.schema.json"
+
+
 @cache
 def load_schema(kind: ArtifactKind, major: int = SUPPORTED_MAJOR) -> Mapping[str, object]:
     """Return the parsed Draft 2020-12 schema for one artifact kind and major version."""
@@ -122,6 +127,12 @@ def load_study_condition_matrix_schema() -> Mapping[str, object]:
 
 
 @cache
+def load_storage_location_registry_schema() -> Mapping[str, object]:
+    """Return the parsed released storage-location registry tooling schema."""
+    return _load_tooling_schema(storage_location_registry_schema_path())
+
+
+@cache
 def schema_validator(kind: ArtifactKind, major: int = SUPPORTED_MAJOR) -> Draft202012Validator:
     """Return a cached Draft 2020-12 validator for one artifact kind and major version."""
     return Draft202012Validator(load_schema(kind, major))
@@ -143,3 +154,9 @@ def study_readiness_schema_validator() -> Draft202012Validator:
 def study_condition_matrix_schema_validator() -> Draft202012Validator:
     """Return a cached validator for the released study-condition-matrix tooling schema."""
     return Draft202012Validator(load_study_condition_matrix_schema())
+
+
+@cache
+def storage_location_registry_schema_validator() -> Draft202012Validator:
+    """Return a cached validator for the storage-location registry tooling schema."""
+    return Draft202012Validator(load_storage_location_registry_schema())

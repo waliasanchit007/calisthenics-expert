@@ -34,16 +34,28 @@ object AndroidStorageRoots {
             val filesDir = context.filesDir.absolutePath
             val filesDirStat = Os.stat(filesDir)
             val base = "$filesDir/$BASE_DIRECTORY_NAME"
-            val stagingRoot = "$base/staging"
-            val exportsRoot = "$base/exports"
-            Files.createDirectories(Paths.get(stagingRoot))
-            Files.createDirectories(Paths.get(exportsRoot))
+            val stagingRoot = "$base/${StorageLocationRegistry.androidChild(StorageLocationId.DEVICE_STAGING)}"
+            val exportsRoot = "$base/${StorageLocationRegistry.androidChild(StorageLocationId.DEVICE_EXPORT)}"
+            val transferStagingRoot = "$base/${StorageLocationRegistry.androidChild(StorageLocationId.DEVICE_TRANSFER_STAGING)}"
+            val tombstoneRoot = "$base/${StorageLocationRegistry.androidChild(StorageLocationId.TOMBSTONE)}"
+            listOf(stagingRoot, exportsRoot, transferStagingRoot, tombstoneRoot).forEach {
+                Files.createDirectories(Paths.get(it))
+            }
             val stagingMountStat = Os.stat(parentOf(stagingRoot))
             val exportsMountStat = Os.stat(parentOf(exportsRoot))
             if (stagingMountStat.st_dev != filesDirStat.st_dev || exportsMountStat.st_dev != filesDirStat.st_dev) {
                 StorageRootsResult.Unavailable("staging_and_exports_not_same_mount")
             } else {
-                StorageRootsResult.Ready(StorageRoots(filesDir, stagingRoot, exportsRoot))
+                StorageRootsResult.Ready(
+                    StorageRoots(
+                        filesDir = filesDir,
+                        stagingRoot = stagingRoot,
+                        exportsRoot = exportsRoot,
+                        diagnosticHarnessRoot = base,
+                        transferStagingRoot = transferStagingRoot,
+                        tombstoneRoot = tombstoneRoot,
+                    ),
+                )
             }
         } catch (error: ErrnoException) {
             StorageRootsResult.Unavailable("direct_boot_credential_encrypted_storage_unavailable")
@@ -56,6 +68,20 @@ object AndroidStorageRoots {
         } catch (error: SecurityException) {
             StorageRootsResult.Unavailable("storage_root_resolution_failed")
         }
+    }
+
+    /** Creates an isolated capability-probe layout below the registered staging root. */
+    fun forProbe(roots: StorageRoots, runId: String): StorageRoots {
+        require(runId.matches(Regex("^[0-9a-f-]{36}$"))) { "runId must be a lowercase UUID" }
+        val base = "${roots.stagingRoot}/storage-probe/$runId"
+        return StorageRoots(
+            filesDir = roots.filesDir,
+            stagingRoot = "$base/${StorageLocationRegistry.androidChild(StorageLocationId.DEVICE_STAGING)}",
+            exportsRoot = "$base/${StorageLocationRegistry.androidChild(StorageLocationId.DEVICE_EXPORT)}",
+            diagnosticHarnessRoot = base,
+            transferStagingRoot = "$base/${StorageLocationRegistry.androidChild(StorageLocationId.DEVICE_TRANSFER_STAGING)}",
+            tombstoneRoot = "$base/${StorageLocationRegistry.androidChild(StorageLocationId.TOMBSTONE)}",
+        )
     }
 
     private fun parentOf(path: String): String = path.substringBeforeLast('/')
