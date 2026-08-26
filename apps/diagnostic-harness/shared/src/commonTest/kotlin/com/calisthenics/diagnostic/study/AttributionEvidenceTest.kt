@@ -61,8 +61,104 @@ class AttributionEvidenceTest {
         assertTrue("TELEMETRY.STAGE_TIME_INVALID" in badTimestamp.blockingCodes)
     }
 
-    private fun run(configuredInferenceFps: Int, admittedInferenceCount: Int): ShortCadenceAttributionRun {
-        val deliveredCallbacks = 40
+    @Test
+    fun malformedCadenceKeysBlockWithoutThrowing() {
+        val validEvidence = PhysicalAttributionEvidence(
+            source = AttributionEvidenceSource("physical_device", "samsung", "SM-S938B", ""),
+            runs = listOf(run(10, 10), run(15, 15), run(30, 30)),
+        )
+
+        listOf(
+            listOf(5, 15, 30),
+            listOf(10, 20, 30),
+            listOf(10, 15, 15),
+            listOf(15, 10, 30),
+        ).forEach { configuredCadences ->
+            val evidence = validEvidence.copy(runs = configuredCadences.mapIndexed { index, fps ->
+                validEvidence.runs[index].copy(configuredInferenceFps = fps)
+            })
+            val result = runCatching { validateAttributionEvidence(evidence) }
+                .getOrElse { error("malformed cadence keys must produce typed validation: $it") }
+
+            assertEquals(AttributionEvidenceStatus.BLOCKED, result.status)
+            assertTrue("TELEMETRY.CADENCE_SEQUENCE_INVALID" in result.blockingCodes)
+            assertTrue("TELEMETRY.CADENCE_ADMISSION_NOT_DISTINCT" in result.blockingCodes)
+        }
+    }
+
+    @Test
+    fun mixedArtifactStageSequenceMayContainGaps() {
+        val evidence = PhysicalAttributionEvidence(
+            source = AttributionEvidenceSource("physical_device", "samsung", "SM-S938B", ""),
+            runs = listOf(
+                run(10, 10, 40).withMixedArtifactSequenceGap(),
+                run(15, 15, 40),
+                run(30, 30, 40),
+            ),
+        )
+
+        val result = validateAttributionEvidence(evidence)
+
+        assertEquals(AttributionEvidenceStatus.RECORDED, result.status)
+        assertTrue(result.satisfiesGate)
+    }
+
+    @Test
+    fun cadenceAdmissionUsesDeliveredCallbackRatesNotRawCounts() {
+        val evidence = PhysicalAttributionEvidence(
+            source = AttributionEvidenceSource("physical_device", "samsung", "SM-S938B", ""),
+            runs = listOf(
+                run(10, admittedInferenceCount = 20, deliveredCallbacks = 100),
+                run(15, admittedInferenceCount = 15, deliveredCallbacks = 50),
+                run(30, admittedInferenceCount = 10, deliveredCallbacks = 10),
+            ),
+        )
+
+        val result = validateAttributionEvidence(evidence)
+
+        assertEquals(AttributionEvidenceStatus.RECORDED, result.status)
+        assertTrue(result.satisfiesGate)
+    }
+
+    @Test
+    fun zeroDeliveryRunBlocksCadenceAdmission() {
+        val evidence = PhysicalAttributionEvidence(
+            source = AttributionEvidenceSource("physical_device", "samsung", "SM-S938B", ""),
+            runs = listOf(
+                run(10, admittedInferenceCount = 0, deliveredCallbacks = 0),
+                run(15, admittedInferenceCount = 1, deliveredCallbacks = 10),
+                run(30, admittedInferenceCount = 2, deliveredCallbacks = 10),
+            ),
+        )
+
+        val result = validateAttributionEvidence(evidence)
+
+        assertEquals(AttributionEvidenceStatus.BLOCKED, result.status)
+        assertTrue("TELEMETRY.CALLBACK_ACCOUNTING_INVALID" in result.blockingCodes)
+    }
+
+    @Test
+    fun equalAdmissionRatesAreNotStrictlyDistinct() {
+        val evidence = PhysicalAttributionEvidence(
+            source = AttributionEvidenceSource("physical_device", "samsung", "SM-S938B", ""),
+            runs = listOf(
+                run(10, admittedInferenceCount = 1, deliveredCallbacks = 2),
+                run(15, admittedInferenceCount = 2, deliveredCallbacks = 4),
+                run(30, admittedInferenceCount = 3, deliveredCallbacks = 6),
+            ),
+        )
+
+        val result = validateAttributionEvidence(evidence)
+
+        assertEquals(AttributionEvidenceStatus.BLOCKED, result.status)
+        assertTrue("TELEMETRY.CADENCE_ADMISSION_NOT_DISTINCT" in result.blockingCodes)
+    }
+
+    private fun run(
+        configuredInferenceFps: Int,
+        admittedInferenceCount: Int,
+        deliveredCallbacks: Int = 40,
+    ): ShortCadenceAttributionRun {
         val cadenceSelections = deliveredCallbacks - admittedInferenceCount
         val events = buildList {
             var sequence = 0L
@@ -92,4 +188,10 @@ class AttributionEvidenceTest {
             ),
         )
     }
+
+    private fun ShortCadenceAttributionRun.withMixedArtifactSequenceGap(): ShortCadenceAttributionRun = copy(
+        events = events.mapIndexed { index, event ->
+            event.copy(sequence = event.sequence + if (index == 0) 0L else 1L)
+        },
+    )
 }

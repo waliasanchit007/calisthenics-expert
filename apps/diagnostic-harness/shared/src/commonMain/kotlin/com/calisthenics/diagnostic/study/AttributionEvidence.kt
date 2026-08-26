@@ -13,6 +13,9 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 
+private val REQUIRED_CADENCE_ORDER = listOf(10, 15, 30)
+private val REQUIRED_CADENCE_FPS = REQUIRED_CADENCE_ORDER.toSet()
+
 data class AttributionEvidenceSource(
     val deviceClass: String,
     val manufacturer: String,
@@ -64,18 +67,30 @@ fun validateAttributionEvidence(evidence: PhysicalAttributionEvidence?): Attribu
         ) {
             add("TELEMETRY.UNAUTHORIZED_S25_TARGET")
         }
-if (evidence.runs.map { it.configuredInferenceFps } != listOf(10, 15, 30)) {
+        if (evidence.runs.map { it.configuredInferenceFps } != REQUIRED_CADENCE_ORDER) {
             add("TELEMETRY.CADENCE_SEQUENCE_INVALID")
         }
         evidence.runs.forEach { run ->
-if (run.requestedCameraFps != 30) add("TELEMETRY.CAMERA_REQUEST_NOT_30_FPS")
+            if (run.requestedCameraFps != 30) add("TELEMETRY.CAMERA_REQUEST_NOT_30_FPS")
             validateRun(run, this)
         }
         val admitted = evidence.runs.associate { run ->
             run.configuredInferenceFps to ((run.callbackAccounting.counts[CallbackTerminalDisposition.INFERENCE_COMPLETED] ?: 0L) +
                 (run.callbackAccounting.counts[CallbackTerminalDisposition.INFERENCE_FAILED] ?: 0L))
         }
-        if (admitted.size != 3 || !(admitted.getValue(10) < admitted.getValue(15) && admitted.getValue(15) < admitted.getValue(30))) {
+        val delivered = evidence.runs.associate { run ->
+            run.configuredInferenceFps to run.callbackAccounting.deliveredCallbacks
+        }
+        if (admitted.keys != REQUIRED_CADENCE_FPS || delivered.values.any { it <= 0L }) {
+            add("TELEMETRY.CADENCE_ADMISSION_NOT_DISTINCT")
+        } else if (!ratioLessThan(
+                admitted.getValue(10), delivered.getValue(10),
+                admitted.getValue(15), delivered.getValue(15),
+            ) || !ratioLessThan(
+                admitted.getValue(15), delivered.getValue(15),
+                admitted.getValue(30), delivered.getValue(30),
+            )
+        ) {
             add("TELEMETRY.CADENCE_ADMISSION_NOT_DISTINCT")
         }
     }.distinct().sorted()
@@ -98,13 +113,16 @@ fun renderAttributionEvidence(validation: AttributionEvidenceValidation): String
 
 private fun validateRun(run: ShortCadenceAttributionRun, blockingCodes: MutableList<String>) {
     val accounting = run.callbackAccounting
-    if (accounting.unclosedCallbacks != 0L || accounting.counts.values.sum() != accounting.deliveredCallbacks) {
+    if (accounting.deliveredCallbacks <= 0L ||
+        accounting.unclosedCallbacks != 0L ||
+        accounting.counts.values.sum() != accounting.deliveredCallbacks
+    ) {
         blockingCodes += "TELEMETRY.CALLBACK_ACCOUNTING_INVALID"
     }
-if (run.events.withIndex().any { (index, event) -> event.sequence != index.toLong() }) {
+    if (run.events.zipWithNext().any { (first, second) -> second.sequence <= first.sequence }) {
         blockingCodes += "TELEMETRY.STAGE_SEQUENCE_INVALID"
     }
-if (run.events.zipWithNext().any { (first, second) -> second.tSessionNs < first.tSessionNs }) {
+    if (run.events.zipWithNext().any { (first, second) -> second.tSessionNs < first.tSessionNs }) {
         blockingCodes += "TELEMETRY.STAGE_TIME_INVALID"
     }
     accounting.counts.forEach { (terminal, expected) ->
@@ -117,3 +135,11 @@ if (run.events.zipWithNext().any { (first, second) -> second.tSessionNs < first.
         (accounting.counts[CallbackTerminalDisposition.INFERENCE_FAILED] ?: 0L)
     if (submissions != terminalInferences) blockingCodes += "TELEMETRY.INFERENCE_ADMISSION_MISMATCH"
 }
+
+/** Compares non-negative ratios without floating-point rounding. */
+private fun ratioLessThan(
+    leftNumerator: Long,
+    leftDenominator: Long,
+    rightNumerator: Long,
+    rightDenominator: Long,
+): Boolean = leftNumerator * rightDenominator < rightNumerator * leftDenominator
