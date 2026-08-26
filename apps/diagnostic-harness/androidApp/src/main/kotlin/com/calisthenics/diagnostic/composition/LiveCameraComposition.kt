@@ -247,6 +247,9 @@ class LiveCameraComposition internal constructor(
         val modelInputHeight: Int,
         val clock: LiveClock,
         val scheduler: LiveScheduler,
+        internal val sessionDispatcherFactory: () -> SingleThreadSessionDispatcher = {
+            SingleThreadSessionDispatcher()
+        },
         val sourceFactory: () -> LiveFrameSource,
         val inferenceFactory: (nowNs: () -> Long) -> LiveInference,
         val thermalProbeFactory: () -> LiveThermalProbe,
@@ -404,7 +407,7 @@ class LiveCameraComposition internal constructor(
                     onTerminal = { submissionIndex -> onInferenceTerminal(submissionIndex) },
                 )
                 val liveDeadlineScheduler = LiveDeadlineScheduler(dependencies.scheduler, ::relativeNowNs)
-                val runnerDispatcher = SingleThreadSessionDispatcher()
+                val runnerDispatcher = dependencies.sessionDispatcherFactory()
                 sessionDispatcher = runnerDispatcher
                 val sessionRunner = SessionRunner(
                     configuration = SessionConfiguration(
