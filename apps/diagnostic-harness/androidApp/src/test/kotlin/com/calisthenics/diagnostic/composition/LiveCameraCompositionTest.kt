@@ -25,6 +25,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
@@ -33,6 +34,7 @@ import kotlin.test.assertTrue
 import kotlin.test.fail
 import org.junit.Test
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.system.measureTimeMillis
@@ -100,7 +102,6 @@ class LiveCameraCompositionTest {
 
     @Test
     fun partialConstructionFailureReleasesInferenceAndSchedulerExactlyOnce() {
-        val existingDispatchers = liveSessionDispatcherThreads()
         val harness = Harness(finalizerFailure = IllegalStateException("finalizer construction failed"))
 
         val result = harness.composition.start(10, operatorAttestedNoPerson = true)
@@ -109,7 +110,7 @@ class LiveCameraCompositionTest {
         assertEquals(1, harness.inference.disposeCount)
         assertEquals(1, harness.scheduler.shutdownCount)
         assertEquals(0, harness.sourceCreations)
-        assertNoNewLiveSessionDispatcher(existingDispatchers)
+        assertSessionDispatcherReleased(harness)
     }
 
     @Test
@@ -121,7 +122,6 @@ class LiveCameraCompositionTest {
             unrelatedDispatcherStarted.await(1, TimeUnit.SECONDS),
             "unrelated dispatcher worker did not start before the leak baseline",
         )
-        val existingDispatchers = liveSessionDispatcherThreads()
         val harness = Harness(registrationResult = SessionRunnerRegistrationResult.REJECTED)
 
         try {
@@ -131,7 +131,7 @@ class LiveCameraCompositionTest {
             assertEquals(1, harness.inference.disposeCount)
             assertEquals(1, harness.scheduler.shutdownCount)
             assertEquals(0, harness.sourceCreations)
-            assertNoNewLiveSessionDispatcher(existingDispatchers)
+            assertSessionDispatcherReleased(harness)
         } finally {
             unrelatedDispatcher.shutdown()
         }
@@ -139,7 +139,6 @@ class LiveCameraCompositionTest {
 
     @Test
     fun sourceFactoryFailureReleasesPartiallyConstructedResourcesExactlyOnce() {
-        val existingDispatchers = liveSessionDispatcherThreads()
         val harness = Harness(sourceFactoryFailure = IllegalStateException("source construction failed"))
 
         val result = harness.composition.start(10, operatorAttestedNoPerson = true)
@@ -148,12 +147,11 @@ class LiveCameraCompositionTest {
         assertEquals(1, harness.inference.disposeCount)
         assertEquals(1, harness.scheduler.shutdownCount)
         assertEquals(0, harness.sourceCreations)
-        assertNoNewLiveSessionDispatcher(existingDispatchers)
+        assertSessionDispatcherReleased(harness)
     }
 
     @Test
     fun sourceStartFailureStopsSourceAndReleasesEveryOwnedResourceExactlyOnce() {
-        val existingDispatchers = liveSessionDispatcherThreads()
         val harness = Harness(sourceStartFailure = IllegalStateException("source start failed"))
 
         val result = runCatching { harness.composition.start(10, operatorAttestedNoPerson = true) }
@@ -165,7 +163,7 @@ class LiveCameraCompositionTest {
         assertEquals(1, harness.scheduler.shutdownCount)
         assertTrue(harness.events.indexOf("source.start.entered") < harness.events.indexOf("source.stop"))
         assertTrue(harness.events.indexOf("source.stop") < harness.events.indexOf("inference.dispose"))
-        assertNoNewLiveSessionDispatcher(existingDispatchers)
+        assertSessionDispatcherReleased(harness)
     }
 
     @Test
@@ -961,13 +959,16 @@ class LiveCameraCompositionTest {
             harness.close()
         }
 
-    private fun liveSessionDispatcherThreads(): Set<Thread> =
-        Thread.getAllStackTraces().keys
-            .filterTo(mutableSetOf()) { it.name == "replay-session-dispatcher" && it.isAlive }
-
-    private fun assertNoNewLiveSessionDispatcher(existingDispatchers: Set<Thread>) {
-        val leakedDispatchers = liveSessionDispatcherThreads() - existingDispatchers
-        assertTrue(leakedDispatchers.isEmpty(), "live session dispatcher worker leaked")
+    private fun assertSessionDispatcherReleased(harness: Harness) {
+        assertFailsWith<RejectedExecutionException> {
+            harness.sessionDispatchers.single().dispatch {}
+        }
+        val worker = harness.sessionDispatcherThreads.single()
+        worker.join(1_000)
+        assertFalse(
+            worker.isAlive,
+            "owned live session dispatcher worker leaked",
+        )
     }
 
     private class Harness(
@@ -997,6 +998,8 @@ class LiveCameraCompositionTest {
         val clock = clockOverride ?: fallbackClock
         val scheduler = FakeScheduler(events, runNonPositiveSchedulerActions)
         val thermal = FakeThermalProbe(thermalAvailable)
+        val sessionDispatchers = mutableListOf<SingleThreadSessionDispatcher>()
+        val sessionDispatcherThreads = mutableListOf<Thread>()
         val source = FakeSource(
             advanceClock = onFrameTimestamp ?: { timestampNs ->
                 fallbackClock.value = maxOf(fallbackClock.value, timestampNs + 1_000L)
@@ -1024,6 +1027,12 @@ class LiveCameraCompositionTest {
                 modelInputHeight = modelInputHeight,
                 clock = clock,
                 scheduler = scheduler,
+                sessionDispatcherFactory = {
+                    SingleThreadSessionDispatcher().also { dispatcher ->
+                        sessionDispatchers += dispatcher
+                        dispatcher.dispatch { sessionDispatcherThreads += Thread.currentThread() }
+                    }
+                },
                 sourceFactory = {
                     sourceFactoryFailure?.let { throw it }
                     sourceCreations++
