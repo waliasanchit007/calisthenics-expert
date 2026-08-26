@@ -55,6 +55,27 @@ class DurableSessionWriterTest {
     }
 
     @Test
+    fun telemetryUsesTheSameBoundedDurabilityClockAndPersistsItsCheckpointProgress() {
+        var nowNs = 0L
+        val storage = RecordingStorage()
+        val writer = DefaultDurableSessionWriter(storage, sessionId(), monotonicNowNs = { nowNs })
+        writer.open()
+
+        writer.appendTelemetry(telemetry(sequence = 0, timeNs = 0))
+        nowNs = 5_000_000_000L
+        writer.appendTelemetry(telemetry(sequence = 1, timeNs = nowNs))
+
+        assertEquals(1, storage.events.count { it == "flush:TELEMETRY" })
+        assertEquals(1, storage.events.count { it == "fsync:TELEMETRY" })
+        assertEquals(1, storage.events.count { it == "checkpoint:parent-fsync" })
+        assertTrue(storage.delegate.attempts.single().checkpoint!!.contains("|1|2\n"))
+        assertEquals(
+            telemetry(sequence = 0, timeNs = 0) + telemetry(sequence = 1, timeNs = nowNs),
+            storage.delegate.attempts.single().durableArtifactBytes.getValue(DurableArtifact.TELEMETRY).decodeToString(),
+        )
+    }
+
+    @Test
     fun checkpointReplacementIsTempWriteFsyncRenameAndParentFsync() {
         val storage = RecordingStorage()
         val writer = DefaultDurableSessionWriter(storage, sessionId())
@@ -128,6 +149,31 @@ class DurableSessionWriterTest {
     }
 
     @Test
+    fun telemetryRereadRejectsDuplicateGapRegressingTimestampTruncatedLineAndCount() {
+        val mutations = listOf(
+            "duplicate" to "{\"sequence\":0,\"t_session_ns\":0}\n{\"sequence\":0,\"t_session_ns\":1}\n",
+            "gap" to "{\"sequence\":0,\"t_session_ns\":0}\n{\"sequence\":2,\"t_session_ns\":1}\n",
+            "regressing timestamp" to "{\"sequence\":0,\"t_session_ns\":1}\n{\"sequence\":1,\"t_session_ns\":0}\n",
+            "truncated line" to "{\"sequence\":0,\"t_session_ns\":0}",
+            "count" to "{\"sequence\":0,\"t_session_ns\":0}\n",
+        )
+
+        mutations.forEach { (name, corrupted) ->
+            val storage = FakeStorage()
+            val writer = DefaultDurableSessionWriter(storage, sessionId())
+            writer.open()
+            writer.appendTelemetry(telemetry(sequence = 0, timeNs = 0))
+            writer.appendTelemetry(telemetry(sequence = 1, timeNs = 1))
+            storage.attempts.single().artifactBytes[DurableArtifact.TELEMETRY] = corrupted.encodeToByteArray()
+
+            assertFailsWith<DurableReconciliationException>(name) {
+                writer.seal(FinalSessionAggregates(counts = counts(emitted = 0, posePresent = 0)))
+            }
+            assertEquals(DurableWriterState.FAILED, writer.state, name)
+        }
+    }
+
+    @Test
     fun abortIsTerminalAndCarriesSanitizedReasonAndCounts() {
         val writer = DefaultDurableSessionWriter(RecordingStorage(), sessionId())
         writer.open()
@@ -167,11 +213,14 @@ class DurableSessionWriterTest {
         imageHeight = 256,
         framesSkippedSinceLastEmittedRecord = 0,
     )
+
+    private fun telemetry(sequence: Long, timeNs: Long): String =
+        "{\"sequence\":$sequence,\"t_session_ns\":$timeNs}\n"
 }
 
 private class RecordingStorage(
     private val failOn: String? = null,
-    private val delegate: FakeStorage = FakeStorage(),
+    val delegate: FakeStorage = FakeStorage(),
 ) : StoragePort by delegate {
     val events = mutableListOf<String>()
 

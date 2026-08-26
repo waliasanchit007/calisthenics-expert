@@ -3,6 +3,10 @@ package com.calisthenics.diagnostic.export
 import com.calisthenics.diagnostic.contract.Counts
 import com.calisthenics.diagnostic.contract.decodeFrame
 import com.calisthenics.diagnostic.hash.Sha256Digest
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.long
 
 /** A pure in-memory [StoragePort] implementation with no test-only surface of its own. */
 class FakeStorage(
@@ -97,7 +101,9 @@ class FakeStorage(
     }
 
     override fun fsyncArtifact(attempt: StagingAttempt, artifact: DurableArtifact) {
-        fakeAttempt(attempt).fsyncedArtifacts += artifact
+        val fake = fakeAttempt(attempt)
+        fake.fsyncedArtifacts += artifact
+        fake.durableArtifactBytes[artifact] = fake.artifactBytes[artifact] ?: ByteArray(0)
     }
 
     override fun replaceCheckpoint(attempt: StagingAttempt, encodedCheckpoint: String) {
@@ -112,7 +118,10 @@ class FakeStorage(
         return ArtifactReconciliation(
             byteLength = bytes.size.toLong(),
             sha256 = Sha256Digest.hex(bytes),
-            recordCount = lines.size.toLong(),
+            recordCount = when (artifact) {
+                DurableArtifact.POSE_STREAM -> lines.size.toLong()
+                DurableArtifact.TELEMETRY -> reconcileTelemetry(bytes)
+            },
             posePresentCount = if (artifact == DurableArtifact.POSE_STREAM) {
                 lines.count { decodeFrame("$it\n").posePresent }.toLong()
             } else {
@@ -124,6 +133,41 @@ class FakeStorage(
     private fun fakeAttempt(attempt: StagingAttempt): FakeStagingAttempt = attempts.single { it.path == attempt.path }
 
     private fun fakeAttemptByPath(path: String): FakeStagingAttempt = attempts.single { it.path == path }
+
+    private fun reconcileTelemetry(bytes: ByteArray): Long {
+        if (bytes.isNotEmpty() && bytes.last() != '\n'.code.toByte()) {
+            throw DurableReconciliationException("telemetry NDJSON ends with a truncated line")
+        }
+        var expectedSequence = 0L
+        var previousTimeNs = -1L
+        bytes.decodeToString().split('\n').dropLast(1).forEach { line ->
+            if (line.isEmpty()) throw DurableReconciliationException("telemetry NDJSON contains an empty line")
+            val objectValue = try {
+                Json.parseToJsonElement(line).jsonObject
+            } catch (error: Throwable) {
+                throw DurableReconciliationException("telemetry NDJSON contains an invalid record")
+            }
+            val sequence = try {
+                objectValue.getValue("sequence").jsonPrimitive.long
+            } catch (error: Throwable) {
+                throw DurableReconciliationException("telemetry NDJSON record has no sequence")
+            }
+            val timeNs = try {
+                objectValue.getValue("t_session_ns").jsonPrimitive.long
+            } catch (error: Throwable) {
+                throw DurableReconciliationException("telemetry NDJSON record has no session time")
+            }
+            if (sequence != expectedSequence) {
+                throw DurableReconciliationException("telemetry NDJSON sequence is not contiguous from zero")
+            }
+            if (timeNs < previousTimeNs) {
+                throw DurableReconciliationException("telemetry NDJSON session time regressed")
+            }
+            expectedSequence++
+            previousTimeNs = timeNs
+        }
+        return expectedSequence
+    }
 }
 
 data class FakeStagingAttempt(
@@ -136,6 +180,7 @@ data class FakeStagingAttempt(
     var abortMarker: AbortMarker? = null,
     var renamed: Boolean = false,
     val artifactBytes: MutableMap<DurableArtifact, ByteArray> = mutableMapOf(),
+    val durableArtifactBytes: MutableMap<DurableArtifact, ByteArray> = mutableMapOf(),
     val flushedArtifacts: MutableSet<DurableArtifact> = mutableSetOf(),
     val fsyncedArtifacts: MutableSet<DurableArtifact> = mutableSetOf(),
     var checkpoint: String? = null,

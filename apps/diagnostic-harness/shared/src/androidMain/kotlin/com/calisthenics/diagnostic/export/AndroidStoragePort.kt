@@ -5,8 +5,6 @@ import android.system.OsConstants
 import com.calisthenics.diagnostic.contract.Counts
 import com.calisthenics.diagnostic.contract.decodeFrame
 import com.calisthenics.diagnostic.contract.Uuid
-import com.calisthenics.diagnostic.contract.decodeFrame
-import com.calisthenics.diagnostic.hash.Sha256Digest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
@@ -22,6 +20,10 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
 import java.nio.file.StandardOpenOption
+import java.security.DigestInputStream
+import java.security.MessageDigest
+import java.io.FilterInputStream
+import java.io.InputStream
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -32,6 +34,8 @@ import java.util.concurrent.atomic.AtomicInteger
 class AndroidStoragePort(override val roots: StorageRoots) : StoragePort {
     private val nonce = AtomicInteger(0)
     private val frameChannels = mutableMapOf<String, FileChannel>()
+    /** Sole owner for artifact-channel lookup, force, close, and removal. */
+    private val artifactChannelLock = Any()
     private val artifactChannels = mutableMapOf<Pair<String, DurableArtifact>, FileChannel>()
     private val renamedPaths = mutableSetOf<String>()
 
@@ -159,29 +163,35 @@ class AndroidStoragePort(override val roots: StorageRoots) : StoragePort {
     }
 
     override fun appendArtifact(attempt: StagingAttempt, artifact: DurableArtifact, bytes: ByteArray) {
-        val channel = artifactChannels.getOrPut(attempt.path to artifact) {
-            FileChannel.open(
-                artifactPath(attempt, artifact),
-                StandardOpenOption.CREATE,
-                StandardOpenOption.APPEND,
-                StandardOpenOption.WRITE,
-            )
+        synchronized(artifactChannelLock) {
+            val channel = artifactChannels.getOrPut(attempt.path to artifact) {
+                FileChannel.open(
+                    artifactPath(attempt, artifact),
+                    StandardOpenOption.CREATE,
+                    StandardOpenOption.APPEND,
+                    StandardOpenOption.WRITE,
+                )
+            }
+            val buffer = ByteBuffer.wrap(bytes)
+            while (buffer.hasRemaining()) channel.write(buffer)
         }
-        val buffer = ByteBuffer.wrap(bytes)
-        while (buffer.hasRemaining()) channel.write(buffer)
     }
 
     override fun flushArtifact(attempt: StagingAttempt, artifact: DurableArtifact) {
-        artifactChannels[attempt.path to artifact]?.force(false)
+        synchronized(artifactChannelLock) {
+            artifactChannels[attempt.path to artifact]?.force(false)
+        }
     }
 
     override fun fsyncArtifact(attempt: StagingAttempt, artifact: DurableArtifact) {
-        artifactChannels.remove(attempt.path to artifact)?.let { channel ->
-            channel.force(true)
-            channel.close()
+        synchronized(artifactChannelLock) {
+            artifactChannels.remove(attempt.path to artifact)?.let { channel ->
+                channel.force(true)
+                channel.close()
+            }
+            val path = artifactPath(attempt, artifact)
+            FileChannel.open(path, StandardOpenOption.WRITE, StandardOpenOption.CREATE).use { it.force(true) }
         }
-        val path = artifactPath(attempt, artifact)
-        FileChannel.open(path, StandardOpenOption.WRITE, StandardOpenOption.CREATE).use { it.force(true) }
     }
 
     override fun replaceCheckpoint(attempt: StagingAttempt, encodedCheckpoint: String) {
@@ -200,22 +210,64 @@ class AndroidStoragePort(override val roots: StorageRoots) : StoragePort {
     }
 
     override fun reconcileArtifact(attempt: StagingAttempt, artifact: DurableArtifact): ArtifactReconciliation {
-        val bytes = if (Files.exists(artifactPath(attempt, artifact))) {
-            Files.readAllBytes(artifactPath(attempt, artifact))
-        } else {
-            ByteArray(0)
+        val path = artifactPath(attempt, artifact)
+        if (!Files.exists(path)) return ArtifactReconciliation(0L, EMPTY_SHA256, 0L, if (artifact == DurableArtifact.POSE_STREAM) 0L else null)
+
+        val digest = MessageDigest.getInstance("SHA-256")
+        var recordCount = 0L
+        var posePresentCount = 0L
+        var expectedTelemetrySequence = 0L
+        var previousTelemetryTimeNs = -1L
+        val tracker = TrackingInputStream(Files.newInputStream(path))
+        DigestInputStream(tracker, digest).bufferedReader(StandardCharsets.UTF_8).use { reader ->
+            while (true) {
+                val line = reader.readLine() ?: break
+                if (line.isEmpty()) throw DurableReconciliationException("artifact NDJSON contains an empty line")
+                when (artifact) {
+                    DurableArtifact.POSE_STREAM -> if (decodeFrame("$line\n").posePresent) posePresentCount++
+                    DurableArtifact.TELEMETRY -> {
+                        val telemetry = telemetrySequenceAndTime(line)
+                        if (telemetry.first != expectedTelemetrySequence) {
+                            throw DurableReconciliationException("telemetry NDJSON sequence is not contiguous from zero")
+                        }
+                        if (telemetry.second < previousTelemetryTimeNs) {
+                            throw DurableReconciliationException("telemetry NDJSON session time regressed")
+                        }
+                        expectedTelemetrySequence++
+                        previousTelemetryTimeNs = telemetry.second
+                    }
+                }
+                recordCount++
+            }
         }
-        val lines = bytes.toString(StandardCharsets.UTF_8).lineSequence().filter { it.isNotEmpty() }.toList()
+        if (tracker.byteLength > 0L && tracker.lastByte != '\n'.code) {
+            throw DurableReconciliationException("artifact NDJSON ends with a truncated line")
+        }
         return ArtifactReconciliation(
-            byteLength = bytes.size.toLong(),
-            sha256 = Sha256Digest.hex(bytes),
-            recordCount = lines.size.toLong(),
-            posePresentCount = if (artifact == DurableArtifact.POSE_STREAM) {
-                lines.count { decodeFrame("$it\n").posePresent }.toLong()
-            } else {
-                null
-            },
+            byteLength = tracker.byteLength,
+            sha256 = digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) },
+            recordCount = recordCount,
+            posePresentCount = if (artifact == DurableArtifact.POSE_STREAM) posePresentCount else null,
         )
+    }
+
+    private fun telemetrySequenceAndTime(line: String): Pair<Long, Long> {
+        val record = try {
+            Json.parseToJsonElement(line).jsonObject
+        } catch (error: Throwable) {
+            throw DurableReconciliationException("telemetry NDJSON contains an invalid record")
+        }
+        val sequence = try {
+            record.getValue("sequence").jsonPrimitive.long
+        } catch (error: Throwable) {
+            throw DurableReconciliationException("telemetry NDJSON record has no sequence")
+        }
+        val timeNs = try {
+            record.getValue("t_session_ns").jsonPrimitive.long
+        } catch (error: Throwable) {
+            throw DurableReconciliationException("telemetry NDJSON record has no session time")
+        }
+        return sequence to timeNs
     }
 
     private fun framesPath(attempt: StagingAttempt): Path = Paths.get(attempt.path, FRAMES_FILE_NAME)
@@ -240,12 +292,40 @@ class AndroidStoragePort(override val roots: StorageRoots) : StoragePort {
 
     private class AndroidStagingAttempt(override val path: String) : StagingAttempt
 
+    private class TrackingInputStream(delegate: InputStream) : FilterInputStream(delegate) {
+        var byteLength: Long = 0L
+            private set
+        var lastByte: Int = -1
+            private set
+
+        override fun read(): Int {
+            val value = super.read()
+            if (value >= 0) record(value)
+            return value
+        }
+
+        override fun read(bytes: ByteArray, offset: Int, length: Int): Int {
+            val read = super.read(bytes, offset, length)
+            if (read > 0) {
+                byteLength += read
+                lastByte = bytes[offset + read - 1].toInt() and 0xff
+            }
+            return read
+        }
+
+        private fun record(value: Int) {
+            byteLength++
+            lastByte = value
+        }
+    }
+
     private companion object {
         const val FRAMES_FILE_NAME = "frames.ndjson"
         const val TELEMETRY_FILE_NAME = "telemetry.ndjson"
         const val CHECKPOINT_FILE_NAME = "checkpoint"
         const val MANIFEST_FILE_NAME = "manifest.json"
         const val ABORT_MARKER_FILE_NAME = "abort-marker.json"
+        const val EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
         fun encodeAbortMarker(reason: String, counts: Counts): String {
             val json = buildJsonObject {

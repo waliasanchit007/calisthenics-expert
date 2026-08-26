@@ -23,6 +23,8 @@ data class DurableCheckpoint(
     val counts: Counts,
     val posePresentCount: Long,
     val digestState: Sha256State,
+    val lastDurableTelemetrySequence: Long = -1L,
+    val durableTelemetryCount: Long = 0L,
 )
 
 data class FinalSessionAggregates(val counts: Counts)

@@ -5,6 +5,9 @@ import com.calisthenics.diagnostic.contract.RawPoseFrame
 import com.calisthenics.diagnostic.contract.Uuid
 import com.calisthenics.diagnostic.contract.encodeFrameLine
 import com.calisthenics.diagnostic.hash.Sha256Digest
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Bounded writer for the pose and telemetry streams of one session attempt.
@@ -26,8 +29,11 @@ class DefaultDurableSessionWriter(
     private val sessionId: Uuid,
     private val monotonicNowNs: () -> Long = { 0L },
 ) : DurableSessionWriter {
-    override var state: DurableWriterState = DurableWriterState.NEW
-        private set
+    private val writerMutex = Mutex()
+    private var mutableState: DurableWriterState = DurableWriterState.NEW
+
+    override val state: DurableWriterState
+        get() = serialized { mutableState }
 
     var lastDurableRecordIndex: Long = -1L
         private set
@@ -39,25 +45,27 @@ class DefaultDurableSessionWriter(
     private var poseCount = 0L
     private var posePresentCount = 0L
     private var durablePoseCount = 0L
-    private var openedAtNs = 0L
     private var lastDurableAtNs = 0L
+    private var lastTelemetryDurableAtNs = 0L
     private var digestState = Sha256State(0L, "0".repeat(64))
-    private var telemetryWritten = false
+    private var telemetryCount = 0L
+    private var durableTelemetryCount = 0L
+    private var lastDurableTelemetrySequence = -1L
 
-    override fun open() {
+    override fun open() = serialized {
         requireState(DurableWriterState.NEW)
         try {
             attempt = storage.createStagingAttempt(sessionId)
-            openedAtNs = monotonicNowNs()
-            lastDurableAtNs = openedAtNs
-            state = DurableWriterState.OPEN
+            lastDurableAtNs = monotonicNowNs()
+            lastTelemetryDurableAtNs = lastDurableAtNs
+            mutableState = DurableWriterState.OPEN
         } catch (error: Throwable) {
-            state = DurableWriterState.FAILED
+            mutableState = DurableWriterState.FAILED
             throw storageFailure("createStagingAttempt", error)
         }
     }
 
-    override fun appendPose(record: RawPoseFrame) {
+    override fun appendPose(record: RawPoseFrame) = serialized {
         requireState(DurableWriterState.OPEN)
         require(record.sessionId == sessionId) { "pose record belongs to another session" }
         val encoded = encodeFrameLine(record)
@@ -73,15 +81,15 @@ class DefaultDurableSessionWriter(
                 flushPose(currentAttempt, now)
             }
         } catch (error: DurableStorageException) {
-            state = DurableWriterState.FAILED
+            mutableState = DurableWriterState.FAILED
             throw error
         } catch (error: Throwable) {
-            state = DurableWriterState.FAILED
+            mutableState = DurableWriterState.FAILED
             throw storageFailure("appendArtifact:POSE_STREAM", error)
         }
     }
 
-    override fun appendTelemetry(encodedRecord: String) {
+    override fun appendTelemetry(encodedRecord: String) = serialized {
         requireState(DurableWriterState.OPEN)
         val currentAttempt = requireNotNull(attempt)
         require(!encodedRecord.contains('\r') && encodedRecord.endsWith('\n')) {
@@ -89,23 +97,26 @@ class DefaultDurableSessionWriter(
         }
         try {
             storage.appendArtifact(currentAttempt, DurableArtifact.TELEMETRY, encodedRecord.encodeToByteArray())
-            telemetryWritten = true
+            telemetryCount++
+            val now = monotonicNowNs()
+            if (telemetryCount - durableTelemetryCount >= TELEMETRY_FLUSH_THRESHOLD ||
+                now - lastTelemetryDurableAtNs >= CLOCK_FLUSH_NS
+            ) {
+                flushTelemetry(currentAttempt, now)
+            }
         } catch (error: Throwable) {
-            state = DurableWriterState.FAILED
+            mutableState = DurableWriterState.FAILED
             throw storageFailure("appendArtifact:TELEMETRY", error)
         }
     }
 
-    override fun seal(finalAggregates: FinalSessionAggregates): SealedArtifacts {
+    override fun seal(finalAggregates: FinalSessionAggregates): SealedArtifacts = serialized {
         requireState(DurableWriterState.OPEN)
-        state = DurableWriterState.SEALING
+        mutableState = DurableWriterState.SEALING
         val currentAttempt = requireNotNull(attempt)
         try {
             flushPose(currentAttempt, monotonicNowNs())
-            if (telemetryWritten) {
-                storage.flushArtifact(currentAttempt, DurableArtifact.TELEMETRY)
-                storage.fsyncArtifact(currentAttempt, DurableArtifact.TELEMETRY)
-            }
+            flushTelemetry(currentAttempt, monotonicNowNs())
             if (finalAggregates.counts.inferenceRecordsEmitted != poseCount) {
                 throw DurableReconciliationException("final emitted count does not match durable pose count")
             }
@@ -116,7 +127,7 @@ class DefaultDurableSessionWriter(
             storage.replaceCheckpoint(currentAttempt, encodeCheckpoint(finalCheckpoint))
             val reconciled = buildList {
                 add(SealedArtifact(DurableArtifact.POSE_STREAM, storage.reconcileArtifact(currentAttempt, DurableArtifact.POSE_STREAM)))
-                if (telemetryWritten) {
+                if (telemetryCount > 0) {
                     add(SealedArtifact(DurableArtifact.TELEMETRY, storage.reconcileArtifact(currentAttempt, DurableArtifact.TELEMETRY)))
                 }
             }
@@ -127,24 +138,28 @@ class DefaultDurableSessionWriter(
             if (poseReconciliation.posePresentCount != posePresentCount) {
                 throw DurableReconciliationException("reconciled pose-present count does not match durable pose count")
             }
-            state = DurableWriterState.PUBLISHED
-            return SealedArtifacts(currentAttempt, reconciled, finalCheckpoint)
+            val telemetryReconciliation = reconciled.firstOrNull { it.artifact == DurableArtifact.TELEMETRY }?.reconciliation
+            if (telemetryReconciliation?.recordCount != null && telemetryReconciliation.recordCount != telemetryCount) {
+                throw DurableReconciliationException("reconciled telemetry count does not match submitted telemetry count")
+            }
+            mutableState = DurableWriterState.PUBLISHED
+            return@serialized SealedArtifacts(currentAttempt, reconciled, finalCheckpoint)
         } catch (error: DurableReconciliationException) {
-            state = DurableWriterState.FAILED
+            mutableState = DurableWriterState.FAILED
             throw error
         } catch (error: DurableWriterStateException) {
-            state = DurableWriterState.FAILED
+            mutableState = DurableWriterState.FAILED
             throw error
         } catch (error: DurableStorageException) {
-            state = DurableWriterState.FAILED
+            mutableState = DurableWriterState.FAILED
             throw error
         } catch (error: Throwable) {
-            state = DurableWriterState.FAILED
+            mutableState = DurableWriterState.FAILED
             throw storageFailure("seal", error)
         }
     }
 
-    override fun abort(reason: String, counts: Counts) {
+    override fun abort(reason: String, counts: Counts) = serialized {
         requireState(DurableWriterState.OPEN, DurableWriterState.SEALING, DurableWriterState.FAILED)
         val currentAttempt = requireNotNull(attempt)
         val safeReason = reason.replace('\r', ' ').replace('\n', ' ').take(MAX_REASON_LENGTH)
@@ -152,9 +167,9 @@ class DefaultDurableSessionWriter(
             storage.writeAbortMarker(currentAttempt, safeReason, counts)
             storage.fsyncFile(currentAttempt, StorageFile.ABORT_MARKER)
             lastAbortReason = safeReason
-            state = DurableWriterState.ABORTED
+            mutableState = DurableWriterState.ABORTED
         } catch (error: Throwable) {
-            state = DurableWriterState.FAILED
+            mutableState = DurableWriterState.FAILED
             throw storageFailure("abort", error)
         }
     }
@@ -170,11 +185,23 @@ class DefaultDurableSessionWriter(
         storage.replaceCheckpoint(currentAttempt, encodeCheckpoint(checkpoint))
     }
 
+    private fun flushTelemetry(currentAttempt: StagingAttempt, nowNs: Long) {
+        if (telemetryCount == durableTelemetryCount) return
+        storage.flushArtifact(currentAttempt, DurableArtifact.TELEMETRY)
+        storage.fsyncArtifact(currentAttempt, DurableArtifact.TELEMETRY)
+        durableTelemetryCount = telemetryCount
+        lastDurableTelemetrySequence = telemetryCount - 1
+        lastTelemetryDurableAtNs = maxOf(lastTelemetryDurableAtNs, nowNs)
+        storage.replaceCheckpoint(currentAttempt, encodeCheckpoint(checkpoint(currentCounts())))
+    }
+
     private fun checkpoint(counts: Counts) = DurableCheckpoint(
         lastDurableRecordIndex = lastDurableRecordIndex,
         counts = counts,
         posePresentCount = posePresentCount,
         digestState = digestState,
+        lastDurableTelemetrySequence = lastDurableTelemetrySequence,
+        durableTelemetryCount = durableTelemetryCount,
     )
 
     private fun currentCounts() = Counts(
@@ -198,6 +225,12 @@ class DefaultDurableSessionWriter(
         append(value.digestState.byteLength)
         append('|')
         append(value.digestState.digestHex)
+        if (value.durableTelemetryCount > 0) {
+            append('|')
+            append(value.lastDurableTelemetrySequence)
+            append('|')
+            append(value.durableTelemetryCount)
+        }
         append('\n')
     }
 
@@ -207,13 +240,16 @@ class DefaultDurableSessionWriter(
     }
 
     private fun requireState(vararg allowed: DurableWriterState) {
-        if (state !in allowed) throw DurableWriterStateException("writer is $state; expected ${allowed.joinToString()}")
+        if (mutableState !in allowed) throw DurableWriterStateException("writer is $mutableState; expected ${allowed.joinToString()}")
     }
 
     private fun storageFailure(operation: String, cause: Throwable) = DurableStorageException(operation, cause)
 
+    private fun <T> serialized(block: () -> T): T = runBlocking { writerMutex.withLock { block() } }
+
     private companion object {
         const val POSE_FLUSH_THRESHOLD = 150L
+        const val TELEMETRY_FLUSH_THRESHOLD = 150L
         const val CLOCK_FLUSH_NS = 5_000_000_000L
         const val MAX_REASON_LENGTH = 256
     }
