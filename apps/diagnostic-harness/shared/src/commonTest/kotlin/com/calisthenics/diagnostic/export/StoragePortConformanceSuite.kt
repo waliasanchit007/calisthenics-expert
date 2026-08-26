@@ -242,7 +242,7 @@ abstract class StoragePortConformanceSuite {
     private data class SnapshotFixture(val sealed: SealedSessionSnapshot, val records: List<RawPoseFrame>)
 
     private fun export(storage: StoragePort, fixture: SnapshotFixture): FinalizationResult =
-        SessionExporter(storage, manifest()).let { exporter ->
+        SessionExporter(storage, manifest(), monotonicNowNs = { 0L }).let { exporter ->
             try {
                 fixture.records.forEach(exporter::appendPose)
                 exporter.finalize(fixture.sealed)

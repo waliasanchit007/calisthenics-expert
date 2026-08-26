@@ -45,7 +45,7 @@ class SessionExporterTest {
     @Test
     fun typedTelemetryIsAppendedToTheDurableTelemetryStreamImmediately() {
         val storage = FakeStorage()
-        val exporter = SessionExporter(storage, manifest())
+        val exporter = SessionExporter(storage, manifest(), monotonicNowNs = { 0L })
 
         (exporter as TelemetrySink).append(
             PipelineStageEvent(0L, 5L, 3L, PipelineStage.CAMERA_CALLBACK, PipelineDisposition.RECEIVED),
@@ -59,11 +59,40 @@ class SessionExporterTest {
     }
 
     @Test
+    fun exporterPassesItsSessionClockToTheDefaultTelemetryWriter() {
+        var nowNs = 0L
+        val storage = FakeStorage()
+        val exporter = SessionExporter(
+            storage = storage,
+            manifestTemplate = manifest(),
+            monotonicNowNs = { nowNs },
+        )
+
+        exporter.append(
+            PipelineStageEvent(0L, 0L, 0L, PipelineStage.CAMERA_CALLBACK, PipelineDisposition.RECEIVED),
+        )
+        nowNs = 5_000_000_000L
+        exporter.append(
+            PipelineStageEvent(1L, nowNs, 1L, PipelineStage.CAMERA_CALLBACK, PipelineDisposition.RECEIVED),
+        )
+
+        val attempt = storage.attempts.single()
+        assertTrue(attempt.fsyncedArtifacts.contains(DurableArtifact.TELEMETRY))
+        assertTrue(attempt.checkpoint!!.contains("|1|2\n"))
+        assertEquals(
+            2,
+            attempt.durableArtifactBytes.getValue(DurableArtifact.TELEMETRY)
+                .decodeToString().lineSequence().count { it.isNotEmpty() },
+        )
+    }
+
+    @Test
     fun compositionAbortRemainsOpenForTerminalTelemetryUntilFenceCompletes() {
         val storage = FakeStorage()
         val exporter = SessionExporter(
             storage = storage,
             manifestTemplate = manifest(),
+            monotonicNowNs = { 0L },
             deferAbortUntilFence = true,
         )
         val sealed = snapshot(emptyList())
@@ -83,7 +112,7 @@ class SessionExporterTest {
     @Test
     fun telemetrySinkAssignsOneContiguousSequenceAcrossIndependentProducers() {
         val storage = FakeStorage()
-        val exporter = SessionExporter(storage, manifest())
+        val exporter = SessionExporter(storage, manifest(), monotonicNowNs = { 0L })
 
         exporter.append(
             PipelineStageEvent(0L, 5L, 0L, PipelineStage.CAMERA_CALLBACK, PipelineDisposition.RECEIVED),
@@ -113,9 +142,9 @@ class SessionExporterTest {
     }
 
     @Test
-    fun sustainedStageCountersShareTheDurableTelemetrySequenceAndMonotonicClock() {
+    fun sustainedStageCountersJoinTheirCorrespondingGloballyRenumberedFixedSamples() {
         val storage = FakeStorage()
-        val exporter = SessionExporter(storage, manifest())
+        val exporter = SessionExporter(storage, manifest(), monotonicNowNs = { 0L })
 
         exporter.append(
             FixedTelemetrySample(
@@ -140,12 +169,38 @@ class SessionExporterTest {
                 counts = listOf(PipelineStageCount(PipelineStage.CADENCE, PipelineDisposition.CADENCE_SELECTION, 1L)),
             ),
         )
+        exporter.append(
+            FixedTelemetrySample(
+                sequence = 1L,
+                tSessionNs = 8L,
+                thermal = TelemetryValue.Unavailable("thermal_api_unavailable"),
+                batteryTemperature = TelemetryValue.Unavailable("battery_temperature_unavailable"),
+                batteryLevelOrCharge = TelemetryValue.Unavailable("battery_level_unavailable"),
+                charging = TelemetryValue.Unavailable("charging_state_unavailable"),
+                powerSource = TelemetryValue.Unavailable("power_source_unavailable"),
+                connectivity = TelemetryValue.Unavailable("connectivity_api_unavailable"),
+                keepAwake = TelemetryValue.Unavailable("keep_awake_unavailable"),
+                brightness = TelemetryValue.Unavailable("brightness_unavailable"),
+                lifecycle = TelemetryValue.Unavailable("lifecycle_unavailable"),
+            ),
+        )
+        exporter.append(
+            SustainedStageCounterSample(
+                sequence = 1L,
+                tSessionNs = 7L,
+                fixedTelemetrySequence = 1L,
+                counts = listOf(PipelineStageCount(PipelineStage.CADENCE, PipelineDisposition.CADENCE_SELECTION, 2L)),
+            ),
+        )
 
         val lines = storage.attempts.single().artifactBytes.getValue(DurableArtifact.TELEMETRY)
             .decodeToString().lineSequence().filter { it.isNotEmpty() }.toList()
         assertTrue(lines[1].contains("\"record_type\":\"sustained_stage_counter\""))
         assertTrue(lines[1].contains("\"sequence\":1"))
         assertTrue(lines[1].contains("\"t_session_ns\":5"))
+        assertTrue(lines[1].contains("\"fixed_telemetry_sequence\":0"))
+        assertTrue(lines[3].contains("\"sequence\":3"))
+        assertTrue(lines[3].contains("\"fixed_telemetry_sequence\":2"))
     }
 
     @Test
@@ -158,6 +213,7 @@ class SessionExporterTest {
         val exporter = SessionExporter(
             storage,
             template,
+            monotonicNowNs = { 0L },
             manifestAtFinalization = { current, sealedSnapshot ->
                 assertTrue(storage.operations.contains("reconcileArtifact:POSE_STREAM"))
                 assertEquals(1L, sealedSnapshot.counts.inferenceRecordsEmitted)
@@ -205,7 +261,7 @@ class SessionExporterTest {
     @Test
     fun repeatedFinalizeJoinsFirstResultAndPublishesOnlyOnce() {
         val storage = FaultInjectingStoragePort(FakeStorage())
-        val exporter = SessionExporter(storage, manifest())
+        val exporter = SessionExporter(storage, manifest(), monotonicNowNs = { 0L })
         val records = listOf(frame(posePresent = true))
         val sealed = snapshot(records)
         records.forEach(exporter::appendPose)
@@ -233,7 +289,7 @@ class SessionExporterTest {
         storage: StoragePort,
         sealed: SealedSessionSnapshot,
         records: List<RawPoseFrame> = emptyList(),
-    ): FinalizationResult = SessionExporter(storage, manifest()).let { exporter ->
+    ): FinalizationResult = SessionExporter(storage, manifest(), monotonicNowNs = { 0L }).let { exporter ->
         records.forEach(exporter::appendPose)
         exporter.finalize(sealed)
     }

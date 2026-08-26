@@ -25,10 +25,12 @@ fun interface DeferredSessionAbort {
 class SessionExporter(
     private val storage: StoragePort,
     private val manifestTemplate: SessionManifest,
+    private val monotonicNowNs: () -> Long,
     private val manifestAtFinalization: (SessionManifest, SealedSessionSnapshot) -> SessionManifest = { manifest, _ -> manifest },
     private val writer: DurableSessionWriter = DefaultDurableSessionWriter(
         storage = storage,
         sessionId = manifestTemplate.sessionId,
+        monotonicNowNs = monotonicNowNs,
     ),
     private val deferAbortUntilFence: Boolean = false,
 ) : SessionFinalizer, SessionAborter, EmittedRecordSink, TelemetrySink, DeferredSessionAbort {
@@ -36,6 +38,7 @@ class SessionExporter(
     private var pendingAbort: Pair<SealedSessionSnapshot, String>? = null
     private var nextTelemetrySequence = 0L
     private var lastTelemetryTimeNs = 0L
+    private var lastFixedTelemetrySequence: Long? = null
     private val telemetryMutex = Mutex()
 
     init {
@@ -65,9 +68,15 @@ class SessionExporter(
             is SustainedStageCounterSample -> record.copy(
                 sequence = nextTelemetrySequence,
                 tSessionNs = orderedTimeNs,
+                fixedTelemetrySequence = requireNotNull(lastFixedTelemetrySequence) {
+                    "sustained stage counters require a fixed telemetry sample"
+                },
             )
         }
         writer.appendTelemetry(orderedRecord.encodeNdjson())
+        if (orderedRecord is FixedTelemetrySample) {
+            lastFixedTelemetrySequence = orderedRecord.sequence
+        }
         nextTelemetrySequence += 1L
         lastTelemetryTimeNs = orderedTimeNs
     }

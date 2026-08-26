@@ -231,6 +231,7 @@ fun interface LiveSessionFinalizerFactory {
     fun create(
         manifestTemplate: SessionManifest,
         manifestAtFinalization: (SessionManifest, com.calisthenics.diagnostic.session.SealedSessionSnapshot) -> SessionManifest,
+        monotonicNowNs: () -> Long,
     ): SessionFinalizer
 }
 
@@ -439,9 +440,13 @@ class LiveCameraComposition internal constructor(
                 manifest = template
                 val runnerDispatcher = dependencies.sessionDispatcherFactory()
                 sessionDispatcher = runnerDispatcher
-                val createdFinalizer = dependencies.sessionFinalizerFactory.create(template) { finalized, sealed ->
-                    manifestAtFinalization(finalized, sealed, operatorAttestedNoPerson)
-                }
+                val createdFinalizer = dependencies.sessionFinalizerFactory.create(
+                    manifestTemplate = template,
+                    manifestAtFinalization = { finalized, sealed ->
+                        manifestAtFinalization(finalized, sealed, operatorAttestedNoPerson)
+                    },
+                    monotonicNowNs = ::relativeNowNs,
+                )
                 check(createdFinalizer is TelemetrySink) {
                     "live session finalizer must expose the narrow telemetry sink"
                 }
@@ -1490,10 +1495,11 @@ class LiveCameraComposition internal constructor(
                     telemetryProbeFactory = {
                         AndroidFixedTelemetryProbe(context, lifecycleOwner)
                     },
-                    sessionFinalizerFactory = LiveSessionFinalizerFactory { template, atFinalization ->
+                    sessionFinalizerFactory = LiveSessionFinalizerFactory { template, atFinalization, monotonicNowNs ->
                         SessionExporter(
                             storage = AndroidStoragePort(roots),
                             manifestTemplate = template,
+                            monotonicNowNs = monotonicNowNs,
                             manifestAtFinalization = atFinalization,
                             deferAbortUntilFence = true,
                         )

@@ -159,6 +159,7 @@ class RealReplayComposition(
                     startedAt,
                     fixtureMetadataBytes,
                 ),
+                monotonicNowNs = clock::nowNs,
                 manifestAtFinalization = { manifest, _ ->
                     manifest.copy(clock = manifest.clock.copy(endedAtUtc = Instant.now().toString()))
                 },

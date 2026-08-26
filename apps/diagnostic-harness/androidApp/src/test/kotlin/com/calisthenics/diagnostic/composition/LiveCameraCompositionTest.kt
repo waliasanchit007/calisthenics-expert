@@ -701,6 +701,23 @@ class LiveCameraCompositionTest {
     }
 
     @Test
+    fun sessionFinalizerReceivesSessionRelativeMonotonicClockForDurability() {
+        var elapsedRealtimeNs = 9_000_000_000L
+        val harness = Harness(
+            clockOverride = LiveCameraComposition.AndroidLiveClock { elapsedRealtimeNs },
+        )
+        try {
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+
+            assertEquals(0L, assertNotNull(harness.durableWriterClock).invoke())
+            elapsedRealtimeNs += 5_000_000_000L
+            assertEquals(5_000_000_000L, assertNotNull(harness.durableWriterClock).invoke())
+        } finally {
+            harness.composition.abandon()
+        }
+    }
+
+    @Test
     fun manifestSeparatesCameraTimestampSourceFromSessionTimeBase() {
         withHarness(Harness()) { harness ->
             assertIs<LiveCameraStartResult.Started>(harness.start(10))
@@ -1249,6 +1266,7 @@ class LiveCameraCompositionTest {
         var inferenceCreations = 0
         var finalizerCreated = false
         var finalizerCalls = 0
+        var durableWriterClock: (() -> Long)? = null
         var manifestCallbackInvoked = false
         val manifestCallbackInvokedLatch = CountDownLatch(1)
         var emittedRecord: RawPoseFrame? = null
@@ -1287,11 +1305,12 @@ class LiveCameraCompositionTest {
                 },
                 telemetrySchedulerFactory = { telemetryScheduler },
                 encoderFinalizationSlot = { events += "encoder.finalize" },
-                sessionFinalizerFactory = { template, manifestAtFinalization ->
+                sessionFinalizerFactory = { template, manifestAtFinalization, monotonicNowNs ->
                     finalizerFailure?.let { throw it }
                     finalizerCreated = true
                     events += "writer.open"
                     manifest = template
+                    durableWriterClock = monotonicNowNs
                     object : SessionFinalizer,
                         com.calisthenics.diagnostic.session.EmittedRecordSink,
                         TelemetrySink {

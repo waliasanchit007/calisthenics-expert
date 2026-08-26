@@ -48,7 +48,7 @@ class DeterministicCore(
             inference = inference,
             deadlineScheduler = scheduler,
             drainTimeoutNs = 1_000_000L,
-            finalizer = SessionExporter(storage, manifestTemplate),
+            finalizer = SessionExporter(storage, manifestTemplate, monotonicNowNs = { 0L }),
             dispatcher = dispatcher,
         )
 
