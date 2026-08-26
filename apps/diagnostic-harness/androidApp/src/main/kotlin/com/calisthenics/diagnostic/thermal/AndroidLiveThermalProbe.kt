@@ -27,11 +27,16 @@ class AndroidLiveThermalProbe(
             relativeNowNs = nowNs
             // Kotlin exposes PowerManager.getCurrentThermalStatus() as currentThermalStatus.
             recordLocked(manager.currentThermalStatus)
-            val registeredListener = PowerManager.OnThermalStatusChangedListener { status ->
-                synchronized(monitor) { recordLocked(status) }
+            var registeredListener: PowerManager.OnThermalStatusChangedListener? = null
+            registeredListener = PowerManager.OnThermalStatusChangedListener { status ->
+                synchronized(monitor) {
+                    // Android may deliver an already-enqueued callback after listener removal.
+                    // It is no longer a session observation and must not dereference a cleared clock.
+                    if (listener === registeredListener) recordLocked(status)
+                }
             }
-            listener = registeredListener
-            manager.addThermalStatusListener(registeredListener)
+            listener = checkNotNull(registeredListener)
+            manager.addThermalStatusListener(checkNotNull(registeredListener))
         }
     }
 
