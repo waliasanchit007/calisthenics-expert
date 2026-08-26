@@ -20,10 +20,12 @@ import com.calisthenics.diagnostic.contract.decodeManifest
 import com.calisthenics.diagnostic.session.FinalizationResult
 import com.calisthenics.diagnostic.session.BoundedSessionState
 import com.calisthenics.diagnostic.session.SealedSessionSnapshot
+import com.calisthenics.diagnostic.telemetry.FixedTelemetrySample
 import com.calisthenics.diagnostic.telemetry.PipelineDisposition
 import com.calisthenics.diagnostic.telemetry.PipelineStage
 import com.calisthenics.diagnostic.telemetry.PipelineStageEvent
 import com.calisthenics.diagnostic.telemetry.TelemetrySink
+import com.calisthenics.diagnostic.telemetry.TelemetryValue
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -52,6 +54,60 @@ class SessionExporterTest {
             "{\"record_type\":\"pipeline_stage_event\",\"schema_version\":\"1.0.0\",\"sequence\":0,\"t_session_ns\":5,\"frame_index\":3,\"stage\":\"CAMERA_CALLBACK\",\"disposition\":\"RECEIVED\"}\n",
             bytes.decodeToString(),
         )
+    }
+
+    @Test
+    fun compositionAbortRemainsOpenForTerminalTelemetryUntilFenceCompletes() {
+        val storage = FakeStorage()
+        val exporter = SessionExporter(
+            storage = storage,
+            manifestTemplate = manifest(),
+            deferAbortUntilFence = true,
+        )
+        val sealed = snapshot(emptyList())
+
+        exporter.abort(sealed, "session_failed")
+        assertEquals(null, storage.attempts.single().abortMarker)
+        exporter.append(
+            PipelineStageEvent(0L, 5L, 0L, PipelineStage.INFERENCE, PipelineDisposition.FAILED),
+        )
+
+        exporter.completePendingAbort()
+
+        assertEquals("session_failed", storage.attempts.single().abortMarker?.reason)
+        assertTrue(storage.attempts.single().artifactBytes.getValue(DurableArtifact.TELEMETRY).isNotEmpty())
+    }
+
+    @Test
+    fun telemetrySinkAssignsOneContiguousSequenceAcrossIndependentProducers() {
+        val storage = FakeStorage()
+        val exporter = SessionExporter(storage, manifest())
+
+        exporter.append(
+            PipelineStageEvent(0L, 5L, 0L, PipelineStage.CAMERA_CALLBACK, PipelineDisposition.RECEIVED),
+        )
+        exporter.append(
+            FixedTelemetrySample(
+                sequence = 0L,
+                tSessionNs = 4L,
+                thermal = TelemetryValue.Unavailable("thermal_api_unavailable"),
+                batteryTemperature = TelemetryValue.Unavailable("battery_temperature_unavailable"),
+                batteryLevelOrCharge = TelemetryValue.Unavailable("battery_level_unavailable"),
+                charging = TelemetryValue.Unavailable("charging_state_unavailable"),
+                powerSource = TelemetryValue.Unavailable("power_source_unavailable"),
+                connectivity = TelemetryValue.Unavailable("connectivity_api_unavailable"),
+                keepAwake = TelemetryValue.Unavailable("keep_awake_unavailable"),
+                brightness = TelemetryValue.Unavailable("brightness_unavailable"),
+                lifecycle = TelemetryValue.Unavailable("lifecycle_unavailable"),
+            ),
+        )
+
+        val lines = storage.attempts.single().artifactBytes.getValue(DurableArtifact.TELEMETRY)
+            .decodeToString().lineSequence().filter { it.isNotEmpty() }.toList()
+        assertTrue(lines[0].contains("\"sequence\":0"))
+        assertTrue(lines[0].contains("\"t_session_ns\":5"))
+        assertTrue(lines[1].contains("\"sequence\":1"))
+        assertTrue(lines[1].contains("\"t_session_ns\":5"))
     }
 
     @Test

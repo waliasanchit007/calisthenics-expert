@@ -43,6 +43,7 @@ class CameraXFrameSource(
     fun start(
         onSourceStarted: (NegotiatedAnalysisResolution) -> Unit,
         onFrame: (OwnedYuvFrame) -> Unit,
+        onFrameRejected: (timestampNs: Long?) -> Unit,
         onFailure: (Throwable) -> Unit,
     ) {
         val generation = sourceLifecycle.begin()
@@ -88,7 +89,9 @@ class CameraXFrameSource(
                                 return@setAnalyzer
                             }
                             try {
-                                handleImage(image, onFrame, onFailure)
+                                handleImage(image, onFrame, onFrameRejected)
+                            } catch (failure: Throwable) {
+                                onFailure(failure)
                             } finally {
                                 analyzerCallbacks.leave()
                             }
@@ -115,7 +118,11 @@ class CameraXFrameSource(
     }
 
     @OptIn(ExperimentalGetImage::class)
-    private fun handleImage(image: ImageProxy, onFrame: (OwnedYuvFrame) -> Unit, onFailure: (Throwable) -> Unit) {
+    private fun handleImage(
+        image: ImageProxy,
+        onFrame: (OwnedYuvFrame) -> Unit,
+        onFrameRejected: (timestampNs: Long?) -> Unit,
+    ) {
         var underlying: Image? = null
         handleImageWithOwnership(
             proxy = object : ImageProxyOwnership {
@@ -133,7 +140,7 @@ class CameraXFrameSource(
             },
             construct = { CameraXOwnedImage(image, checkNotNull(underlying)) },
             onFrame = onFrame,
-            onFailure = onFailure,
+            onFailure = { onFrameRejected(image.imageInfo.timestamp) },
         )
     }
 
@@ -233,8 +240,12 @@ internal fun handleImageWithOwnership(
         transferred = true
         captureOwnedYuvFrame(owned, onFrame)
     } catch (failure: Throwable) {
-        if (!transferred) proxy.close()
-        onFailure(failure)
+        if (!transferred) {
+            proxy.close()
+            onFailure(failure)
+        } else {
+            throw failure
+        }
     }
 }
 

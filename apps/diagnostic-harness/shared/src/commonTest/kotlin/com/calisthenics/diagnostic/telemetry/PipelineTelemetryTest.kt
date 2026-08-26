@@ -20,6 +20,21 @@ class PipelineTelemetryTest {
     }
 
     @Test
+    fun deliveredCallbackLedgerRejectsMissingClosureWhileAllowingOneInferenceAndOneAnalyzerCallback() {
+        val ledger = DeliveredCallbackLedger()
+        ledger.begin(0L)
+        ledger.begin(1L)
+        ledger.close(1L, CallbackTerminalDisposition.CADENCE_SELECTION)
+
+        assertFailsWith<IllegalStateException> { ledger.assertClosed(cameraFramesReceived = 2L) }
+
+        ledger.close(0L, CallbackTerminalDisposition.INFERENCE_COMPLETED)
+        ledger.assertClosed(cameraFramesReceived = 2L)
+        assertEquals(2L, ledger.deliveredCallbacks)
+        assertEquals(0L, ledger.unclosedCallbacks)
+    }
+
+    @Test
     fun stageRecorderStreamsContiguousEventsAndDerivesCountsFromThem() {
         val sink = RecordingTelemetrySink()
         val recorder = PipelineStageRecorder(nowNs = { 41L }, sink = sink)

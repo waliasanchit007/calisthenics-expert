@@ -56,10 +56,16 @@ enum class CallbackTerminalDisposition {
     ENCODER_WRITTEN,
 }
 
+data class DeliveredCallbackAccounting(
+    val deliveredCallbacks: Long,
+    val unclosedCallbacks: Long,
+    val counts: Map<CallbackTerminalDisposition, Long>,
+)
+
 /** Bounded accounting only; it intentionally never retains callback IDs after they close. */
 class DeliveredCallbackLedger {
     private val mutableCounts = mutableMapOf<CallbackTerminalDisposition, Long>()
-    private var openFrameIndex: Long? = null
+    private val openFrameIndices = mutableSetOf<Long>()
     var deliveredCallbacks: Long = 0L
         private set
 
@@ -67,21 +73,37 @@ class DeliveredCallbackLedger {
         get() = mutableCounts.toMap()
 
     val unclosedCallbacks: Long
-        get() = if (openFrameIndex == null) 0L else 1L
+        get() = openFrameIndices.size.toLong()
 
     fun begin(frameIndex: Long) {
         require(frameIndex >= 0L) { "frame index must be non-negative" }
-        check(openFrameIndex == null) { "a delivered callback is already open" }
-        openFrameIndex = frameIndex
+        check(frameIndex == deliveredCallbacks) { "frame index must be contiguous and monotonic" }
+        check(openFrameIndices.add(frameIndex)) { "delivered callback is already open" }
         deliveredCallbacks += 1L
     }
 
     fun close(frameIndex: Long, disposition: CallbackTerminalDisposition) {
         require(frameIndex >= 0L) { "frame index must be non-negative" }
-        check(openFrameIndex == frameIndex) { "callback has no open terminal disposition slot" }
-        openFrameIndex = null
+        check(openFrameIndices.remove(frameIndex)) { "callback has no open terminal disposition slot" }
         mutableCounts[disposition] = (mutableCounts[disposition] ?: 0L) + 1L
     }
+
+    fun assertClosed(cameraFramesReceived: Long) {
+        require(cameraFramesReceived >= 0L) { "camera frame count must be non-negative" }
+        check(openFrameIndices.isEmpty()) { "delivered callbacks remain unclosed" }
+        check(mutableCounts.values.sum() == deliveredCallbacks) {
+            "each delivered callback must have exactly one terminal outcome"
+        }
+        check(deliveredCallbacks == cameraFramesReceived) {
+            "delivered callbacks must equal camera frames received"
+        }
+    }
+
+    fun snapshot() = DeliveredCallbackAccounting(
+        deliveredCallbacks = deliveredCallbacks,
+        unclosedCallbacks = unclosedCallbacks,
+        counts = counts,
+    )
 }
 
 data class PipelineStageEvent(
@@ -241,6 +263,7 @@ class FixedTelemetrySampler(
     private val sink: TelemetrySink,
 ) {
     private var schedule: FixedTelemetrySchedule? = null
+    @Volatile
     private var stopped = false
     private var nextSequence = 0L
     private var lastSampleNs = 0L

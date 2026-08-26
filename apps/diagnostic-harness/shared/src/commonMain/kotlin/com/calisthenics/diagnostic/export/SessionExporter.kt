@@ -7,8 +7,15 @@ import com.calisthenics.diagnostic.session.FinalizationResult
 import com.calisthenics.diagnostic.session.SealedSessionSnapshot
 import com.calisthenics.diagnostic.session.SessionAborter
 import com.calisthenics.diagnostic.session.SessionFinalizer
+import com.calisthenics.diagnostic.telemetry.FixedTelemetrySample
+import com.calisthenics.diagnostic.telemetry.PipelineStageEvent
 import com.calisthenics.diagnostic.telemetry.TelemetryRecord
 import com.calisthenics.diagnostic.telemetry.TelemetrySink
+
+/** Composition-owned aborts call this only after callback and telemetry producers are fenced. */
+fun interface DeferredSessionAbort {
+    fun completePendingAbort()
+}
 
 /** Publishes one sealed session using the fixed crash-consistent commit sequence. */
 class SessionExporter(
@@ -19,8 +26,12 @@ class SessionExporter(
         storage = storage,
         sessionId = manifestTemplate.sessionId,
     ),
-) : SessionFinalizer, SessionAborter, EmittedRecordSink, TelemetrySink {
+    private val deferAbortUntilFence: Boolean = false,
+) : SessionFinalizer, SessionAborter, EmittedRecordSink, TelemetrySink, DeferredSessionAbort {
     private var finalizationResult: FinalizationResult? = null
+    private var pendingAbort: Pair<SealedSessionSnapshot, String>? = null
+    private var nextTelemetrySequence = 0L
+    private var lastTelemetryTimeNs = 0L
 
     init {
         writer.open()
@@ -30,11 +41,45 @@ class SessionExporter(
         writer.appendPose(record)
     }
 
+    @Synchronized
     override fun append(record: TelemetryRecord) {
-        writer.appendTelemetry(record.encodeNdjson())
+        val recordTimeNs = when (record) {
+            is FixedTelemetrySample -> record.tSessionNs
+            is PipelineStageEvent -> record.tSessionNs
+        }
+        val orderedTimeNs = maxOf(lastTelemetryTimeNs, recordTimeNs)
+        val orderedRecord = when (record) {
+            is FixedTelemetrySample -> record.copy(
+                sequence = nextTelemetrySequence,
+                tSessionNs = orderedTimeNs,
+            )
+            is PipelineStageEvent -> record.copy(
+                sequence = nextTelemetrySequence,
+                tSessionNs = orderedTimeNs,
+            )
+        }
+        writer.appendTelemetry(orderedRecord.encodeNdjson())
+        nextTelemetrySequence += 1L
+        lastTelemetryTimeNs = orderedTimeNs
     }
 
+    @Synchronized
     override fun abort(snapshot: SealedSessionSnapshot, reason: String) {
+        if (deferAbortUntilFence) {
+            if (pendingAbort == null) pendingAbort = snapshot to reason
+            return
+        }
+        abortNow(snapshot, reason)
+    }
+
+    @Synchronized
+    override fun completePendingAbort() {
+        val pending = pendingAbort ?: return
+        pendingAbort = null
+        abortNow(pending.first, pending.second)
+    }
+
+    private fun abortNow(snapshot: SealedSessionSnapshot, reason: String) {
         if (writer.state == DurableWriterState.OPEN || writer.state == DurableWriterState.SEALING ||
             writer.state == DurableWriterState.FAILED
         ) {

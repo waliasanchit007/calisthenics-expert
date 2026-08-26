@@ -17,6 +17,17 @@ import com.calisthenics.diagnostic.session.InferenceResult
 import com.calisthenics.diagnostic.session.SessionFinalizer
 import com.calisthenics.diagnostic.session.SessionRunnerSnapshot
 import com.calisthenics.diagnostic.session.TerminalState
+import com.calisthenics.diagnostic.telemetry.CallbackTerminalDisposition
+import com.calisthenics.diagnostic.telemetry.FixedTelemetryReadings
+import com.calisthenics.diagnostic.telemetry.FixedTelemetrySample
+import com.calisthenics.diagnostic.telemetry.FixedTelemetrySchedule
+import com.calisthenics.diagnostic.telemetry.FixedTelemetryScheduler
+import com.calisthenics.diagnostic.telemetry.PipelineDisposition
+import com.calisthenics.diagnostic.telemetry.PipelineStage
+import com.calisthenics.diagnostic.telemetry.PipelineStageEvent
+import com.calisthenics.diagnostic.telemetry.TelemetryRecord
+import com.calisthenics.diagnostic.telemetry.TelemetrySink
+import com.calisthenics.diagnostic.telemetry.TelemetryValue
 import com.calisthenics.diagnostic.ui.LiveRunPhase
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.boolean
@@ -422,6 +433,177 @@ class LiveCameraCompositionTest {
     }
 
     @Test
+    fun callbackBeforeRunnerOrAdmissionIsReadyClosesAsSourceNotReady() {
+        val harness = Harness()
+
+        harness.composition.handleFrame(frame(timestampNs = 1_000_002_000L))
+
+        val accounting = harness.composition.callbackAccounting()
+        assertEquals(1L, accounting.deliveredCallbacks)
+        assertEquals(0L, accounting.unclosedCallbacks)
+        assertEquals(1L, accounting.counts.getValue(CallbackTerminalDisposition.SOURCE_NOT_READY))
+    }
+
+    @Test
+    fun negativeAndNonMonotonicCaptureRebasesCloseAsClockFaultNotPreprocessing() {
+        withHarness(Harness(clockNowNs = 1_000_010_000L)) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+
+            harness.source.emit(frame(timestampNs = 1_000_009_000L))
+            harness.source.emit(frame(timestampNs = 1_000_012_000L))
+            harness.inference.completeSuccess()
+            harness.source.emit(frame(timestampNs = 1_000_011_000L))
+
+            val accounting = harness.composition.callbackAccounting()
+            assertEquals(2L, accounting.counts.getValue(CallbackTerminalDisposition.CLOCK_FAULT))
+            assertEquals(0L, accounting.counts[CallbackTerminalDisposition.PREPROCESSING_FAILED] ?: 0L)
+        }
+    }
+
+    @Test
+    fun negotiatedGeometryLossAndChangeCloseAsSourceLossNotPreprocessing() {
+        withHarness(Harness()) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            harness.source.emit(frame(timestampNs = 1_000_002_000L, rotation = FrameRotation.R90))
+            harness.inference.completeSuccess()
+            harness.source.emit(frame(timestampNs = 1_100_002_000L, rotation = FrameRotation.R0))
+            harness.source.rejectDeliveredFrame()
+
+            val accounting = harness.composition.callbackAccounting()
+            assertEquals(2L, accounting.counts.getValue(CallbackTerminalDisposition.SOURCE_LOSS))
+            assertEquals(0L, accounting.counts[CallbackTerminalDisposition.PREPROCESSING_FAILED] ?: 0L)
+        }
+    }
+
+    @Test
+    fun canonicalizationFailureClosesAsPreprocessingFailed() {
+        withHarness(Harness()) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+
+            harness.source.emit(malformedFrame(timestampNs = 1_000_002_000L))
+
+            assertEquals(
+                1L,
+                harness.composition.callbackAccounting().counts
+                    .getValue(CallbackTerminalDisposition.PREPROCESSING_FAILED),
+            )
+            assertEquals(
+                1,
+                harness.telemetryRecords.filterIsInstance<PipelineStageEvent>().count { event ->
+                    event.stage == PipelineStage.PREPROCESSING && event.disposition == PipelineDisposition.FAILED
+                },
+            )
+        }
+    }
+
+    @Test
+    fun cadenceBackpressureAndStoppingKeepDistinctTerminalOutcomes() {
+        withHarness(Harness()) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            harness.source.emit(frame(timestampNs = 1_000_002_000L))
+            harness.source.emit(frame(timestampNs = 1_000_003_000L))
+            harness.inference.completeSuccess()
+            harness.source.emit(frame(timestampNs = 1_010_002_000L))
+            harness.source.onStopFrame = { frame(timestampNs = 1_300_002_000L) }
+
+            harness.composition.stop()
+
+            val counts = harness.composition.callbackAccounting().counts
+            assertEquals(1L, counts.getValue(CallbackTerminalDisposition.BACKPRESSURE))
+            assertEquals(1L, counts.getValue(CallbackTerminalDisposition.CADENCE_SELECTION))
+            assertEquals(1L, counts.getValue(CallbackTerminalDisposition.SESSION_STOPPING))
+        }
+    }
+
+    @Test
+    fun inferenceSuccessClosesItsOriginatingCallbackAsCompleted() {
+        withHarness(Harness()) { successful ->
+            assertIs<LiveCameraStartResult.Started>(successful.start(10))
+            successful.source.emit(frame(timestampNs = 1_000_002_000L))
+            successful.inference.completeSuccess()
+            assertEquals(
+                1L,
+                successful.composition.callbackAccounting().counts
+                    .getValue(CallbackTerminalDisposition.INFERENCE_COMPLETED),
+            )
+        }
+    }
+
+    @Test
+    fun inferenceFailureFencesCallbacksBeforeClosingItsOriginatingCallbackAsFailed() {
+        val failed = Harness()
+        try {
+            assertIs<LiveCameraStartResult.Started>(failed.start(10))
+            failed.source.emit(frame(timestampNs = 1_000_002_000L))
+            failed.source.onStopFrame = { frame(timestampNs = 1_000_003_000L) }
+            failed.inference.completeFailure()
+            val failedSnapshot = assertNotNull(failed.composition.snapshot())
+            assertEquals(
+                1L,
+                failed.composition.callbackAccounting().counts
+                    .getValue(CallbackTerminalDisposition.INFERENCE_FAILED),
+            )
+            assertEquals(2L, failedSnapshot.counts.cameraFramesReceived)
+            assertEquals(2L, failed.composition.callbackAccounting().deliveredCallbacks)
+            assertTrue(failed.events.indexOf("source.stop") < failed.events.indexOf("encoder.finalize"))
+            assertTrue(failed.events.indexOf("encoder.finalize") < failed.events.indexOf("telemetry.cancel"))
+            assertTrue(failed.events.indexOf("telemetry.join") < failed.events.indexOf("telemetry.terminal"))
+        } finally {
+            failed.composition.abandon()
+        }
+    }
+
+    @Test
+    fun finalizationFencesCallbacksInferenceEncoderAndTelemetryBeforeSeal() {
+        withHarness(Harness()) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            harness.source.emit(frame(timestampNs = 1_000_002_000L))
+            harness.inference.completeSuccess()
+
+            harness.composition.stop()
+
+            val recordsAtSeal = harness.telemetryRecords.size
+            harness.telemetryScheduler.runScheduled()
+            assertEquals(recordsAtSeal, harness.telemetryRecords.size)
+            assertTrue(harness.events.indexOf("writer.open") < harness.events.indexOf("telemetry.sample"))
+            assertTrue(harness.events.indexOf("telemetry.sample") < harness.events.indexOf("source.start.entered"))
+
+            assertEquals(
+                listOf(
+                    "source.stop",
+                    "encoder.finalize",
+                    "telemetry.cancel",
+                    "telemetry.join",
+                    "telemetry.terminal",
+                    "finalizer.finalize",
+                ),
+                harness.events.filter { event ->
+                    event in setOf(
+                        "source.stop",
+                        "encoder.finalize",
+                        "telemetry.cancel",
+                        "telemetry.join",
+                        "telemetry.terminal",
+                        "finalizer.finalize",
+                    )
+                },
+            )
+            assertEquals(0L, harness.composition.callbackAccounting().unclosedCallbacks)
+        }
+    }
+
+    @Test
+    fun liveSamplerUsesDedicatedSchedulerInsteadOfInferenceDeadlineScheduler() {
+        withHarness(Harness()) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+
+            assertEquals(1_000_000_000L, harness.telemetryScheduler.periodNs)
+            assertTrue(harness.scheduler.scheduledDelays.isEmpty())
+            assertTrue(harness.telemetryRecords.filterIsInstance<FixedTelemetrySample>().isNotEmpty())
+        }
+    }
+
+    @Test
     fun backpressureSkipDoesNotRunTheLargeFrameConverter() {
         val largeResolution = LiveSourceResolution(4_000, 3_000)
         withHarness(Harness(sourceResolution = largeResolution)) { harness ->
@@ -589,6 +771,11 @@ class LiveCameraCompositionTest {
             val finished = assertNotNull(completion.get())
             assertNull(finished.internalFailure)
             assertEquals("session_teardown_timeout", finished.snapshot.failures.single().classification)
+            assertEquals(
+                1L,
+                harness.composition.callbackAccounting().counts
+                    .getValue(CallbackTerminalDisposition.INFERENCE_FAILED),
+            )
         } finally {
             while (harness.scheduler.hasRunnableAction) harness.scheduler.fireNext()
             stopThread.join(1_000L)
@@ -1016,6 +1203,8 @@ class LiveCameraCompositionTest {
         private val fallbackClock = FakeClock(clockNowNs)
         val clock = clockOverride ?: fallbackClock
         val scheduler = FakeScheduler(events, runNonPositiveSchedulerActions)
+        val telemetryScheduler = FakeTelemetryScheduler(events)
+        val telemetryRecords = mutableListOf<TelemetryRecord>()
         val thermal = FakeThermalProbe(thermalAvailable)
         val sessionDispatchers = mutableListOf<SingleThreadSessionDispatcher>()
         val sessionDispatcherThreads = mutableListOf<Thread>()
@@ -1063,16 +1252,36 @@ class LiveCameraCompositionTest {
                     LiveInference(inference, inference, constructionEvidence)
                 },
                 thermalProbeFactory = { thermal },
+                telemetryProbeFactory = {
+                    object : LiveTelemetryProbe {
+                        override fun sample() = unavailableTelemetryReadings()
+                    }
+                },
+                telemetrySchedulerFactory = { telemetryScheduler },
+                encoderFinalizationSlot = { events += "encoder.finalize" },
                 sessionFinalizerFactory = { template, manifestAtFinalization ->
                     finalizerFailure?.let { throw it }
                     finalizerCreated = true
+                    events += "writer.open"
                     manifest = template
-                    object : SessionFinalizer, com.calisthenics.diagnostic.session.EmittedRecordSink {
+                    object : SessionFinalizer,
+                        com.calisthenics.diagnostic.session.EmittedRecordSink,
+                        TelemetrySink {
                         override fun appendPose(record: RawPoseFrame) {
                             emittedRecord = record
                         }
 
+                        override fun append(record: TelemetryRecord) {
+                            telemetryRecords += record
+                            if (record is FixedTelemetrySample && record.terminal) {
+                                events += "telemetry.terminal"
+                            } else if (record is FixedTelemetrySample) {
+                                events += "telemetry.sample"
+                            }
+                        }
+
                         override fun finalize(snapshot: com.calisthenics.diagnostic.session.SealedSessionSnapshot): FinalizationResult {
+                            events += "finalizer.finalize"
                             finalizerCalls++
                             if (invokeManifestAtFinalization) {
                                 finalizedManifest = manifestAtFinalization(template, snapshot)
@@ -1127,6 +1336,7 @@ class LiveCameraCompositionTest {
         private val callbackOwnedByCurrentThread: ThreadLocal<Boolean> = ThreadLocal.withInitial { false }
         private val callbackReleasedForQuiescence: ThreadLocal<Boolean> = ThreadLocal.withInitial { false }
         private var callback: ((OwnedYuvFrame) -> Unit)? = null
+        private var rejectionCallback: ((Long?) -> Unit)? = null
         private var failureCallback: ((Throwable) -> Unit)? = null
         private var acceptingCallbacks = true
         private var inFlightCallbacks = 0
@@ -1145,6 +1355,7 @@ class LiveCameraCompositionTest {
         override fun start(
             onSourceStarted: (LiveSourceResolution) -> Unit,
             onFrame: (OwnedYuvFrame) -> Unit,
+            onFrameRejected: (Long?) -> Unit,
             onFailure: (Throwable) -> Unit,
         ) {
             startCount++
@@ -1154,6 +1365,7 @@ class LiveCameraCompositionTest {
             startFailure?.let { throw it }
             onSourceStarted(sourceResolution)
             callback = onFrame
+            rejectionCallback = onFrameRejected
             failureCallback = onFailure
             active = true
             events += "source.start.completed"
@@ -1188,6 +1400,10 @@ class LiveCameraCompositionTest {
 
         fun fail(error: Throwable) {
             checkNotNull(failureCallback).invoke(error)
+        }
+
+        fun rejectDeliveredFrame() {
+            checkNotNull(rejectionCallback).invoke(null)
         }
 
         fun emitInFlight(frame: OwnedYuvFrame): Thread {
@@ -1278,6 +1494,16 @@ class LiveCameraCompositionTest {
                     posePresent = normalizedImageLandmarks != null || worldLandmarks != null,
                     normalizedImageLandmarks = normalizedImageLandmarks,
                     worldLandmarks = worldLandmarks,
+                ),
+            )
+            callback = null
+        }
+
+        fun completeFailure() {
+            callback!!.invoke(
+                InferenceResult.Failure(
+                    failureSource = "backend",
+                    classification = "inference_failed",
                 ),
             )
             callback = null
@@ -1417,6 +1643,33 @@ class LiveCameraCompositionTest {
         fun awaitShutdown(): Boolean = shutdown.await(1, TimeUnit.SECONDS)
     }
 
+    private class FakeTelemetryScheduler(
+        private val events: MutableList<String>,
+    ) : FixedTelemetryScheduler {
+        var periodNs: Long? = null
+        private var action: (() -> Unit)? = null
+        private var cancelled = false
+
+        override fun scheduleAtFixedRate(periodNs: Long, action: () -> Unit): FixedTelemetrySchedule {
+            this.periodNs = periodNs
+            this.action = action
+            return object : FixedTelemetrySchedule {
+                override fun cancel() {
+                    cancelled = true
+                    events += "telemetry.cancel"
+                }
+
+                override fun join() {
+                    events += "telemetry.join"
+                }
+            }
+        }
+
+        fun runScheduled() {
+            if (!cancelled) checkNotNull(action).invoke()
+        }
+    }
+
     private companion object {
         const val FIVE_SECONDS_NS = 5_000_000_000L
         const val HOURS_SCALE_START_NS = 43_200_000_000_000L
@@ -1489,6 +1742,18 @@ class LiveCameraCompositionTest {
             colorStandard = YuvColorStandard.BT601,
             colorRange = YuvColorRange.FULL,
             timestampNs = timestampNs,
+        )
+
+        fun unavailableTelemetryReadings() = FixedTelemetryReadings(
+            thermal = TelemetryValue.Unavailable("thermal_api_unavailable"),
+            batteryTemperature = TelemetryValue.Unavailable("battery_temperature_unavailable"),
+            batteryLevelOrCharge = TelemetryValue.Unavailable("battery_level_unavailable"),
+            charging = TelemetryValue.Unavailable("charging_state_unavailable"),
+            powerSource = TelemetryValue.Unavailable("power_source_unavailable"),
+            connectivity = TelemetryValue.Unavailable("connectivity_api_unavailable"),
+            keepAwake = TelemetryValue.Unavailable("keep_awake_unavailable"),
+            brightness = TelemetryValue.Unavailable("brightness_unavailable"),
+            lifecycle = TelemetryValue.Unavailable("lifecycle_unavailable"),
         )
 
         fun largeFrame(timestampNs: Long): OwnedYuvFrame {
