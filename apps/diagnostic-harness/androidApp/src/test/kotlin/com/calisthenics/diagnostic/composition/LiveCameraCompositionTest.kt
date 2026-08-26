@@ -829,6 +829,10 @@ class LiveCameraCompositionTest {
 
             harness.source.allowStart.countDown()
             startThread.join(1_000)
+            assertTrue(
+                harness.source.stopEntered.await(1, TimeUnit.SECONDS),
+                "source.stop was not reached after external start completed",
+            )
 
             val unavailable = assertIs<LiveCameraStartResult.Unavailable>(startResult.get())
             assertEquals("live_session_closed", assertIs<LiveUnavailableReason.Initialization>(unavailable.reason).detail)
