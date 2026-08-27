@@ -358,13 +358,13 @@ git commit -m "feat: publish synchronized Android video sessions"
 - `FixedTelemetrySample(sequence, tSessionNs, thermal, batteryTemperature, batteryLevelOrCharge, charging, powerSource, connectivity, keepAwake, brightness, lifecycle)`
 - Missing APIs are typed `UNAVAILABLE(code)`; zero is never a substitute.
 
-- [ ] **Step 1: Write RED stage-count and one-second sampler tests**
-- [ ] **Step 2: Prove current code lacks full attribution and fixed sampling**
-- [ ] **Step 3: Implement one monotonic-clock event stream and fixed one-second sampler**
-- [ ] **Step 4: Fence finalization by cancel, join, terminal sample, then seal**
+- [x] **Step 1: Write RED stage-count and one-second sampler tests**
+- [x] **Step 2: Prove current code lacks full attribution and fixed sampling**
+- [x] **Step 3: Implement one monotonic-clock event stream and fixed one-second sampler**
+- [x] **Step 4: Fence finalization by cancel, join, terminal sample, then seal**
 - [ ] **Step 5: Add short 10/15/30 attribution evidence proving camera request remains 30 FPS**
-- [ ] **Step 6: Mutate each stage disposition, sample sequence, unavailable encoding, and join fence**
-- [ ] **Step 7: Run full local gates and commit `feat: record fixed M0.5B pipeline telemetry`**
+- [x] **Step 6: Mutate each stage disposition, sample sequence, unavailable encoding, and join fence**
+- [x] **Step 7: Run full local gates and commit `feat: record fixed M0.5B pipeline telemetry`**
 
 ---
 
