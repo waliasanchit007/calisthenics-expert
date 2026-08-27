@@ -3,16 +3,164 @@ package com.calisthenics.diagnostic.telemetry
 import com.calisthenics.diagnostic.composition.LiveTelemetryController
 import com.calisthenics.diagnostic.composition.LiveTelemetryProbe
 import com.calisthenics.diagnostic.composition.DedicatedTelemetryScheduler
+import com.calisthenics.diagnostic.composition.BoundedTelemetryDispatcher
+import com.calisthenics.diagnostic.composition.TelemetryDispatchException
+import com.calisthenics.diagnostic.composition.TelemetryDispatchFailureCode
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import org.junit.Test
 
 class LiveTelemetryControllerTest {
+    @Test
+    fun stageAndFixedSampleProducersShareOneTimestampAndEnqueueSerializer() {
+        val firstClockEntered = CountDownLatch(1)
+        val releaseFirstClock = CountDownLatch(1)
+        val clockCalls = AtomicInteger(0)
+        val durableRecords = CopyOnWriteArrayList<TelemetryRecord>()
+        val dispatcher = BoundedTelemetryDispatcher(TelemetrySink(durableRecords::add), capacity = 4)
+        val recorder = PipelineStageRecorder(
+            nowNs = {
+                if (clockCalls.incrementAndGet() == 1) {
+                    firstClockEntered.countDown()
+                    check(releaseFirstClock.await(1, TimeUnit.SECONDS))
+                    10L
+                } else {
+                    20L
+                }
+            },
+            sink = dispatcher,
+        )
+        val stageProducer = Thread {
+            recorder.record(0L, PipelineStage.CAMERA_CALLBACK, PipelineDisposition.RECEIVED)
+        }
+        val sampleProducer = Thread {
+            recorder.recordFixedSample(unavailableReadings(), terminal = false)
+        }
+
+        try {
+            stageProducer.start()
+            assertTrue(firstClockEntered.await(1, TimeUnit.SECONDS))
+            sampleProducer.start()
+            releaseFirstClock.countDown()
+            stageProducer.join(1_000L)
+            sampleProducer.join(1_000L)
+            dispatcher.fenceAndJoin()
+
+            assertEquals(listOf(10L, 20L), durableRecords.map(::recordTimeNs))
+            assertIs<PipelineStageEvent>(durableRecords[0])
+            assertIs<FixedTelemetrySample>(durableRecords[1])
+        } finally {
+            releaseFirstClock.countDown()
+            stageProducer.join(1_000L)
+            sampleProducer.join(1_000L)
+            runCatching { dispatcher.fenceAndJoin() }
+        }
+    }
+
+    @Test
+    fun analyzerProducerReturnsBeforeBlockedDurableSinkIsReleased() {
+        val sinkEntered = CountDownLatch(1)
+        val releaseSink = CountDownLatch(1)
+        val dispatcher = BoundedTelemetryDispatcher(
+            durableSink = TelemetrySink {
+                sinkEntered.countDown()
+                check(releaseSink.await(1, TimeUnit.SECONDS))
+            },
+            capacity = 2,
+        )
+
+        try {
+            dispatcher.append(stageEvent(0L))
+            assertTrue(sinkEntered.await(1, TimeUnit.SECONDS))
+            val producerReturned = CountDownLatch(1)
+            Thread {
+                dispatcher.append(stageEvent(1L))
+                producerReturned.countDown()
+            }.start()
+
+            assertTrue(
+                producerReturned.await(100, TimeUnit.MILLISECONDS),
+                "analyzer producer blocked on durable telemetry I/O",
+            )
+        } finally {
+            releaseSink.countDown()
+            dispatcher.fenceAndJoin()
+        }
+    }
+
+    @Test
+    fun boundedDispatcherOverflowIsCountedAndTyped() {
+        val sinkEntered = CountDownLatch(1)
+        val releaseSink = CountDownLatch(1)
+        val dispatcher = BoundedTelemetryDispatcher(
+            durableSink = TelemetrySink {
+                sinkEntered.countDown()
+                check(releaseSink.await(1, TimeUnit.SECONDS))
+            },
+            capacity = 1,
+        )
+
+        try {
+            dispatcher.append(stageEvent(0L))
+            assertTrue(sinkEntered.await(1, TimeUnit.SECONDS))
+            dispatcher.append(stageEvent(1L))
+
+            val failure = assertFailsWith<TelemetryDispatchException> {
+                dispatcher.append(stageEvent(2L))
+            }
+            assertEquals(TelemetryDispatchFailureCode.QUEUE_OVERFLOW, failure.failureCode)
+            assertEquals(1L, dispatcher.snapshot().queueOverflows)
+        } finally {
+            releaseSink.countDown()
+            assertFailsWith<TelemetryDispatchException> { dispatcher.fenceAndJoin() }
+        }
+    }
+
+    @Test
+    fun dispatcherFenceDrainsQueuedWritesBeforeJoinReturns() {
+        val sinkEntered = CountDownLatch(1)
+        val releaseSink = CountDownLatch(1)
+        val fenceReturned = CountDownLatch(1)
+        val dispatcher = BoundedTelemetryDispatcher(
+            durableSink = TelemetrySink {
+                sinkEntered.countDown()
+                check(releaseSink.await(1, TimeUnit.SECONDS))
+            },
+            capacity = 2,
+        )
+        dispatcher.append(stageEvent(0L))
+        assertTrue(sinkEntered.await(1, TimeUnit.SECONDS))
+        Thread {
+            dispatcher.fenceAndJoin()
+            fenceReturned.countDown()
+        }.start()
+
+        assertFalse(fenceReturned.await(100, TimeUnit.MILLISECONDS))
+        releaseSink.countDown()
+        assertTrue(fenceReturned.await(1, TimeUnit.SECONDS))
+        assertTrue(dispatcher.snapshot().joined)
+    }
+
+    @Test
+    fun dispatcherRejectsAndCountsEveryPostFenceAppend() {
+        val dispatcher = BoundedTelemetryDispatcher(TelemetrySink {}, capacity = 1)
+        dispatcher.fenceAndJoin()
+
+        val failure = assertFailsWith<TelemetryDispatchException> {
+            dispatcher.append(stageEvent(0L))
+        }
+
+        assertEquals(TelemetryDispatchFailureCode.POST_FENCE_APPEND, failure.failureCode)
+        assertEquals(1L, dispatcher.snapshot().postFenceRejections)
+    }
+
     @Test
     fun stopCancelsAndJoinsBeforeAppendingTheTerminalProbeSnapshot() {
         val operations = mutableListOf<String>()
@@ -35,6 +183,7 @@ class LiveTelemetryControllerTest {
         )
 
         controller.start()
+        controller.stopAndJoinBeforeSeal()
         controller.stopAndJoinBeforeSeal()
 
         assertEquals(listOf("sample", "cancel", "join", "terminal"), operations)
@@ -101,6 +250,7 @@ class LiveTelemetryControllerTest {
         assertTrue(scheduledAttempted.await(1, TimeUnit.SECONDS))
 
         assertEquals(failure, assertFailsWith<IllegalStateException> { controller.stopAndJoinBeforeSeal() })
+        assertEquals(failure, assertFailsWith<IllegalStateException> { controller.stopAndJoinBeforeSeal() })
         assertEquals(2, probeCalls.get())
         assertEquals(listOf(false), samples.map { it.terminal })
     }
@@ -116,4 +266,18 @@ class LiveTelemetryControllerTest {
         brightness = TelemetryValue.Unavailable("brightness_unavailable"),
         lifecycle = TelemetryValue.Unavailable("lifecycle_unavailable"),
     )
+
+    private fun stageEvent(sequence: Long) = PipelineStageEvent(
+        sequence = sequence,
+        tSessionNs = sequence,
+        frameIndex = sequence,
+        stage = PipelineStage.CAMERA_CALLBACK,
+        disposition = PipelineDisposition.RECEIVED,
+    )
+
+    private fun recordTimeNs(record: TelemetryRecord): Long = when (record) {
+        is PipelineStageEvent -> record.tSessionNs
+        is FixedTelemetrySample -> record.tSessionNs
+        is SustainedStageCounterSample -> record.tSessionNs
+    }
 }

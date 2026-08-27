@@ -35,6 +35,36 @@ class PipelineTelemetryTest {
     }
 
     @Test
+    fun callbackAccountingSeparatesSourceNotReadyFromCallbacksForwardedToTheRunner() {
+        val ledger = DeliveredCallbackLedger()
+        ledger.begin(0L)
+        ledger.close(0L, CallbackTerminalDisposition.SOURCE_NOT_READY)
+        ledger.begin(1L)
+        ledger.close(1L, CallbackTerminalDisposition.CADENCE_SELECTION)
+
+        ledger.assertClosed(
+            callbacksForwardedToRunner = 1L,
+            cameraFramesReceived = 1L,
+            diagnosticDropsAfterSeal = 0L,
+        )
+    }
+
+    @Test
+    fun callbackAccountingSeparatesRunnerPostSealDropsFromReceivedFrames() {
+        val ledger = DeliveredCallbackLedger()
+        repeat(2) { frameIndex ->
+            ledger.begin(frameIndex.toLong())
+            ledger.close(frameIndex.toLong(), CallbackTerminalDisposition.SESSION_STOPPING)
+        }
+
+        ledger.assertClosed(
+            callbacksForwardedToRunner = 2L,
+            cameraFramesReceived = 1L,
+            diagnosticDropsAfterSeal = 1L,
+        )
+    }
+
+    @Test
     fun stageRecorderStreamsContiguousEventsAndDerivesCountsFromThem() {
         val sink = RecordingTelemetrySink()
         val recorder = PipelineStageRecorder(nowNs = { 41L }, sink = sink)

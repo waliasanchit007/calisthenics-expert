@@ -110,7 +110,7 @@ class SessionExporterTest {
     }
 
     @Test
-    fun telemetrySinkAssignsOneContiguousSequenceAcrossIndependentProducers() {
+    fun telemetrySinkPreservesObservedRegressionForIndependentReconciliationFailure() {
         val storage = FakeStorage()
         val exporter = SessionExporter(storage, manifest(), monotonicNowNs = { 0L })
 
@@ -138,7 +138,10 @@ class SessionExporterTest {
         assertTrue(lines[0].contains("\"sequence\":0"))
         assertTrue(lines[0].contains("\"t_session_ns\":5"))
         assertTrue(lines[1].contains("\"sequence\":1"))
-        assertTrue(lines[1].contains("\"t_session_ns\":5"))
+        assertTrue(lines[1].contains("\"t_session_ns\":4"))
+
+        val failure = assertIs<FinalizationResult.Failed>(exporter.finalize(snapshot(emptyList())))
+        assertEquals("stream_reconciliation_failed", failure.failureCode)
     }
 
     @Test
@@ -197,7 +200,7 @@ class SessionExporterTest {
             .decodeToString().lineSequence().filter { it.isNotEmpty() }.toList()
         assertTrue(lines[1].contains("\"record_type\":\"sustained_stage_counter\""))
         assertTrue(lines[1].contains("\"sequence\":1"))
-        assertTrue(lines[1].contains("\"t_session_ns\":5"))
+        assertTrue(lines[1].contains("\"t_session_ns\":4"))
         assertTrue(lines[1].contains("\"fixed_telemetry_sequence\":0"))
         assertTrue(lines[3].contains("\"sequence\":3"))
         assertTrue(lines[3].contains("\"fixed_telemetry_sequence\":2"))

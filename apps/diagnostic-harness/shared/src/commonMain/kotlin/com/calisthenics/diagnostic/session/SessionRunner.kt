@@ -77,7 +77,7 @@ fun interface SessionAborter {
 
 /** Runs after callbacks/inference have drained and immediately before the session transitions to SEALED. */
 fun interface SessionSealFence {
-    fun beforeSeal()
+    fun beforeSeal(snapshot: SessionRunnerSnapshot)
 }
 
 data class SessionRunnerSnapshot(
@@ -98,7 +98,7 @@ class SessionRunner(
     private val deadlineScheduler: DeadlineScheduler,
     private val drainTimeoutNs: Long,
     private val finalizer: SessionFinalizer,
-    private val sealFence: SessionSealFence = SessionSealFence {},
+    private val sealFence: SessionSealFence = SessionSealFence { _ -> },
     private val dispatcher: SessionDispatcher = DirectSessionDispatcher,
     poseRecordSink: EmittedRecordSink = (finalizer as? EmittedRecordSink) ?: EmittedRecordSink {},
 ) {
@@ -349,7 +349,12 @@ class SessionRunner(
         if (lifecycle == SessionLifecycle.DRAINING && pendingSubmissionIndex == null) {
             deadlineHandle?.dispose()
             deadlineHandle = null
-            sealFence.beforeSeal()
+            try {
+                sealFence.beforeSeal(snapshotInternal())
+            } catch (error: Throwable) {
+                failSession()
+                throw error
+            }
             ledger.accept(SessionEvent.StopRequested)
             seal()
         }

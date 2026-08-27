@@ -137,6 +137,12 @@ sealed interface LiveInternalFailure {
     }
 
     data class SourceFailure(override val code: String) : LiveInternalFailure
+
+    data class TelemetryFailure(
+        override val code: String,
+        val sanitizedCause: String,
+        val cause: Throwable,
+    ) : LiveInternalFailure
 }
 
 data class LiveCameraCompletion(
@@ -276,6 +282,10 @@ class LiveCameraComposition internal constructor(
         val thermalProbeFactory: () -> LiveThermalProbe,
         val telemetryProbeFactory: () -> LiveTelemetryProbe,
         val telemetrySchedulerFactory: () -> FixedTelemetryScheduler = { DedicatedTelemetryScheduler() },
+        val telemetryDispatcherFactory: (TelemetrySink) -> BoundedTelemetryDispatcher = {
+            BoundedTelemetryDispatcher(it)
+        },
+        val beforeRunnerReady: ((OwnedYuvFrame) -> Unit) -> Unit = {},
         val encoderFinalizationSlot: LiveEncoderFinalizationSlot = LiveEncoderFinalizationSlot {},
         val sessionFinalizerFactory: LiveSessionFinalizerFactory,
         val sessionIdProvider: () -> Uuid = { Uuid(randomSessionId()) },
@@ -341,6 +351,7 @@ class LiveCameraComposition internal constructor(
     private var stallHandle: Disposable? = null
     private var stalled = false
     private var sourceFailure: LiveInternalFailure.SourceFailure? = null
+    private var telemetryFailure: LiveInternalFailure.TelemetryFailure? = null
     private var completion: LiveCameraCompletion? = null
     private var finalizationStarted = false
     private var sessionDispatcher: SingleThreadSessionDispatcher? = null
@@ -451,14 +462,17 @@ class LiveCameraComposition internal constructor(
                     "live session finalizer must expose the narrow telemetry sink"
                 }
                 sessionFinalizer = createdFinalizer
-                val recorder = PipelineStageRecorder(::relativeNowNs, createdFinalizer, recordingMode)
+                val telemetryDispatcher = dependencies.telemetryDispatcherFactory(createdFinalizer)
+                val recorder = PipelineStageRecorder(::relativeNowNs, telemetryDispatcher, recordingMode)
                 stageRecorder = recorder
                 telemetryController = LiveTelemetryController(
                     nowNs = ::relativeNowNs,
                     scheduler = dependencies.telemetrySchedulerFactory(),
                     probe = dependencies.telemetryProbeFactory(),
                     sink = recorder,
+                    dispatcher = telemetryDispatcher,
                 )
+                dependencies.beforeRunnerReady { frame -> handleFrame(frame) }
                 val trackedInference = TerminalTrackingInferencePort(
                     delegate = liveInference.port,
                     onResult = ::onInferenceResult,
@@ -666,7 +680,7 @@ class LiveCameraComposition internal constructor(
 
     internal val internalFailure: LiveInternalFailure?
         get() = synchronized(monitor) {
-            sourceFailure ?: if (stalled) LiveInternalFailure.LiveInferenceStalled else null
+            telemetryFailure ?: sourceFailure ?: if (stalled) LiveInternalFailure.LiveInferenceStalled else null
         }
 
     private fun handleSourceStarted(resolution: LiveSourceResolution) {
@@ -1096,7 +1110,9 @@ class LiveCameraComposition internal constructor(
     private fun handleSourceFailure(failure: Throwable, onProgress: (SessionRunnerSnapshot) -> Unit) {
         val stopWork = synchronized(monitor) {
             if (completion != null) return
-            if (sourceFailure == null) {
+            if (failure is TelemetryDispatchException) {
+                recordTelemetryFailureLocked(failure)
+            } else if (sourceFailure == null) {
                 sourceFailure = LiveInternalFailure.SourceFailure("live_source_failed")
             }
             requestStopLocked()
@@ -1135,7 +1151,13 @@ class LiveCameraComposition internal constructor(
         ) {
             return
         }
-        if (state.lifecycle == SessionLifecycle.FAILED) runPreSealFence()
+        if (state.lifecycle == SessionLifecycle.FAILED) {
+            try {
+                runPreSealFence(state)
+            } catch (error: Throwable) {
+                synchronized(monitor) { recordTelemetryFailureLocked(error) }
+            }
+        }
         synchronized(monitor) {
             if (finalizationStarted || completion != null || abandonRequested) return
             finalizationStarted = true
@@ -1148,7 +1170,7 @@ class LiveCameraComposition internal constructor(
                 sessionId = checkNotNull(sessionId),
                 finalization = finalization,
                 snapshot = finalSnapshot,
-                internalFailure = sourceFailure ?: if (stalled) LiveInternalFailure.LiveInferenceStalled else null,
+                internalFailure = telemetryFailure ?: sourceFailure ?: if (stalled) LiveInternalFailure.LiveInferenceStalled else null,
                 cadenceDiagnostics = cadenceDiagnostics,
                 thermalObservations = thermalProbe?.observations().orEmpty(),
             )
@@ -1165,7 +1187,12 @@ class LiveCameraComposition internal constructor(
         if (stopWork == null) return
         if (stopWork.waitForSourceStart) sourceStartFinished.await()
         stopReleasedSource(stopWork.source) {
-            val stoppedSnapshot = stopWork.runner?.stop(relativeNowNs())
+            val stoppedSnapshot = try {
+                stopWork.runner?.stop(relativeNowNs())
+            } catch (error: Throwable) {
+                synchronized(monitor) { recordTelemetryFailureLocked(error) }
+                stopWork.runner?.snapshot()
+            }
             if (stoppedSnapshot != null) onProgress?.invoke(stoppedSnapshot)
             stopWork.runner?.let(::finishIfSealed)
         }
@@ -1268,18 +1295,55 @@ class LiveCameraComposition internal constructor(
 
     private fun relativeNowNs(): Long = (dependencies.clock.nowNs() - sessionStartNs).coerceAtLeast(0L)
 
-    private fun runPreSealFence() {
+    private fun runPreSealFence(runnerSnapshot: SessionRunnerSnapshot) {
         synchronized(monitor) {
             if (finalizationFenceCompleted) return
         }
         dependencies.encoderFinalizationSlot.finalizeEncoder()
         val controller = synchronized(monitor) { telemetryController.takeIf { telemetryStarted } }
-        controller?.stopAndJoinBeforeSeal()
+        try {
+            controller?.stopAndJoinBeforeSeal()
+        } catch (error: Throwable) {
+            synchronized(monitor) {
+                recordTelemetryFailureLocked(error)
+                finalizationFenceCompleted = true
+            }
+            throw error
+        }
         synchronized(monitor) {
-            deliveredCallbacks.assertClosed(callbacksForwardedToRunner)
+            deliveredCallbacks.assertClosed(
+                callbacksForwardedToRunner = callbacksForwardedToRunner,
+                cameraFramesReceived = runnerSnapshot.counts.cameraFramesReceived,
+                diagnosticDropsAfterSeal = runnerSnapshot.diagnosticDropsAfterSeal,
+            )
             stageRecorder?.assertReconciles(deliveredCallbacks.snapshot())
             finalizationFenceCompleted = true
         }
+    }
+
+    private fun recordTelemetryFailureLocked(error: Throwable) {
+        if (telemetryFailure != null) return
+        val dispatchFailure = generateSequence(error as Throwable?) { it.cause }
+            .filterIsInstance<TelemetryDispatchException>()
+            .firstOrNull()
+        val code = when (dispatchFailure?.failureCode) {
+            TelemetryDispatchFailureCode.QUEUE_OVERFLOW -> "live_telemetry_queue_overflow"
+            TelemetryDispatchFailureCode.SINK_FAILURE -> "live_telemetry_sink_failed"
+            TelemetryDispatchFailureCode.JOIN_FAILURE -> "live_telemetry_join_failed"
+            TelemetryDispatchFailureCode.POST_FENCE_APPEND -> "live_telemetry_post_fence_append"
+            null -> "live_telemetry_sampler_failed"
+        }
+        val originalCause = dispatchFailure?.cause ?: error
+        val causeName = originalCause.javaClass.simpleName.ifBlank { "Throwable" }
+        val causeMessage = originalCause.message.orEmpty()
+            .replace('\r', ' ')
+            .replace('\n', ' ')
+            .take(160)
+        telemetryFailure = LiveInternalFailure.TelemetryFailure(
+            code = code,
+            sanitizedCause = if (causeMessage.isBlank()) causeName else "$causeName: $causeMessage",
+            cause = originalCause,
+        )
     }
 
     private fun manifestAtFinalization(
@@ -1287,7 +1351,7 @@ class LiveCameraComposition internal constructor(
         sealed: com.calisthenics.diagnostic.session.SealedSessionSnapshot,
         operatorAttestedNoPerson: Boolean,
     ): SessionManifest = synchronized(monitor) {
-        deliveredCallbacks.assertClosed(sealed.counts.cameraFramesReceived)
+        check(finalizationFenceCompleted) { "callback accounting must be fenced before finalization" }
         val geometry = checkNotNull(observedSourceGeometry) { "source_geometry_not_observed" }
         val classificationGap = sealed.counts.cameraFramesReceived -
             sealed.counts.inferenceFramesSubmitted -

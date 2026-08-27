@@ -13,6 +13,10 @@ fun interface TelemetrySink {
     fun append(record: TelemetryRecord)
 }
 
+fun interface FixedTelemetrySampleRecorder {
+    fun recordFixedSample(readings: FixedTelemetryReadings, terminal: Boolean): FixedTelemetrySample
+}
+
 enum class PipelineStage {
     CAMERA_CALLBACK,
     YUV_OWNERSHIP,
@@ -135,13 +139,31 @@ class DeliveredCallbackLedger {
     }
 
     fun assertClosed(cameraFramesReceived: Long) {
+        assertClosed(
+            callbacksForwardedToRunner = deliveredCallbacks,
+            cameraFramesReceived = cameraFramesReceived,
+            diagnosticDropsAfterSeal = 0L,
+        )
+    }
+
+    fun assertClosed(
+        callbacksForwardedToRunner: Long,
+        cameraFramesReceived: Long,
+        diagnosticDropsAfterSeal: Long,
+    ) {
+        require(callbacksForwardedToRunner >= 0L) { "forwarded callback count must be non-negative" }
         require(cameraFramesReceived >= 0L) { "camera frame count must be non-negative" }
+        require(diagnosticDropsAfterSeal >= 0L) { "post-seal drop count must be non-negative" }
         check(openFrameIndices.isEmpty()) { "delivered callbacks remain unclosed" }
         check(mutableCounts.values.sum() == deliveredCallbacks) {
             "each delivered callback must have exactly one terminal outcome"
         }
-        check(deliveredCallbacks == cameraFramesReceived) {
-            "delivered callbacks must equal camera frames received"
+        val sourceNotReady = mutableCounts[CallbackTerminalDisposition.SOURCE_NOT_READY] ?: 0L
+        check(deliveredCallbacks == callbacksForwardedToRunner + sourceNotReady) {
+            "delivered callbacks must equal forwarded callbacks plus source-not-ready outcomes"
+        }
+        check(callbacksForwardedToRunner == cameraFramesReceived + diagnosticDropsAfterSeal) {
+            "forwarded callbacks must equal runner camera frames plus diagnostic post-seal drops"
         }
     }
 
@@ -189,7 +211,7 @@ class PipelineStageRecorder(
     private val nowNs: () -> Long,
     private val sink: TelemetrySink,
     val recordingMode: PipelineTelemetryRecordingMode = PipelineTelemetryRecordingMode.SHORT_ATTRIBUTION,
-) : TelemetrySink {
+) : TelemetrySink, FixedTelemetrySampleRecorder {
     private var nextSequence = 0L
     private var lastTimeNs = 0L
     private val mutableCounts = mutableMapOf<Pair<PipelineStage, PipelineDisposition>, Long>()
@@ -197,10 +219,11 @@ class PipelineStageRecorder(
     private var nextCounterSequence = 0L
     private var lastFixedSampleSequence = -1L
     private var lastFixedSampleTimeNs = -1L
+    private var nextFixedSampleSequence = 0L
     private val recorderMutex = Mutex()
 
     val counts: Map<Pair<PipelineStage, PipelineDisposition>, Long>
-        get() = mutableCounts.toMap()
+        get() = serialized { mutableCounts.toMap() }
 
     val retainedStageCount: Int
         get() = serialized { mutableCounts.size }
@@ -209,36 +232,60 @@ class PipelineStageRecorder(
         val timeNs = nowNs()
         check(timeNs >= lastTimeNs) { "pipeline stage clock regressed" }
         val event = PipelineStageEvent(nextSequence++, timeNs, frameIndex, stage, disposition)
-        lastTimeNs = timeNs
         val key = stage to disposition
         mutableCounts[key] = (mutableCounts[key] ?: 0L) + 1L
         currentBucketCounts[key] = (currentBucketCounts[key] ?: 0L) + 1L
-        event
-    }.also { event ->
         if (recordingMode == PipelineTelemetryRecordingMode.SHORT_ATTRIBUTION) sink.append(event)
+        lastTimeNs = timeNs
+        event
     }
 
-    override fun append(record: TelemetryRecord) {
+    override fun recordFixedSample(
+        readings: FixedTelemetryReadings,
+        terminal: Boolean,
+    ): FixedTelemetrySample = serialized {
+        val timeNs = nowNs()
+        check(timeNs >= lastTimeNs) { "telemetry clock regressed" }
+        val sample = FixedTelemetrySample(
+            sequence = nextFixedSampleSequence++,
+            tSessionNs = timeNs,
+            thermal = readings.thermal,
+            batteryTemperature = readings.batteryTemperature,
+            batteryLevelOrCharge = readings.batteryLevelOrCharge,
+            charging = readings.charging,
+            powerSource = readings.powerSource,
+            connectivity = readings.connectivity,
+            keepAwake = readings.keepAwake,
+            brightness = readings.brightness,
+            lifecycle = readings.lifecycle,
+            terminal = terminal,
+        )
+        appendLocked(sample)
+        lastTimeNs = timeNs
+        sample
+    }
+
+    override fun append(record: TelemetryRecord) = serialized { appendLocked(record) }
+
+    private fun appendLocked(record: TelemetryRecord) {
         if (recordingMode != PipelineTelemetryRecordingMode.SUSTAINED || record !is FixedTelemetrySample) {
             sink.append(record)
             return
         }
-        val bucket = serialized {
-            check(record.sequence == lastFixedSampleSequence + 1L) { "fixed telemetry sequence must be contiguous" }
-            check(record.tSessionNs >= lastFixedSampleTimeNs) { "fixed telemetry time regressed" }
-            SustainedStageCounterSample(
-                sequence = nextCounterSequence++,
-                tSessionNs = record.tSessionNs,
-                fixedTelemetrySequence = record.sequence,
-                counts = currentBucketCounts.entries
-                    .filter { it.value > 0L }
-                    .sortedWith(compareBy({ it.key.first.ordinal }, { it.key.second.ordinal }))
-                    .map { (key, count) -> PipelineStageCount(key.first, key.second, count) },
-            ).also {
-                currentBucketCounts.clear()
-                lastFixedSampleSequence = record.sequence
-                lastFixedSampleTimeNs = record.tSessionNs
-            }
+        check(record.sequence == lastFixedSampleSequence + 1L) { "fixed telemetry sequence must be contiguous" }
+        check(record.tSessionNs >= lastFixedSampleTimeNs) { "fixed telemetry time regressed" }
+        val bucket = SustainedStageCounterSample(
+            sequence = nextCounterSequence++,
+            tSessionNs = record.tSessionNs,
+            fixedTelemetrySequence = record.sequence,
+            counts = currentBucketCounts.entries
+                .filter { it.value > 0L }
+                .sortedWith(compareBy({ it.key.first.ordinal }, { it.key.second.ordinal }))
+                .map { (key, count) -> PipelineStageCount(key.first, key.second, count) },
+        ).also {
+            currentBucketCounts.clear()
+            lastFixedSampleSequence = record.sequence
+            lastFixedSampleTimeNs = record.tSessionNs
         }
         sink.append(record)
         sink.append(bucket)
@@ -447,9 +494,16 @@ class FixedTelemetrySampler(
     }
 
     private fun appendSample(terminal: Boolean) {
+        val readings = probe()
+        val fixedRecorder = sink as? FixedTelemetrySampleRecorder
+        if (fixedRecorder != null) {
+            val sample = fixedRecorder.recordFixedSample(readings, terminal)
+            nextSequence = sample.sequence + 1L
+            lastSampleNs = sample.tSessionNs
+            return
+        }
         val timeNs = nowNs()
         check(timeNs >= lastSampleNs) { "telemetry clock regressed" }
-        val readings = probe()
         sink.append(
             FixedTelemetrySample(
                 sequence = nextSequence++,

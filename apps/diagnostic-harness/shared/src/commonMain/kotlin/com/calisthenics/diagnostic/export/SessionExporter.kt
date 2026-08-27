@@ -37,7 +37,6 @@ class SessionExporter(
     private var finalizationResult: FinalizationResult? = null
     private var pendingAbort: Pair<SealedSessionSnapshot, String>? = null
     private var nextTelemetrySequence = 0L
-    private var lastTelemetryTimeNs = 0L
     private var lastFixedTelemetrySequence: Long? = null
     private val telemetryMutex = Mutex()
 
@@ -55,19 +54,18 @@ class SessionExporter(
             is PipelineStageEvent -> record.tSessionNs
             is SustainedStageCounterSample -> record.tSessionNs
         }
-        val orderedTimeNs = maxOf(lastTelemetryTimeNs, recordTimeNs)
         val orderedRecord = when (record) {
             is FixedTelemetrySample -> record.copy(
                 sequence = nextTelemetrySequence,
-                tSessionNs = orderedTimeNs,
+                tSessionNs = recordTimeNs,
             )
             is PipelineStageEvent -> record.copy(
                 sequence = nextTelemetrySequence,
-                tSessionNs = orderedTimeNs,
+                tSessionNs = recordTimeNs,
             )
             is SustainedStageCounterSample -> record.copy(
                 sequence = nextTelemetrySequence,
-                tSessionNs = orderedTimeNs,
+                tSessionNs = recordTimeNs,
                 fixedTelemetrySequence = requireNotNull(lastFixedTelemetrySequence) {
                     "sustained stage counters require a fixed telemetry sample"
                 },
@@ -78,7 +76,6 @@ class SessionExporter(
             lastFixedTelemetrySequence = orderedRecord.sequence
         }
         nextTelemetrySequence += 1L
-        lastTelemetryTimeNs = orderedTimeNs
     }
 
     override fun abort(snapshot: SealedSessionSnapshot, reason: String) = serialized {

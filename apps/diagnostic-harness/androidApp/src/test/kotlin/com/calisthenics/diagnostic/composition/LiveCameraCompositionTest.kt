@@ -473,6 +473,24 @@ class LiveCameraCompositionTest {
     }
 
     @Test
+    fun sourceNotReadyCallbackReconcilesThroughStopSealAndFinalization() {
+        withHarness(Harness(callbackBeforeRunnerReady = true)) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+
+            val completion = harness.composition.stop()
+
+            assertIs<FinalizationResult.Published>(completion.finalization)
+            assertEquals(0L, completion.snapshot.counts.cameraFramesReceived)
+            assertEquals(1L, harness.composition.callbackAccounting().deliveredCallbacks)
+            assertEquals(
+                1L,
+                harness.composition.callbackAccounting().counts
+                    .getValue(CallbackTerminalDisposition.SOURCE_NOT_READY),
+            )
+        }
+    }
+
+    @Test
     fun negativeAndNonMonotonicCaptureRebasesCloseAsClockFaultNotPreprocessing() {
         withHarness(Harness(clockNowNs = 1_000_010_000L)) { harness ->
             assertIs<LiveCameraStartResult.Started>(harness.start(10))
@@ -621,12 +639,163 @@ class LiveCameraCompositionTest {
     }
 
     @Test
+    fun analyzerCallbackReturnsBeforeDurableStageAppendIsReleased() {
+        val sinkEntered = CountDownLatch(1)
+        val releaseSink = CountDownLatch(1)
+        val harness = Harness(
+            blockDurableStageAppend = true,
+            durableStageAppendEntered = sinkEntered,
+            releaseDurableStageAppend = releaseSink,
+        )
+        val analyzerReturned = CountDownLatch(1)
+        val analyzerThread = Thread {
+            harness.source.emit(frame(timestampNs = 1_000_002_000L))
+            analyzerReturned.countDown()
+        }
+        try {
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            analyzerThread.start()
+            assertTrue(sinkEntered.await(1, TimeUnit.SECONDS))
+
+            assertTrue(
+                analyzerReturned.await(100, TimeUnit.MILLISECONDS),
+                "analyzer callback performed durable telemetry I/O",
+            )
+        } finally {
+            releaseSink.countDown()
+            analyzerThread.join(1_000L)
+            harness.close()
+        }
+    }
+
+    @Test
+    fun dispatcherDrainCompletesBeforeFinalizerSeal() {
+        val sinkEntered = CountDownLatch(1)
+        val releaseSink = CountDownLatch(1)
+        val harness = Harness(
+            blockDurableStageAppend = true,
+            durableStageAppendEntered = sinkEntered,
+            releaseDurableStageAppend = releaseSink,
+        )
+        val stopReturned = CountDownLatch(1)
+        val stopFailure = AtomicReference<Throwable?>(null)
+        val stopThread = Thread {
+            runCatching { harness.composition.stop() }.onFailure(stopFailure::set)
+            stopReturned.countDown()
+        }
+        try {
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            harness.source.emit(frame(timestampNs = 1_000_002_000L))
+            assertTrue(sinkEntered.await(1, TimeUnit.SECONDS))
+            harness.inference.completeSuccess()
+            stopThread.start()
+
+            assertFalse(stopReturned.await(100, TimeUnit.MILLISECONDS))
+            assertEquals(0, harness.finalizerCalls)
+            releaseSink.countDown()
+            assertTrue(stopReturned.await(1, TimeUnit.SECONDS))
+            assertNull(stopFailure.get())
+            assertEquals(1, harness.finalizerCalls)
+        } finally {
+            releaseSink.countDown()
+            stopThread.join(1_000L)
+            harness.close()
+        }
+    }
+
+    @Test
+    fun samplerJoinFailureProducesTypedCompletionAndCompletesAbort() {
+        val cause = IllegalStateException("scheduled telemetry action failed\nsecret continuation")
+        val harness = Harness(telemetryJoinFailure = cause)
+        try {
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            harness.source.emit(frame(timestampNs = 1_000_002_000L))
+            harness.inference.completeSuccess()
+
+            val completion = harness.composition.stop()
+
+            val telemetryFailure = assertIs<LiveInternalFailure.TelemetryFailure>(completion.internalFailure)
+            assertEquals("live_telemetry_sampler_failed", telemetryFailure.code)
+            assertTrue(telemetryFailure.sanitizedCause.contains("IllegalStateException"))
+            assertTrue(telemetryFailure.sanitizedCause.contains("scheduled telemetry action failed"))
+            assertFalse(telemetryFailure.sanitizedCause.contains('\n'))
+            assertIs<FinalizationResult.Failed>(completion.finalization)
+            assertEquals(1, harness.abortRequests)
+            assertEquals(1, harness.abortCompletions)
+            assertEquals(1, harness.events.count { it == "telemetry.join" })
+        } finally {
+            harness.composition.abandon()
+        }
+    }
+
+    @Test
+    fun durableQueueWorkerFailureProducesTypedCompletionAndCompletesAbort() {
+        val cause = IllegalArgumentException("durable telemetry sink failed")
+        val harness = Harness(durableTelemetryFailure = cause)
+        try {
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+
+            val completion = harness.composition.stop()
+
+            val telemetryFailure = assertIs<LiveInternalFailure.TelemetryFailure>(completion.internalFailure)
+            assertEquals("live_telemetry_sink_failed", telemetryFailure.code)
+            assertTrue(telemetryFailure.sanitizedCause.contains("IllegalArgumentException"))
+            assertIs<FinalizationResult.Failed>(completion.finalization)
+            assertEquals(1, harness.abortRequests)
+            assertEquals(1, harness.abortCompletions)
+            assertEquals(1, harness.events.count { it == "telemetry.join" })
+        } finally {
+            harness.composition.abandon()
+        }
+    }
+
+    @Test
+    fun boundedQueueOverflowProducesTypedCompletionAndCompletesAbort() {
+        val sinkEntered = CountDownLatch(1)
+        val releaseSink = CountDownLatch(1)
+        val harness = Harness(
+            telemetryQueueCapacity = 1,
+            blockEveryDurableAppend = true,
+            durableStageAppendEntered = sinkEntered,
+            releaseDurableStageAppend = releaseSink,
+        )
+        val analyzerReturned = CountDownLatch(1)
+        val analyzerThread = Thread {
+            harness.source.emit(frame(timestampNs = 1_000_002_000L))
+            analyzerReturned.countDown()
+        }
+        try {
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            assertTrue(sinkEntered.await(1, TimeUnit.SECONDS))
+
+            analyzerThread.start()
+            assertFalse(analyzerReturned.await(100, TimeUnit.MILLISECONDS))
+            releaseSink.countDown()
+            analyzerThread.join(1_000L)
+
+            assertFalse(analyzerThread.isAlive)
+            val completion = assertNotNull(harness.composition.completion())
+            val telemetryFailure = assertIs<LiveInternalFailure.TelemetryFailure>(completion.internalFailure)
+            assertEquals("live_telemetry_queue_overflow", telemetryFailure.code)
+            assertIs<FinalizationResult.Failed>(completion.finalization)
+            assertEquals(1, harness.abortRequests)
+            assertEquals(1, harness.abortCompletions)
+            assertEquals(1, harness.events.count { it == "telemetry.join" })
+        } finally {
+            releaseSink.countDown()
+            analyzerThread.join(1_000L)
+            harness.composition.abandon()
+        }
+    }
+
+    @Test
     fun liveSamplerUsesDedicatedSchedulerInsteadOfInferenceDeadlineScheduler() {
         withHarness(Harness()) { harness ->
             assertIs<LiveCameraStartResult.Started>(harness.start(10))
 
             assertEquals(1_000_000_000L, harness.telemetryScheduler.periodNs)
             assertTrue(harness.scheduler.scheduledDelays.isEmpty())
+            harness.composition.stop()
             assertTrue(harness.telemetryRecords.filterIsInstance<FixedTelemetrySample>().isNotEmpty())
         }
     }
@@ -1242,14 +1411,22 @@ class LiveCameraCompositionTest {
         runNonPositiveSchedulerActions: Boolean = true,
         sourceResolution: LiveSourceResolution = LiveSourceResolution(2, 2),
         thermalAvailable: Boolean = true,
+        callbackBeforeRunnerReady: Boolean = false,
+        telemetryJoinFailure: Throwable? = null,
+        durableTelemetryFailure: Throwable? = null,
+        telemetryQueueCapacity: Int = 512,
+        blockEveryDurableAppend: Boolean = false,
+        blockDurableStageAppend: Boolean = false,
+        durableStageAppendEntered: CountDownLatch = CountDownLatch(0),
+        releaseDurableStageAppend: CountDownLatch = CountDownLatch(0),
     ) {
         val events = mutableListOf<String>()
         val inference = FakeInference(events)
         private val fallbackClock = FakeClock(clockNowNs)
         val clock = clockOverride ?: fallbackClock
         val scheduler = FakeScheduler(events, runNonPositiveSchedulerActions)
-        val telemetryScheduler = FakeTelemetryScheduler(events)
-        val telemetryRecords = mutableListOf<TelemetryRecord>()
+        val telemetryScheduler = FakeTelemetryScheduler(events, telemetryJoinFailure)
+        val telemetryRecords = java.util.concurrent.CopyOnWriteArrayList<TelemetryRecord>()
         val thermal = FakeThermalProbe(thermalAvailable)
         val sessionDispatchers = mutableListOf<SingleThreadSessionDispatcher>()
         val sessionDispatcherThreads = mutableListOf<Thread>()
@@ -1266,6 +1443,8 @@ class LiveCameraCompositionTest {
         var inferenceCreations = 0
         var finalizerCreated = false
         var finalizerCalls = 0
+        var abortRequests = 0
+        var abortCompletions = 0
         var durableWriterClock: (() -> Long)? = null
         var manifestCallbackInvoked = false
         val manifestCallbackInvokedLatch = CountDownLatch(1)
@@ -1304,6 +1483,12 @@ class LiveCameraCompositionTest {
                     }
                 },
                 telemetrySchedulerFactory = { telemetryScheduler },
+                telemetryDispatcherFactory = { sink ->
+                    BoundedTelemetryDispatcher(sink, telemetryQueueCapacity)
+                },
+                beforeRunnerReady = { deliver ->
+                    if (callbackBeforeRunnerReady) deliver(frame(timestampNs = 1_000_002_000L))
+                },
                 encoderFinalizationSlot = { events += "encoder.finalize" },
                 sessionFinalizerFactory = { template, manifestAtFinalization, monotonicNowNs ->
                     finalizerFailure?.let { throw it }
@@ -1312,18 +1497,41 @@ class LiveCameraCompositionTest {
                     manifest = template
                     durableWriterClock = monotonicNowNs
                     object : SessionFinalizer,
+                        com.calisthenics.diagnostic.session.SessionAborter,
+                        com.calisthenics.diagnostic.export.DeferredSessionAbort,
                         com.calisthenics.diagnostic.session.EmittedRecordSink,
                         TelemetrySink {
+                        private var pendingAbort = false
                         override fun appendPose(record: RawPoseFrame) {
                             emittedRecord = record
                         }
 
                         override fun append(record: TelemetryRecord) {
+                            durableTelemetryFailure?.let { throw it }
+                            if (blockEveryDurableAppend || blockDurableStageAppend && record is PipelineStageEvent) {
+                                durableStageAppendEntered.countDown()
+                                check(releaseDurableStageAppend.await(1, TimeUnit.SECONDS))
+                            }
                             telemetryRecords += record
                             if (record is FixedTelemetrySample && record.terminal) {
                                 events += "telemetry.terminal"
                             } else if (record is FixedTelemetrySample) {
                                 events += "telemetry.sample"
+                            }
+                        }
+
+                        override fun abort(
+                            snapshot: com.calisthenics.diagnostic.session.SealedSessionSnapshot,
+                            reason: String,
+                        ) {
+                            abortRequests++
+                            pendingAbort = true
+                        }
+
+                        override fun completePendingAbort() {
+                            if (pendingAbort) {
+                                pendingAbort = false
+                                abortCompletions++
                             }
                         }
 
@@ -1441,7 +1649,11 @@ class LiveCameraCompositionTest {
             claimCurrentThreadCallbackOwnership()
             try {
                 advanceClock(frame.timestampNs)
-                callback!!.invoke(frame)
+                try {
+                    callback!!.invoke(frame)
+                } catch (error: Throwable) {
+                    checkNotNull(failureCallback).invoke(error)
+                }
             } finally {
                 leaveCallback()
             }
@@ -1694,6 +1906,7 @@ class LiveCameraCompositionTest {
 
     private class FakeTelemetryScheduler(
         private val events: MutableList<String>,
+        private val joinFailure: Throwable?,
     ) : FixedTelemetryScheduler {
         var periodNs: Long? = null
         private var action: (() -> Unit)? = null
@@ -1710,6 +1923,7 @@ class LiveCameraCompositionTest {
 
                 override fun join() {
                     events += "telemetry.join"
+                    joinFailure?.let { throw it }
                 }
             }
         }
