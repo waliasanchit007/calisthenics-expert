@@ -611,8 +611,8 @@ class LiveCameraCompositionTest {
             val recordsAtSeal = harness.telemetryRecords.size
             harness.telemetryScheduler.runScheduled()
             assertEquals(recordsAtSeal, harness.telemetryRecords.size)
-            assertTrue(harness.events.indexOf("writer.open") < harness.events.indexOf("telemetry.sample"))
-            assertTrue(harness.events.indexOf("telemetry.sample") < harness.events.indexOf("source.start.entered"))
+            assertTrue(harness.events.indexOf("writer.open") < harness.events.indexOf("telemetry.scheduled"))
+            assertTrue(harness.events.indexOf("telemetry.scheduled") < harness.events.indexOf("source.start.entered"))
 
             assertEquals(
                 listOf(
@@ -1915,6 +1915,7 @@ class LiveCameraCompositionTest {
         override fun scheduleAtFixedRate(periodNs: Long, action: () -> Unit): FixedTelemetrySchedule {
             this.periodNs = periodNs
             this.action = action
+            events += "telemetry.scheduled"
             return object : FixedTelemetrySchedule {
                 override fun cancel() {
                     cancelled = true
