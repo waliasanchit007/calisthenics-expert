@@ -237,6 +237,36 @@ def test_allows_storage_root_construction_in_the_single_factory(tmp_path: Path) 
     assert guard_repository(root, mode="staged") == []
 
 
+def test_rejects_recursive_delete_and_follow_links_in_android_production_purge_code(
+    tmp_path: Path,
+) -> None:
+    root = _repository(tmp_path)
+    relative_path = (
+        "apps/diagnostic-harness/shared/src/androidMain/kotlin/"
+        "com/calisthenics/diagnostic/purge/AndroidSyntheticPurge.kt"
+    )
+    _write(root, relative_path, "root.deleteRecursively()\nFiles.walk(root, FOLLOW_LINKS)\n")
+    _stage(root)
+
+    assert _codes(root, mode="staged") == [
+        (relative_path, "REPOSITORY.PROHIBITED_CONTENT"),
+    ]
+
+
+def test_rejects_predictable_session_id_entropy_in_the_m05_generator(tmp_path: Path) -> None:
+    root = _repository(tmp_path)
+    relative_path = (
+        "apps/diagnostic-harness/androidApp/src/main/kotlin/"
+        "com/calisthenics/diagnostic/composition/M05SessionIdGenerator.kt"
+    )
+    _write(root, relative_path, "val random = java.util.Random()\n")
+    _stage(root)
+
+    assert _codes(root, mode="staged") == [
+        (relative_path, "REPOSITORY.PROHIBITED_CONTENT"),
+    ]
+
+
 def test_admits_all_three_declared_synthetic_fixture_classes(tmp_path: Path) -> None:
     root = _repository(tmp_path)
 

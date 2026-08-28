@@ -42,6 +42,8 @@ import com.calisthenics.diagnostic.model.ModelProvenance
 import com.calisthenics.diagnostic.model.ModelProvenanceException
 import com.calisthenics.diagnostic.model.parseModelProvenance
 import com.calisthenics.diagnostic.model.requireLiveModelProvenance
+import com.calisthenics.diagnostic.purge.AndroidTombstoneFenceFilesystem
+import com.calisthenics.diagnostic.purge.TombstoneSessionAdmissionFence
 import com.calisthenics.diagnostic.preprocessing.scalePadRgb24
 import com.calisthenics.diagnostic.preprocessing.uprightDimensions
 import com.calisthenics.diagnostic.preprocessing.yuv420ToUprightRgb24
@@ -289,7 +291,7 @@ class LiveCameraComposition internal constructor(
         val beforeRunnerReady: ((OwnedYuvFrame) -> Unit) -> Unit = {},
         val encoderFinalizationSlot: LiveEncoderFinalizationSlot = LiveEncoderFinalizationSlot {},
         val sessionFinalizerFactory: LiveSessionFinalizerFactory,
-        val sessionIdProvider: () -> Uuid = { Uuid(randomSessionId()) },
+        val sessionIdProvider: () -> Uuid = M05SessionIdGenerator::next,
         val manifestMetadata: LiveManifestMetadata = LiveManifestMetadata(),
         val drainTimeoutNs: Long = DRAIN_TIMEOUT_NS,
         val registerRunner: (SessionRunner) -> SessionRunnerRegistrationResult = {
@@ -461,6 +463,13 @@ class LiveCameraComposition internal constructor(
                     },
                     monotonicNowNs = ::relativeNowNs,
                 )
+                (createdFinalizer as? SessionExporter)?.startRefusalCode?.let { code ->
+                    unavailable = LiveCameraStartResult.Unavailable(
+                        LiveUnavailableReason.Initialization(code),
+                    )
+                    releasePlan = captureResourceReleasePlanLocked(abandonRunner = true)
+                    return@synchronized
+                }
                 check(createdFinalizer is TelemetrySink) {
                     "live session finalizer must expose the narrow telemetry sink"
                 }
@@ -1572,6 +1581,7 @@ class LiveCameraComposition internal constructor(
                             manifestTemplate = template,
                             monotonicNowNs = monotonicNowNs,
                             manifestAtFinalization = atFinalization,
+                            admissionFence = TombstoneSessionAdmissionFence(AndroidTombstoneFenceFilesystem(roots)),
                             deferAbortUntilFence = true,
                         )
                     },
@@ -1599,13 +1609,6 @@ class LiveCameraComposition internal constructor(
                     onCompletion = onCompletion,
                 ),
             )
-        }
-
-        private val sessionSequence = AtomicLong(0)
-
-        private fun randomSessionId(): String {
-            val n = sessionSequence.incrementAndGet()
-            return "00000000-0000-4000-8000-${(n xor System.nanoTime()).toULong().toString(16).takeLast(12).padStart(12, '0')}"
         }
 
         /** SOC_MODEL is preferred when populated; older/vendor builds fall back to HARDWARE. */

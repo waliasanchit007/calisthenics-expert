@@ -386,6 +386,21 @@ the specific case where video bytes/reference exist while `media_required` is ab
 
 ## 8. Synthetic purge and tombstone proposal
 
+### 8.0 Delivery split
+
+Task 5 is deliberately split at the Task 4 synchronized-video dependency. **Task 5a** is
+landable software safety work: the registry-only purge protocol, durable tombstones, permanent
+re-admission fence, exact ownership predicates, storage-root invariants, registry digest binding,
+and cryptographically random reserved synthetic session IDs. It may operate only on synthetic
+fixtures and test-owned storage adapters; it makes no physical deletion claim.
+
+**Task 5b** remains blocked on Task 4 and on the physical S25 gate. It is the only stage allowed to
+rehearse a complete short video-enabled synthetic session, independently inspect the app-private
+post-scan through host `run-as`, emit a device/host evidence record, provide its Make target and
+build-contract guard, and change the pending ledger to recorded. A pose-only run is not a substitute
+for this rehearsal. No Task 5a result may be represented as physical evidence or as a decision about
+withdrawal, retention, backup propagation, or participant data.
+
 ### 8.1 Authority boundary
 
 This section defines only the minimum mechanism needed to rehearse deletion with synthetic data. It
@@ -443,6 +458,12 @@ Required stable results include `PURGE.INVALID_SESSION_ID`, `PURGE.UNKNOWN_ROOT`
 
 The device test creates data only beneath test-owned synthetic roots, proves each conjunct by
 mutation, and never runs a broad recursive delete against an unresolved path.
+
+Task 5a's app-private implementation is serialized against capture. It rechecks the resolved
+entry's device/inode immediately before each unlink and never follows a link, but it does not claim
+immunity from a malicious concurrent filesystem writer: the residual assumption is the Android
+app-private single-writer model. The physical rehearsal and independent host post-scan belong to
+Task 5b.
 
 ## 9. Cadence attribution and fixed-interval telemetry
 
@@ -628,9 +649,11 @@ review; privacy, synchronization, and final boundary contracts do.
    fan-out, Android in-app encoder/muxer adapter, storage binary primitives,
    composition/finalization, pairing sidecar, short device gate, demux verifier, and transfer verifier.
 5. **Synthetic purge and tombstone proposal**
-   Depends on 1, 2, and 4 so the rehearsal purges a complete short video-enabled session. Write
-   scope: purge/tombstone contracts, Android storage purge, host rehearsal, device and repository
-   tests. `withdrawal_and_deletion` remains `UNDECIDED`.
+   **5a** depends on 1 and 2: purge/tombstone contracts, registry-only Android storage purge,
+   permanent admission fencing, deterministic JVM/Android adapter tests, and repository guards.
+   **5b** depends on 4: the complete short video-enabled physical rehearsal, independent host
+   post-scan/checker, device Make target/build-contract, and recorded ledger. `withdrawal_and_deletion`
+   remains `UNDECIDED` throughout both stages.
 6. **Stage attribution and fixed telemetry**
    Depends on 2. Write scope: live pipeline event model, Android probes, telemetry stream, short
    10/15/30 attribution device gate, pending/recorded attribution ledger, and tests.

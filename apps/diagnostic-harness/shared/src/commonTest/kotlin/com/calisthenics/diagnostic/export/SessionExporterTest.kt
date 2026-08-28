@@ -17,6 +17,9 @@ import com.calisthenics.diagnostic.contract.SessionManifest
 import com.calisthenics.diagnostic.contract.Sha256
 import com.calisthenics.diagnostic.contract.Uuid
 import com.calisthenics.diagnostic.contract.decodeManifest
+import com.calisthenics.diagnostic.purge.SessionAdmissionDecision
+import com.calisthenics.diagnostic.purge.SessionAdmissionFence
+import com.calisthenics.diagnostic.purge.SessionAdmissionPhase
 import com.calisthenics.diagnostic.session.FinalizationResult
 import com.calisthenics.diagnostic.session.BoundedSessionState
 import com.calisthenics.diagnostic.session.SealedSessionSnapshot
@@ -42,6 +45,86 @@ import kotlin.test.assertTrue
  * [FakeStorage] and the real `AndroidStoragePort`.
  */
 class SessionExporterTest {
+    @Test
+    fun tombstoneFenceRefusesWithoutOpeningWriterAndRechecksImmediatelyBeforePublishRename() {
+        val refusedStorage = FakeStorage()
+        val refusal = SessionExporter(
+            storage = refusedStorage,
+            manifestTemplate = manifest(),
+            monotonicNowNs = { 0L },
+            admissionFence = SessionAdmissionFence { _, _ ->
+                SessionAdmissionDecision.Refused("PURGE.SESSION_TOMBSTONED")
+            },
+        )
+
+        assertEquals("PURGE.SESSION_TOMBSTONED", refusal.startRefusalCode)
+        assertTrue(refusedStorage.attempts.isEmpty(), "a refused start must not open a staging writer")
+
+        val storage = FakeStorage()
+        val checkedPhases = mutableListOf<SessionAdmissionPhase>()
+        val exporter = SessionExporter(
+            storage = storage,
+            manifestTemplate = manifest(),
+            monotonicNowNs = { 0L },
+            admissionFence = SessionAdmissionFence { _, phase ->
+                checkedPhases += phase
+                if (phase == SessionAdmissionPhase.FINAL_PUBLISH) {
+                    SessionAdmissionDecision.Refused("PURGE.SESSION_TOMBSTONED")
+                } else {
+                    SessionAdmissionDecision.Admitted
+                }
+            },
+        )
+        val record = frame(posePresent = true)
+        exporter.appendPose(record)
+
+        val failed = assertIs<FinalizationResult.Failed>(exporter.finalize(snapshot(listOf(record))))
+
+        assertEquals("PURGE.SESSION_TOMBSTONED", failed.failureCode)
+        assertEquals(listOf(SessionAdmissionPhase.WRITER_OPEN, SessionAdmissionPhase.FINAL_PUBLISH), checkedPhases)
+        assertTrue(storage.committedDirectories.isEmpty(), "a final-publish refusal must precede rename")
+    }
+
+    @Test
+    fun finalFenceRunsAfterDestinationPrecheckWhenThatPrecheckExposesATombstone() {
+        val delegate = FakeStorage()
+        var tombstoneAppeared = false
+        val storage = object : StoragePort by delegate {
+            override fun destinationExists(destinationPath: String): Boolean {
+                tombstoneAppeared = true
+                return delegate.destinationExists(destinationPath)
+            }
+        }
+        val checkedPhases = mutableListOf<SessionAdmissionPhase>()
+        val exporter = SessionExporter(
+            storage = storage,
+            manifestTemplate = manifest(),
+            monotonicNowNs = { 0L },
+            admissionFence = SessionAdmissionFence { _, phase ->
+                checkedPhases += phase
+                if (phase == SessionAdmissionPhase.FINAL_PUBLISH && tombstoneAppeared) {
+                    SessionAdmissionDecision.Refused("PURGE.SESSION_TOMBSTONED")
+                } else {
+                    SessionAdmissionDecision.Admitted
+                }
+            },
+        )
+        val record = frame(posePresent = true)
+        exporter.appendPose(record)
+
+        val failed = assertIs<FinalizationResult.Failed>(exporter.finalize(snapshot(listOf(record))))
+
+        assertEquals("PURGE.SESSION_TOMBSTONED", failed.failureCode)
+        assertEquals(
+            listOf(
+                SessionAdmissionPhase.WRITER_OPEN,
+                SessionAdmissionPhase.FINAL_PUBLISH,
+            ),
+            checkedPhases,
+        )
+        assertTrue(delegate.committedDirectories.isEmpty(), "a tombstone exposed during precheck must prevent rename")
+    }
+
     @Test
     fun typedTelemetryIsAppendedToTheDurableTelemetryStreamImmediately() {
         val storage = FakeStorage()

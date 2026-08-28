@@ -86,6 +86,11 @@ def storage_location_registry_schema_path() -> Path:
     return repository_root() / "contracts" / "tooling" / "storage_location_registry.v1.schema.json"
 
 
+def purge_tombstone_schema_path() -> Path:
+    """Return the Task 5a draft purge-tombstone tooling schema path."""
+    return repository_root() / "contracts" / "tooling" / "purge_tombstone.v1.schema.json"
+
+
 def m05b_start_envelope_schema_path() -> Path:
     """Return the released M0.5B frozen-start-envelope schema."""
     return repository_root() / "contracts" / "tooling" / "m05b_start_envelope.v1.schema.json"
@@ -155,6 +160,12 @@ def load_study_condition_matrix_schema() -> Mapping[str, object]:
 def load_storage_location_registry_schema() -> Mapping[str, object]:
     """Return the parsed released storage-location registry tooling schema."""
     return _load_tooling_schema(storage_location_registry_schema_path())
+
+
+@cache
+def load_purge_tombstone_schema() -> Mapping[str, object]:
+    """Return the Task 5a draft purge-tombstone tooling schema."""
+    return _load_tooling_schema(purge_tombstone_schema_path())
 
 
 @cache

@@ -22,9 +22,16 @@ data class StorageRoots(
         get() = listOf(exportsRoot, stagingRoot, transferStagingRoot, tombstoneRoot)
 
     init {
-        require(filesDir.startsWith('/') && !filesDir.endsWith('/')) { "filesDir must be a normalized absolute path" }
+        require(isNormalizedAbsolute(filesDir)) { "filesDir must be a normalized absolute path" }
+        require(isNormalizedAbsolute(diagnosticHarnessRoot)) { "diagnosticHarnessRoot must be a normalized absolute path" }
         require(diagnosticHarnessRoot == filesDir || isBelow(filesDir, diagnosticHarnessRoot)) {
             "diagnostic harness root must be at or below filesDir"
+        }
+        val harnessRelativeSegments = diagnosticHarnessRoot.removePrefix("$filesDir/")
+            .split('/')
+            .filter(String::isNotEmpty)
+        require(harnessRelativeSegments.none { it in purgeableAndroidRootNames }) {
+            "diagnostic harness root cannot be nested inside a registered purge root"
         }
         val expected = mapOf(
             exportsRoot to StorageLocationId.DEVICE_EXPORT,
@@ -34,6 +41,7 @@ data class StorageRoots(
         )
         require(expected.keys.size == expected.size) { "registered Android roots must be distinct" }
         expected.forEach { (root, id) ->
+            require(isNormalizedAbsolute(root)) { "$id root must be a normalized absolute path" }
             require(root == "$diagnosticHarnessRoot/${StorageLocationRegistry.androidChild(id)}") {
                 "$id root must be the registry-derived child of diagnosticHarnessRoot"
             }
@@ -43,7 +51,19 @@ data class StorageRoots(
     private companion object {
         fun isBelow(parent: String, child: String): Boolean = child.startsWith("$parent/")
 
+        fun isNormalizedAbsolute(path: String): Boolean =
+            path.startsWith('/') && !path.endsWith('/') && path.split('/').drop(1).none {
+                it.isEmpty() || it == "." || it == ".."
+            }
+
         fun parentOf(path: String): String = path.substringBeforeLast('/')
+
+        val purgeableAndroidRootNames = setOf(
+            StorageLocationRegistry.androidChild(StorageLocationId.DEVICE_EXPORT),
+            StorageLocationRegistry.androidChild(StorageLocationId.DEVICE_STAGING),
+            StorageLocationRegistry.androidChild(StorageLocationId.DEVICE_TRANSFER_STAGING),
+            StorageLocationRegistry.androidChild(StorageLocationId.TOMBSTONE),
+        )
     }
 }
 

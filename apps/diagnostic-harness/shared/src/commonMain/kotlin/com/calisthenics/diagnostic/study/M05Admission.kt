@@ -38,6 +38,7 @@ data class M05AdmissionResult(
 object M05Admission {
     private const val LIVE_CONFORMANCE = "live_conformance"
     private const val PSEUDONYM_PREFIX = "synthetic-m05-"
+    private val RESERVED_SYNTHETIC_SESSION_ID = Regex("^00000000-0000-4000-8000-[0-9a-f]{12}$")
 
     fun evaluate(evidence: M05AdmissionEvidence): M05AdmissionResult {
         val fraction = if (evidence.submittedFrameCount == 0L) {
@@ -46,6 +47,9 @@ object M05Admission {
             evidence.detectionActiveFrameCount.toDouble() / evidence.submittedFrameCount.toDouble()
         }
         val blockingCodes = mutableListOf<String>()
+        if (!RESERVED_SYNTHETIC_SESSION_ID.matches(evidence.sessionId)) {
+            blockingCodes += "STUDY.ADMISSION_SESSION_ID"
+        }
         if (evidence.sessionKind != LIVE_CONFORMANCE) blockingCodes += "STUDY.ADMISSION_SESSION_KIND"
         if (!evidence.operatorAttestedNoPerson || evidence.detectionActiveFrameCount > evidence.submittedFrameCount) {
             blockingCodes += "STUDY.ADMISSION_INPUT_CLASS"

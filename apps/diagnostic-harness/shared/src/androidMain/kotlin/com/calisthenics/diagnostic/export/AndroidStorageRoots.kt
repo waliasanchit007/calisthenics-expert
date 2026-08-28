@@ -70,10 +70,10 @@ object AndroidStorageRoots {
         }
     }
 
-    /** Creates an isolated capability-probe layout below the registered staging root. */
+    /** Creates an isolated capability-probe layout outside every registered purgeable root. */
     fun forProbe(roots: StorageRoots, runId: String): StorageRoots {
         require(runId.matches(Regex("^[0-9a-f-]{36}$"))) { "runId must be a lowercase UUID" }
-        val base = "${roots.stagingRoot}/storage-probe/$runId"
+        val base = "${roots.diagnosticHarnessRoot}/storage-probe/$runId"
         return StorageRoots(
             filesDir = roots.filesDir,
             stagingRoot = "$base/${StorageLocationRegistry.androidChild(StorageLocationId.DEVICE_STAGING)}",

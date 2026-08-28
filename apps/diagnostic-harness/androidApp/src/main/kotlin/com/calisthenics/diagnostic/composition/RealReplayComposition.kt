@@ -28,6 +28,8 @@ import com.calisthenics.diagnostic.mediapipe.realDetectorConstructor
 import com.calisthenics.diagnostic.model.ModelProvenance
 import com.calisthenics.diagnostic.model.ModelProvenanceException
 import com.calisthenics.diagnostic.model.parseModelProvenance
+import com.calisthenics.diagnostic.purge.AndroidTombstoneFenceFilesystem
+import com.calisthenics.diagnostic.purge.TombstoneSessionAdmissionFence
 import com.calisthenics.diagnostic.replay.ReplayClock
 import com.calisthenics.diagnostic.replay.ReplayFixture
 import com.calisthenics.diagnostic.replay.ReplayRunner
@@ -76,7 +78,7 @@ sealed interface RealReplayResult {
  */
 class RealReplayComposition(
     private val context: Context,
-    private val sessionIdProvider: () -> Uuid = { Uuid(randomSessionId()) },
+    private val sessionIdProvider: () -> Uuid = M05SessionIdGenerator::next,
 ) {
 
     /**
@@ -138,6 +140,27 @@ class RealReplayComposition(
         val drainTimeoutNs = 5_000_000_000L
         val scheduler = ExecutorDeadlineScheduler(clock)
         val dispatcher = SingleThreadSessionDispatcher()
+        val exporter = SessionExporter(
+            AndroidStoragePort(roots),
+            manifestTemplate(
+                sessionId,
+                provenance,
+                replayFixture,
+                drainTimeoutNs,
+                startedAt,
+                fixtureMetadataBytes,
+            ),
+            monotonicNowNs = clock::nowNs,
+            manifestAtFinalization = { manifest, _ ->
+                manifest.copy(clock = manifest.clock.copy(endedAtUtc = Instant.now().toString()))
+            },
+            admissionFence = TombstoneSessionAdmissionFence(AndroidTombstoneFenceFilesystem(roots)),
+        )
+        exporter.startRefusalCode?.let { code ->
+            scheduler.shutdown()
+            dispatcher.shutdown()
+            return RealReplayResult.CapabilityUnavailable(code)
+        }
 
         val sessionRunner = SessionRunner(
             configuration = SessionConfiguration(
@@ -149,21 +172,7 @@ class RealReplayComposition(
             inference = inference,
             deadlineScheduler = scheduler,
             drainTimeoutNs = drainTimeoutNs,
-            finalizer = SessionExporter(
-                AndroidStoragePort(roots),
-                manifestTemplate(
-                    sessionId,
-                    provenance,
-                    replayFixture,
-                    drainTimeoutNs,
-                    startedAt,
-                    fixtureMetadataBytes,
-                ),
-                monotonicNowNs = clock::nowNs,
-                manifestAtFinalization = { manifest, _ ->
-                    manifest.copy(clock = manifest.clock.copy(endedAtUtc = Instant.now().toString()))
-                },
-            ),
+            finalizer = exporter,
             dispatcher = dispatcher,
         )
         var terminal = false
@@ -342,18 +351,4 @@ private class ExecutorDeadlineScheduler(private val clock: ReplayClock) : Deadli
     fun shutdown() {
         executor.shutdown()
     }
-}
-
-private val sessionIdSequence = AtomicLong(0)
-
-/**
- * A fresh session UUID per run. Not [java.util.UUID.randomUUID] directly: that reads
- * `/dev/urandom`, which is unnecessary entropy cost for a value whose only requirement is
- * uniqueness across runs on one device, and this stays trivially host-testable.
- */
-private fun randomSessionId(): String {
-    val unique = sessionIdSequence.incrementAndGet()
-    val nowNs = System.nanoTime()
-    val hex = (unique xor nowNs).toULong().toString(16).padStart(16, '0').takeLast(12)
-    return "00000000-0000-4000-8000-$hex"
 }

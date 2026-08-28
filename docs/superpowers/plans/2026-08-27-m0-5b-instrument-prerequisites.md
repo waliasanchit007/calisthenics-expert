@@ -320,7 +320,7 @@ git commit -m "feat: publish synchronized Android video sessions"
 
 ---
 
-### Task 5: Synthetic purge and tombstone proposal
+### Task 5a: Synthetic purge and tombstone software safety boundary
 
 **Files:**
 - Create: `contracts/tooling/purge_tombstone.v1.schema.json`
@@ -328,22 +328,31 @@ git commit -m "feat: publish synchronized Android video sessions"
 - Create: `reference/tests/test_purge.py`
 - Create: `apps/diagnostic-harness/shared/src/commonMain/kotlin/com/calisthenics/diagnostic/purge/PurgeContracts.kt`
 - Create: `apps/diagnostic-harness/shared/src/androidMain/kotlin/com/calisthenics/diagnostic/purge/AndroidSyntheticPurge.kt`
-- Create: common and Android device tests under `.../purge/`
-- Create: `tools/check_synthetic_purge_run.py`
-- Modify: storage registry, root factory, M05 admission, repository guard, `Makefile`
+- Create: common/JVM and thin Android adapter tests under `.../purge/`
+- Modify: storage registry, root factory, M05 admission, repository guard
 
 **Interfaces:**
 - `PurgeState`: `INTENT_RECORDED`, `PURGE_INCOMPLETE`, `PURGE_COMPLETE`.
 - `purge(sessionId, operationId): PurgeRecord` resolves targets only through Task 1's registry.
 - Tombstone carries proposal status, synthetic session ID, pseudonym class only, operation ID/sequence, registry digest, location IDs/results, post-scan result, and producer SHA—no precise timestamp or identity value.
 
-- [ ] **Step 1: Write RED schema, traversal, and transaction tests**
-- [ ] **Step 2: Verify RED with Python, JVM, and Android-device focused commands**
-- [ ] **Step 3: Implement intent-first tombstone and registry-only deletion**
-- [ ] **Step 4: Add parent fsync, independent post-scan, idempotency, and tombstoned-ID admission fence**
-- [ ] **Step 5: Rehearse against a complete short synthetic video session**
-- [ ] **Step 6: Mutate traversal/prefix/symlink/unknown-root/delete/fsync/post-scan/re-admission conjuncts; require the stable PURGE code**
-- [ ] **Step 7: Run `make verify`, JVM/device purge gates, exact diff inspection, and commit `feat: rehearse synthetic purge with durable tombstones`**
+- [x] **Step 1: Amend the tracked design/plan and write RED schema, traversal, transaction, fence, root-invariant, and session-ID tests**
+- [x] **Step 2: Verify RED with Python, JVM, and Android compilation-focused commands**
+- [x] **Step 3: Implement intent-first append-only tombstone, registry-only deletion, exact inventory/post-scan, and idempotent recovery through a narrow `PurgeFilesystem` port**
+- [x] **Step 4: Add a permanent tombstone-backed writer-open/final-rename admission fence, typed refusal, canonical registry digest binding, safe storage layout, and secure 48-bit reserved-ID generation**
+- [x] **Step 5: Mutate ordering/crash, traversal/absolute/prefix/symlink/unknown-root/type-change, non-vacuity/post-scan, fence, registry digest, reserved-ID/random-source, sanitization/bounds, and recursive-delete guard conjuncts; each must turn its focused test red**
+- [x] **Step 6: Run focused Python/JVM/Android compilation, Ruff/mypy, iOS common compilation, full `make verify` when feasible, repository guard, and exact diff inspection. Do not commit in this task.**
+
+### Task 5b: Complete short video-enabled physical purge rehearsal (blocked)
+
+**Dependency:** Task 4 contract release, Android synchronized publication, and an authorized physical
+S25. This is not authorized by Task 5a.
+
+- [ ] Create and rehearse one complete short video-enabled synthetic session; a pose-only run is invalid.
+- [ ] Independently inspect the app-private post-scan through host `run-as`, then add the host checker,
+  final physical Make target/build-contract, and pending/recorded evidence ledger validation.
+- [ ] Record physical evidence only after the exact final binary and Task 4 artifacts are available; never
+  substitute emulator evidence or claim Task 5a as a rehearsal.
 
 ---
 

@@ -2,6 +2,7 @@ package com.calisthenics.diagnostic.export
 
 import java.nio.file.Files
 import java.nio.file.Path
+import java.security.MessageDigest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.jsonArray
@@ -37,6 +38,14 @@ class StorageLocationRegistryProjectionTest {
             assertEquals(location.boolean("tombstone_eligible"), projected.tombstoneEligible)
             assertEquals(location.boolean("post_purge_scan"), projected.postPurgeScan)
         }
+    }
+
+    @Test
+    fun canonicalRegistryDigestBindsTheExactCommittedBytes() {
+        val bytes = Files.readAllBytes(repositoryRoot().resolve("docs/protocols/storage-location-registry.m05b.v1.json"))
+        val actual = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+
+        assertEquals(actual, StorageLocationRegistry.CANONICAL_REGISTRY_SHA256)
     }
 
     private fun Map<String, kotlinx.serialization.json.JsonElement>.string(key: String): String =

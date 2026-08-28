@@ -84,4 +84,20 @@ class StorageLocationRegistryTest {
             }.isFailure,
         )
     }
+
+    @Test
+    fun storageRootsRejectAParentThatOnlySharesTheFilesDirPrefix() {
+        assertTrue(
+            runCatching {
+                StorageRoots(
+                    filesDir = "/files",
+                    diagnosticHarnessRoot = "/files-copy/diagnostic-harness",
+                    stagingRoot = "/files-copy/diagnostic-harness/staging",
+                    exportsRoot = "/files-copy/diagnostic-harness/exports",
+                    transferStagingRoot = "/files-copy/diagnostic-harness/transfer-staging",
+                    tombstoneRoot = "/files-copy/diagnostic-harness/tombstones",
+                )
+            }.isFailure,
+        )
+    }
 }

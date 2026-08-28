@@ -2,6 +2,10 @@ package com.calisthenics.diagnostic.export
 
 import com.calisthenics.diagnostic.contract.SessionManifest
 import com.calisthenics.diagnostic.contract.encodeManifest
+import com.calisthenics.diagnostic.purge.PurgeSessionId
+import com.calisthenics.diagnostic.purge.SessionAdmissionDecision
+import com.calisthenics.diagnostic.purge.SessionAdmissionFence
+import com.calisthenics.diagnostic.purge.SessionAdmissionPhase
 import com.calisthenics.diagnostic.session.EmittedRecordSink
 import com.calisthenics.diagnostic.session.FinalizationResult
 import com.calisthenics.diagnostic.session.SealedSessionSnapshot
@@ -32,6 +36,7 @@ class SessionExporter(
         sessionId = manifestTemplate.sessionId,
         monotonicNowNs = monotonicNowNs,
     ),
+    private val admissionFence: SessionAdmissionFence = SessionAdmissionFence { _, _ -> SessionAdmissionDecision.Admitted },
     private val deferAbortUntilFence: Boolean = false,
 ) : SessionFinalizer, SessionAborter, EmittedRecordSink, TelemetrySink, DeferredSessionAbort {
     private var finalizationResult: FinalizationResult? = null
@@ -39,9 +44,14 @@ class SessionExporter(
     private var nextTelemetrySequence = 0L
     private var lastFixedTelemetrySequence: Long? = null
     private val telemetryMutex = Mutex()
+    private val writerOpenAdmission = checkAdmission(SessionAdmissionPhase.WRITER_OPEN)
+
+    /** A typed refusal is observable by composition without a constructor exception or a staging write. */
+    val startRefusalCode: String?
+        get() = (writerOpenAdmission as? SessionAdmissionDecision.Refused)?.code
 
     init {
-        writer.open()
+        if (writerOpenAdmission is SessionAdmissionDecision.Admitted) writer.open()
     }
 
     override fun appendPose(record: com.calisthenics.diagnostic.contract.RawPoseFrame) {
@@ -103,6 +113,9 @@ class SessionExporter(
 
     override fun finalize(snapshot: SealedSessionSnapshot): FinalizationResult {
         finalizationResult?.let { return it }
+        startRefusalCode?.let { code ->
+            return failed(snapshot, code).also { finalizationResult = it }
+        }
 
         val sealedArtifacts = try {
             writer.seal(FinalSessionAggregates(snapshot.counts))
@@ -140,6 +153,10 @@ class SessionExporter(
 
             val destination = "${storage.roots.exportsRoot}/${manifest.sessionId.value}"
             if (storage.destinationExists(destination)) throw DestinationAlreadyExists
+            val finalAdmission = checkAdmission(SessionAdmissionPhase.FINAL_PUBLISH)
+            if (finalAdmission is SessionAdmissionDecision.Refused) {
+                throw AdmissionRefused(finalAdmission.code)
+            }
             storage.renameNoReplace(attempt, destination)
             renamed = true
             try {
@@ -152,7 +169,7 @@ class SessionExporter(
                     detail = sanitizedDetail("rename committed; uncertain durability"),
                 )
             }
-        } catch (_: Throwable) {
+        } catch (error: Throwable) {
             if (renamed) {
                 FinalizationResult.Failed(
                     sealedSnapshot = snapshot,
@@ -161,10 +178,10 @@ class SessionExporter(
                 )
             } else {
                 abandon(attempt, snapshot)
-                val code = if (reconciliationFailed) {
-                    "stream_reconciliation_failed"
-                } else {
-                    "export_failed_before_publish"
+                val code = when {
+                    reconciliationFailed -> "stream_reconciliation_failed"
+                    error is AdmissionRefused -> error.code
+                    else -> "export_failed_before_publish"
                 }
                 failed(snapshot, code)
             }
@@ -191,6 +208,13 @@ class SessionExporter(
     private fun failed(snapshot: SealedSessionSnapshot, code: String): FinalizationResult.Failed =
         FinalizationResult.Failed(snapshot, code, sanitizedDetail(code))
 
+    private fun checkAdmission(phase: SessionAdmissionPhase): SessionAdmissionDecision {
+        val syntheticSession = PurgeSessionId.parseOrNull(manifestTemplate.sessionId.value)
+            ?: return SessionAdmissionDecision.Admitted
+        return runCatching { admissionFence.check(syntheticSession, phase) }
+            .getOrElse { SessionAdmissionDecision.Refused("PURGE.SESSION_TOMBSTONED") }
+    }
+
     private fun sanitizedDetail(reason: String): String =
         "$reason for pseudonym=${manifestTemplate.participantPseudonymId}"
 
@@ -199,4 +223,6 @@ class SessionExporter(
     private object StreamReconciliationMismatch : IllegalStateException()
 
     private object DestinationAlreadyExists : IllegalStateException()
+
+    private class AdmissionRefused(val code: String) : IllegalStateException(code)
 }

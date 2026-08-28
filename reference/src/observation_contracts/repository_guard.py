@@ -97,6 +97,19 @@ _ANDROID_STORAGE_BYPASS_RE = re.compile(
     rb"(?:\b(?:context|applicationContext)\.filesDir\b|\.getDir\s*\(|"
     rb"\bStorageRoots\s*\(|diagnostic-harness)"
 )
+_ANDROID_PURGE_SOURCE_RE = re.compile(
+    r"^apps/diagnostic-harness/(?:androidApp/src/main|shared/src/androidMain)/.+/purge/.+\.kt$"
+)
+_ANDROID_UNSAFE_PURGE_DELETE_RE = re.compile(
+    rb"(?:\bdeleteRecursively\s*\(|\bFOLLOW_LINKS\b|\bFiles\.walkFileTree\s*\()"
+)
+_M05_SESSION_ID_GENERATOR_PATH = (
+    "apps/diagnostic-harness/androidApp/src/main/kotlin/"
+    "com/calisthenics/diagnostic/composition/M05SessionIdGenerator.kt"
+)
+_INSECURE_SESSION_ID_ENTROPY_RE = re.compile(
+    rb"(?:\bjava\.util\.Random\b|\bRandom\s*\(|\bSystem\.(?:nanoTime|currentTimeMillis)\b|\bAtomic(?:Integer|Long)\b)"
+)
 _POSITIVE_SESSION_ARTIFACT_NAMES = frozenset(
     {
         "manifest.json",
@@ -196,6 +209,14 @@ def guard_repository(root: Path, mode: GuardMode = "tracked") -> list[Validation
         if storage_factory_issue is not None:
             issues.append(storage_factory_issue)
             continue
+        unsafe_purge_issue = _android_purge_delete_issue(source, relative_path)
+        if unsafe_purge_issue is not None:
+            issues.append(unsafe_purge_issue)
+            continue
+        session_id_entropy_issue = _m05_session_id_entropy_issue(source, relative_path)
+        if session_id_entropy_issue is not None:
+            issues.append(session_id_entropy_issue)
+            continue
         group = _fixture_group(relative_path)
         if group is not None:
             admission = fixture_admissions.get(group.root, False)
@@ -233,6 +254,34 @@ def _android_storage_factory_issue(
     return _content_issue_for(
         relative_path,
         "Android app-private roots must be resolved through AndroidStorageRoots",
+    )
+
+
+def _android_purge_delete_issue(
+    source: _RepositoryContent, relative_path: str
+) -> ValidationIssue | None:
+    if _ANDROID_PURGE_SOURCE_RE.fullmatch(relative_path) is None:
+        return None
+    prefix = source.read_prefix(relative_path)
+    if prefix is None or _ANDROID_UNSAFE_PURGE_DELETE_RE.search(prefix) is None:
+        return None
+    return _content_issue_for(
+        relative_path,
+        "Android purge code must use no-follow explicit bottom-up deletion",
+    )
+
+
+def _m05_session_id_entropy_issue(
+    source: _RepositoryContent, relative_path: str
+) -> ValidationIssue | None:
+    if relative_path != _M05_SESSION_ID_GENERATOR_PATH:
+        return None
+    prefix = source.read_prefix(relative_path)
+    if prefix is None or _INSECURE_SESSION_ID_ENTROPY_RE.search(prefix) is None:
+        return None
+    return _content_issue_for(
+        relative_path,
+        "M0.5 session IDs must use SecureRandom-derived 48-bit suffixes",
     )
 
 

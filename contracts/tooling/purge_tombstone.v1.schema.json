@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://calisthenics-expert.local/contracts/tooling/purge_tombstone.v1.schema.json",
+  "title": "M0.5B draft synthetic purge tombstone",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "purge_tombstone_schema_version",
+    "policy_status",
+    "deletion_scope",
+    "session_id",
+    "pseudonym_class",
+    "operation_id",
+    "operation_sequence",
+    "state",
+    "registry_version",
+    "registry_sha256",
+    "locations",
+    "previous_record_sha256",
+    "producer_git_sha"
+  ],
+  "properties": {
+    "purge_tombstone_schema_version": {"const": "1.0.0-draft"},
+    "policy_status": {"const": "proposal"},
+    "deletion_scope": {"const": "registered_device_roots_only"},
+    "session_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "pseudonym_class": {"const": "synthetic_m05"},
+    "operation_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "operation_sequence": {"type": "integer", "minimum": 1, "maximum": 64},
+    "state": {"enum": ["INTENT_RECORDED", "PURGE_INCOMPLETE", "PURGE_COMPLETE"]},
+    "registry_version": {"const": "1.0.0"},
+    "registry_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "locations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 3,
+      "items": {"$ref": "#/$defs/location"}
+    },
+    "previous_record_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "producer_git_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+  },
+  "$defs": {
+    "inventory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entries_scanned", "owned_entries", "owned_files", "owned_bytes"],
+      "properties": {
+        "entries_scanned": {"type": "integer", "minimum": 0, "maximum": 1000000},
+        "owned_entries": {"type": "integer", "minimum": 0, "maximum": 1000000},
+        "owned_files": {"type": "integer", "minimum": 0, "maximum": 1000000},
+        "owned_bytes": {"type": "integer", "minimum": 0, "maximum": 1073741824}
+      }
+    },
+    "post_scan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entries_scanned", "owned_remaining"],
+      "properties": {
+        "entries_scanned": {"type": "integer", "minimum": 0, "maximum": 1000000},
+        "owned_remaining": {"type": "integer", "minimum": 0, "maximum": 1000000}
+      }
+    },
+    "location": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["location_id", "pre_inventory", "terminal_result", "post_scan"],
+      "properties": {
+        "location_id": {
+          "enum": ["device_export", "device_staging", "device_transfer_staging"]
+        },
+        "pre_inventory": {"anyOf": [{"$ref": "#/$defs/inventory"}, {"type": "null"}]},
+        "terminal_result": {
+          "enum": ["pending", "deleted", "already_absent", "blocked", "delete_failed", "post_scan_residue"]
+        },
+        "post_scan": {"anyOf": [{"$ref": "#/$defs/post_scan"}, {"type": "null"}]}
+      }
+    }
+  }
+}

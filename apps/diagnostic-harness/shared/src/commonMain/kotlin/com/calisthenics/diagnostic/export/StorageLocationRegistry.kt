@@ -40,6 +40,8 @@ data class StorageLocation(
 
 object StorageLocationRegistry {
     const val VERSION: String = "1.0.0"
+    /** SHA-256 over the exact committed registry bytes, not a reconstructed Kotlin projection. */
+    const val CANONICAL_REGISTRY_SHA256: String = "ffb29f685813043576c89cfd3021d2c77fdaabdeddb33319057d517c34da796f"
 
     val entries: List<StorageLocation> = listOf(
         location(StorageLocationId.DEVICE_EXPORT, StorageOwner.ANDROID_APP, "exports", ArtifactClass.SESSION_BUNDLE, publishable = true, devicePurge = true, tombstoneEligible = true, postPurgeScan = true),
