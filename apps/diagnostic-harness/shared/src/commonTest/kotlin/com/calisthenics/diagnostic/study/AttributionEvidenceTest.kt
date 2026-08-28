@@ -7,8 +7,11 @@ import com.calisthenics.diagnostic.telemetry.PipelineStage
 import com.calisthenics.diagnostic.telemetry.PipelineStageEvent
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.long
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -18,7 +21,7 @@ class AttributionEvidenceTest {
     @Test
     fun absentPhysicalS25EvidenceRendersPendingInsteadOfAPass() {
         val validation = validateAttributionEvidence(null)
-        val rendered = Json.parseToJsonElement(renderAttributionEvidence(validation)).jsonObject
+        val rendered = Json.parseToJsonElement(renderAttributionEvidence(null)).jsonObject
 
         assertEquals(AttributionEvidenceStatus.PENDING, validation.status)
         assertFalse(validation.satisfiesGate)
@@ -30,7 +33,7 @@ class AttributionEvidenceTest {
     @Test
     fun hostValidationRequiresFixedThirtyFpsRequestDistinctTenFifteenThirtyAdmissionAndReconciledEvents() {
         val evidence = PhysicalAttributionEvidence(
-            source = AttributionEvidenceSource("physical_device", "samsung", "SM-S938B", ""),
+            source = source(),
             runs = listOf(run(10, 10), run(15, 15), run(30, 30)),
         )
 
@@ -64,7 +67,7 @@ class AttributionEvidenceTest {
     @Test
     fun malformedCadenceKeysBlockWithoutThrowing() {
         val validEvidence = PhysicalAttributionEvidence(
-            source = AttributionEvidenceSource("physical_device", "samsung", "SM-S938B", ""),
+            source = source(),
             runs = listOf(run(10, 10), run(15, 15), run(30, 30)),
         )
 
@@ -89,7 +92,7 @@ class AttributionEvidenceTest {
     @Test
     fun mixedArtifactStageSequenceMayContainGaps() {
         val evidence = PhysicalAttributionEvidence(
-            source = AttributionEvidenceSource("physical_device", "samsung", "SM-S938B", ""),
+            source = source(),
             runs = listOf(
                 run(10, 10, 40).withMixedArtifactSequenceGap(),
                 run(15, 15, 40),
@@ -106,7 +109,7 @@ class AttributionEvidenceTest {
     @Test
     fun cadenceAdmissionUsesDeliveredCallbackRatesNotRawCounts() {
         val evidence = PhysicalAttributionEvidence(
-            source = AttributionEvidenceSource("physical_device", "samsung", "SM-S938B", ""),
+            source = source(),
             runs = listOf(
                 run(10, admittedInferenceCount = 20, deliveredCallbacks = 100),
                 run(15, admittedInferenceCount = 15, deliveredCallbacks = 50),
@@ -123,7 +126,7 @@ class AttributionEvidenceTest {
     @Test
     fun zeroDeliveryRunBlocksCadenceAdmission() {
         val evidence = PhysicalAttributionEvidence(
-            source = AttributionEvidenceSource("physical_device", "samsung", "SM-S938B", ""),
+            source = source(),
             runs = listOf(
                 run(10, admittedInferenceCount = 0, deliveredCallbacks = 0),
                 run(15, admittedInferenceCount = 1, deliveredCallbacks = 10),
@@ -140,7 +143,7 @@ class AttributionEvidenceTest {
     @Test
     fun equalAdmissionRatesAreNotStrictlyDistinct() {
         val evidence = PhysicalAttributionEvidence(
-            source = AttributionEvidenceSource("physical_device", "samsung", "SM-S938B", ""),
+            source = source(),
             runs = listOf(
                 run(10, admittedInferenceCount = 1, deliveredCallbacks = 2),
                 run(15, admittedInferenceCount = 2, deliveredCallbacks = 4),
@@ -153,6 +156,80 @@ class AttributionEvidenceTest {
         assertEquals(AttributionEvidenceStatus.BLOCKED, result.status)
         assertTrue("TELEMETRY.CADENCE_ADMISSION_NOT_DISTINCT" in result.blockingCodes)
     }
+
+    @Test
+    fun reservedSyntheticIdsAreNotLimitedToTheThreeFixtureIds() {
+        val evidence = PhysicalAttributionEvidence(
+            source = source(),
+            runs = listOf(run(10, 10), run(15, 15), run(30, 30)).mapIndexed { index, value ->
+                if (index == 0) value.copy(
+                    sessionId = "00000000-0000-4000-8000-deadbeefcafe",
+                    exportRelativePath = "exports/00000000-0000-4000-8000-deadbeefcafe",
+                ) else value
+            },
+        )
+
+        val result = validateAttributionEvidence(evidence)
+
+        assertEquals(AttributionEvidenceStatus.RECORDED, result.status)
+        assertTrue(result.satisfiesGate)
+    }
+
+    @Test
+    fun deviceIdentityBuildAndApiAreRequiredAndRenderedWithoutRawFingerprint() {
+        val evidence = PhysicalAttributionEvidence(source(), listOf(run(10, 10), run(15, 15), run(30, 30)))
+        val rendered = Json.parseToJsonElement(renderAttributionEvidence(evidence)).jsonObject
+
+        assertEquals("samsung/SM-S938B/pa3q/pa3qxins", rendered.getValue("device").jsonObject.getValue("device_identity").jsonPrimitive.content)
+        assertEquals(36, rendered.getValue("device").jsonObject.getValue("api_level").jsonPrimitive.int)
+        assertEquals("pa3q:16/build:user/release-keys", rendered.getValue("device").jsonObject.getValue("os_build").jsonPrimitive.content)
+        assertFalse("device_fingerprint" in rendered.toString())
+
+        val incomplete = validateAttributionEvidence(
+            evidence.copy(source = source().copy(deviceIdentity = "", apiLevel = 0, osBuild = "")),
+        )
+        assertTrue("TELEMETRY.DEVICE_IDENTITY_INCOMPLETE" in incomplete.blockingCodes)
+    }
+
+    @Test
+    fun overflowingAccountingIsBlockedWithoutOverflowingTheRatioCalculation() {
+        val valid = listOf(run(10, 10), run(15, 15), run(30, 30))
+        val overflowing = valid.mapIndexed { index, value ->
+            if (index == 0) value.copy(
+                callbackAccounting = DeliveredCallbackAccounting(
+                    deliveredCallbacks = Long.MAX_VALUE,
+                    unclosedCallbacks = 0L,
+                    counts = mapOf(
+                        CallbackTerminalDisposition.INFERENCE_COMPLETED to Long.MAX_VALUE,
+                        CallbackTerminalDisposition.INFERENCE_FAILED to 1L,
+                    ),
+                ),
+            ) else value
+        }
+
+        val result = validateAttributionEvidence(PhysicalAttributionEvidence(source(), overflowing))
+        val rendered = Json.parseToJsonElement(
+            renderAttributionEvidence(PhysicalAttributionEvidence(source(), overflowing)),
+        ).jsonObject
+
+        assertEquals(AttributionEvidenceStatus.BLOCKED, result.status)
+        assertTrue("TELEMETRY.CALLBACK_ACCOUNTING_INVALID" in result.blockingCodes)
+        assertEquals("blocked", rendered.getValue("physical_evidence_status").jsonPrimitive.content)
+        assertEquals(
+            0L,
+            rendered.getValue("runs").jsonArray.first().jsonObject.getValue("admitted_callbacks").jsonPrimitive.long,
+        )
+    }
+
+    private fun source() = AttributionEvidenceSource(
+        deviceClass = "physical_device",
+        deviceIdentity = "samsung/SM-S938B/pa3q/pa3qxins",
+        manufacturer = "samsung",
+        model = "SM-S938B",
+        apiLevel = 36,
+        osBuild = "pa3q:16/build:user/release-keys",
+        marketingName = "",
+    )
 
     private fun run(
         configuredInferenceFps: Int,
@@ -185,6 +262,28 @@ class AttributionEvidenceTest {
                     CallbackTerminalDisposition.INFERENCE_COMPLETED to admittedInferenceCount.toLong(),
                     CallbackTerminalDisposition.CADENCE_SELECTION to cadenceSelections.toLong(),
                 ),
+            ),
+            sessionId = "00000000-0000-4000-8000-00000000000${when (configuredInferenceFps) {
+                10 -> 1
+                15 -> 2
+                else -> 3
+            }}",
+            exportRelativePath = "exports/00000000-0000-4000-8000-00000000000${when (configuredInferenceFps) {
+                10 -> 1
+                15 -> 2
+                else -> 3
+            }}",
+            manifestSha256 = "a".repeat(64),
+            framesSha256 = "b".repeat(64),
+            telemetrySha256 = "c".repeat(64),
+            identity = AttributionRunIdentity(
+                appGitSha = "d".repeat(40),
+                probeGitSha = "e".repeat(40),
+                apkSha256 = "0".repeat(64),
+                modelSha256 = "f".repeat(64),
+                runtimeVersion = "runtime",
+                backendVersion = "backend",
+                delegate = "CPU",
             ),
         )
     }

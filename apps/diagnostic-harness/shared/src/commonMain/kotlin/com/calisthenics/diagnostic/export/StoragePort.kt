@@ -2,6 +2,9 @@ package com.calisthenics.diagnostic.export
 
 import com.calisthenics.diagnostic.contract.Counts
 import com.calisthenics.diagnostic.contract.Uuid
+import com.calisthenics.diagnostic.hash.Sha256Digest
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
 
 /**
  * The roots are deliberately expressed as one app-private filesDir tree. Staging and exports
@@ -58,6 +61,7 @@ enum class StorageFile {
 enum class DurableArtifact {
     POSE_STREAM,
     TELEMETRY,
+    RUN_ADMISSION,
 }
 
 data class ArtifactReconciliation(
@@ -66,6 +70,21 @@ data class ArtifactReconciliation(
     val recordCount: Long,
     val posePresentCount: Long?,
 )
+
+internal fun reconcileRunAdmissionBytes(bytes: ByteArray): ArtifactReconciliation {
+    if (bytes.isEmpty()) return ArtifactReconciliation(0L, Sha256Digest.hex(bytes), 0L, null)
+    try {
+        Json.parseToJsonElement(bytes.decodeToString()).jsonObject
+    } catch (error: Throwable) {
+        throw DurableReconciliationException("run admission is not exactly one JSON object")
+    }
+    return ArtifactReconciliation(
+        byteLength = bytes.size.toLong(),
+        sha256 = Sha256Digest.hex(bytes),
+        recordCount = 1L,
+        posePresentCount = null,
+    )
+}
 
 data class StreamReconciliation(
     val lineCount: Long,

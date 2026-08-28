@@ -207,6 +207,31 @@ abstract class StoragePortConformanceSuite {
     }
 
     @Test
+    fun runAdmissionIsOneExactJsonObjectRatherThanNdjson() {
+        val port = harness().freshPort()
+        val attempt = port.createStagingAttempt(Uuid(SESSION_ID))
+        port.appendArtifact(attempt, DurableArtifact.RUN_ADMISSION, "{\"admitted\":true}".encodeToByteArray())
+        port.flushArtifact(attempt, DurableArtifact.RUN_ADMISSION)
+        port.fsyncArtifact(attempt, DurableArtifact.RUN_ADMISSION)
+
+        assertEquals(1L, port.reconcileArtifact(attempt, DurableArtifact.RUN_ADMISSION).recordCount)
+
+        val invalidPort = harness().freshPort()
+        val invalidAttempt = invalidPort.createStagingAttempt(Uuid(SESSION_ID))
+        invalidPort.appendArtifact(
+            invalidAttempt,
+            DurableArtifact.RUN_ADMISSION,
+            "{\"admitted\":true}{\"admitted\":false}".encodeToByteArray(),
+        )
+        invalidPort.flushArtifact(invalidAttempt, DurableArtifact.RUN_ADMISSION)
+        invalidPort.fsyncArtifact(invalidAttempt, DurableArtifact.RUN_ADMISSION)
+
+        assertFailsWith<DurableReconciliationException> {
+            invalidPort.reconcileArtifact(invalidAttempt, DurableArtifact.RUN_ADMISSION)
+        }
+    }
+
+    @Test
     fun stagingAndExportsRootsAreLexicallyContainedAndDistinct() {
         val port = harness().freshPort()
 

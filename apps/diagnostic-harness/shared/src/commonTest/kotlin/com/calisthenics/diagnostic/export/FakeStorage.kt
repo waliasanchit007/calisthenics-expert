@@ -114,6 +114,7 @@ class FakeStorage(
 
     override fun reconcileArtifact(attempt: StagingAttempt, artifact: DurableArtifact): ArtifactReconciliation {
         val bytes = fakeAttempt(attempt).artifactBytes[artifact] ?: ByteArray(0)
+        if (artifact == DurableArtifact.RUN_ADMISSION) return reconcileRunAdmissionBytes(bytes)
         val lines = bytes.decodeToString().lineSequence().filter { it.isNotEmpty() }.toList()
         return ArtifactReconciliation(
             byteLength = bytes.size.toLong(),
@@ -121,6 +122,7 @@ class FakeStorage(
             recordCount = when (artifact) {
                 DurableArtifact.POSE_STREAM -> lines.size.toLong()
                 DurableArtifact.TELEMETRY -> reconcileTelemetry(bytes)
+                DurableArtifact.RUN_ADMISSION -> error("run admission reconciliation returned above")
             },
             posePresentCount = if (artifact == DurableArtifact.POSE_STREAM) {
                 lines.count { decodeFrame("$it\n").posePresent }.toLong()

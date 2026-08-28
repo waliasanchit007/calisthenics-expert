@@ -16,17 +16,19 @@ import kotlinx.coroutines.sync.withLock
  * artifacts to the final publication coordinator; this class does not own manifest construction.
  */
 interface DurableSessionWriter {
+    val sessionId: Uuid
     val state: DurableWriterState
     fun open()
     fun appendPose(record: RawPoseFrame)
     fun appendTelemetry(encodedRecord: String)
+    fun appendAdmissionArtifact(exactBytes: ByteArray)
     fun seal(finalAggregates: FinalSessionAggregates): SealedArtifacts
     fun abort(reason: String, counts: Counts)
 }
 
 class DefaultDurableSessionWriter(
     private val storage: StoragePort,
-    private val sessionId: Uuid,
+    override val sessionId: Uuid,
     private val monotonicNowNs: () -> Long = { 0L },
 ) : DurableSessionWriter {
     private val writerMutex = Mutex()
@@ -51,6 +53,7 @@ class DefaultDurableSessionWriter(
     private var telemetryCount = 0L
     private var durableTelemetryCount = 0L
     private var lastDurableTelemetrySequence = -1L
+    private var admissionWritten = false
 
     override fun open() = serialized {
         requireState(DurableWriterState.NEW)
@@ -110,6 +113,22 @@ class DefaultDurableSessionWriter(
         }
     }
 
+    override fun appendAdmissionArtifact(exactBytes: ByteArray) = serialized {
+        requireState(DurableWriterState.OPEN)
+        check(!admissionWritten) { "run admission was already written for this attempt" }
+        require(exactBytes.isNotEmpty()) { "run admission bytes must not be empty" }
+        val currentAttempt = requireNotNull(attempt)
+        try {
+            storage.appendArtifact(currentAttempt, DurableArtifact.RUN_ADMISSION, exactBytes)
+            storage.flushArtifact(currentAttempt, DurableArtifact.RUN_ADMISSION)
+            storage.fsyncArtifact(currentAttempt, DurableArtifact.RUN_ADMISSION)
+            admissionWritten = true
+        } catch (error: Throwable) {
+            mutableState = DurableWriterState.FAILED
+            throw storageFailure("appendAdmissionArtifact", error)
+        }
+    }
+
     override fun seal(finalAggregates: FinalSessionAggregates): SealedArtifacts = serialized {
         requireState(DurableWriterState.OPEN)
         mutableState = DurableWriterState.SEALING
@@ -126,12 +145,17 @@ class DefaultDurableSessionWriter(
             val finalCheckpoint = checkpoint(finalAggregates.counts)
             storage.replaceCheckpoint(currentAttempt, encodeCheckpoint(finalCheckpoint))
             val reconciled = buildList {
+                if (admissionWritten) {
+                    add(SealedArtifact(DurableArtifact.RUN_ADMISSION, storage.reconcileArtifact(currentAttempt, DurableArtifact.RUN_ADMISSION)))
+                }
                 add(SealedArtifact(DurableArtifact.POSE_STREAM, storage.reconcileArtifact(currentAttempt, DurableArtifact.POSE_STREAM)))
                 if (telemetryCount > 0) {
                     add(SealedArtifact(DurableArtifact.TELEMETRY, storage.reconcileArtifact(currentAttempt, DurableArtifact.TELEMETRY)))
                 }
             }
-            val poseReconciliation = reconciled.first().reconciliation
+            val poseReconciliation = reconciled.single {
+                it.artifact == DurableArtifact.POSE_STREAM
+            }.reconciliation
             if (poseReconciliation.recordCount != poseCount) {
                 throw DurableReconciliationException("reconciled pose count does not match durable pose count")
             }

@@ -15,8 +15,8 @@
     "cadence_fps": {"enum": [10, 15, 30]},
     "attempt_sequence": {"type": "integer", "minimum": 1},
     "predecessor_status": {"enum": ["not_applicable", "completed", "blocked", "unavailable"]},
-    "envelope_path": {"type": "string", "minLength": 1},
-    "order_path": {"type": "string", "minLength": 1},
+    "envelope_path": {"$ref": "#/$defs/relative_path"},
+    "order_path": {"$ref": "#/$defs/relative_path"},
     "envelope_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "order_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "evaluated_conjunct_ids": {"type": "array", "uniqueItems": true, "minItems": 1, "items": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*(?:\\.[A-Z][A-Z0-9_]*)?$"}},
@@ -26,6 +26,8 @@
   },
   "$defs": {
     "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "relative_path": {"type": "string", "pattern": "^(?![/\\\\])(?![A-Za-z]:)(?!.*(?:^|[/\\\\])\\.\\.(?:[/\\\\]|$))[^\\u0000]+$"},
+    "battery_observation": {"type": "object", "additionalProperties": false, "required": ["unit", "value"], "properties": {"unit": {"enum": ["percent", "microamp_hours"]}, "value": {"type": "number"}}},
     "observed_start": {
       "type": "object", "additionalProperties": false,
       "required": ["device", "power", "connectivity", "thermal", "ambient", "display"],
@@ -34,10 +36,10 @@
       }
     },
     "device": {"type": "object", "additionalProperties": false, "required": ["device_class", "manufacturer", "model", "device_build", "api_level", "app_sha256", "model_sha256", "runtime_version", "delegate", "preprocessing_version", "device_unit_digest"], "properties": {"device_class": {"type": ["string", "null"]}, "manufacturer": {"type": ["string", "null"]}, "model": {"type": ["string", "null"]}, "device_build": {"type": ["string", "null"]}, "api_level": {"type": ["integer", "null"]}, "app_sha256": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]}, "model_sha256": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]}, "runtime_version": {"type": ["string", "null"]}, "delegate": {"type": ["string", "null"]}, "preprocessing_version": {"type": ["string", "null"]}, "device_unit_digest": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]}}},
-    "power": {"type": "object", "additionalProperties": false, "required": ["charging", "power_source", "host_battery_override_rejected"], "properties": {"charging": {"type": ["boolean", "null"]}, "power_source": {"type": ["string", "null"]}, "host_battery_override_rejected": {"type": ["boolean", "null"]}}},
+    "power": {"type": "object", "additionalProperties": false, "required": ["charging", "power_source", "host_battery_override_rejected", "power_save_mode", "battery_observation", "device_idle_mode"], "properties": {"charging": {"type": ["boolean", "null"]}, "power_source": {"type": ["string", "null"]}, "host_battery_override_rejected": {"type": ["boolean", "null"]}, "power_save_mode": {"type": ["boolean", "null"]}, "battery_observation": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/battery_observation"}]}, "device_idle_mode": {"type": ["boolean", "null"]}}},
     "connectivity": {"type": "object", "additionalProperties": false, "required": ["host_adb_transport", "app_transport", "network_identity_persisted"], "properties": {"host_adb_transport": {"type": ["string", "null"]}, "app_transport": {"type": ["string", "null"]}, "network_identity_persisted": {"type": ["boolean", "null"]}}},
-    "thermal": {"type": "object", "additionalProperties": false, "required": ["initial_status", "battery_temperature_min_c", "battery_temperature_max_c", "battery_temperature_range_c"], "properties": {"initial_status": {"type": ["string", "null"]}, "battery_temperature_min_c": {"type": ["number", "null"]}, "battery_temperature_max_c": {"type": ["number", "null"]}, "battery_temperature_range_c": {"type": ["number", "null"]}}},
-    "ambient": {"type": "object", "additionalProperties": false, "required": ["token", "constancy"], "properties": {"token": {"type": ["string", "null"]}, "constancy": {"type": ["string", "null"]}}},
+    "thermal": {"type": "object", "additionalProperties": false, "required": ["initial_status", "battery_temperature_c"], "properties": {"initial_status": {"type": ["string", "null"]}, "battery_temperature_c": {"type": ["number", "null"]}}},
+    "ambient": {"type": "object", "additionalProperties": false, "required": ["token", "constancy", "constancy_operator_supplied"], "properties": {"token": {"type": ["string", "null"]}, "constancy": {"type": ["string", "null"]}, "constancy_operator_supplied": {"type": ["boolean", "null"]}}},
     "display": {"type": "object", "additionalProperties": false, "required": ["keep_awake", "brightness_mode", "brightness_raw", "brightness_scale_min", "brightness_scale_max"], "properties": {"keep_awake": {"type": ["boolean", "null"]}, "brightness_mode": {"type": ["string", "null"]}, "brightness_raw": {"type": ["number", "null"]}, "brightness_scale_min": {"type": ["number", "null"]}, "brightness_scale_max": {"type": ["number", "null"]}}}
   }
 }

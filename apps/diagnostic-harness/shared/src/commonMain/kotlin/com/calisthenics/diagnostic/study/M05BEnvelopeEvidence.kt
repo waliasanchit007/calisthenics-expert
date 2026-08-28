@@ -8,6 +8,9 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 
 data class M05BStartEnvelope(
+    val envelopeId: String,
+    val procedureVersion: String,
+    val procedureSha256: String,
     val appSha256: String,
     val modelSha256: String,
     val runtimeVersion: String,
@@ -22,27 +25,35 @@ data class M05BStartEnvelope(
     val charging: Boolean,
     val powerSource: String,
     val hostBatteryOverrideRejected: Boolean,
+    val powerSaveMode: Boolean,
+    val baselineBatteryObservation: M05BBatteryObservation?,
     val hostAdbTransport: String,
     val appTransport: String,
     val networkIdentityPersisted: Boolean,
     val ambientToken: String,
     val ambientConstancy: String,
+    val ambientConstancySource: String,
     val keepAwake: Boolean,
     val brightnessMode: String,
     val brightnessRaw: Double,
     val brightnessScaleMin: Double,
     val brightnessScaleMax: Double,
-    val cameraFps: Int = 30,
-    val inferenceCadencesFps: List<Int> = listOf(10, 15, 30),
-    val durationNs: Long = 1_500_000_000_000,
-    val overshootNs: Long = 1_000_000_000,
-    val cooldownMaxDurationNs: Long = 600_000_000_000,
-    val cooldownSamplingIntervalNs: Long = 1_000_000_000,
-    val thermalStatus: String = "none",
-    val batteryTemperatureMinC: Double = 29.0,
-    val batteryTemperatureMaxC: Double = 30.0,
-    val batteryTemperatureRangeC: Double = 1.0,
+    val cameraFps: Int,
+    val inferenceCadencesFps: List<Int>,
+    val durationNs: Long,
+    val overshootNs: Long,
+    val cooldownMaxDurationNs: Long,
+    val cooldownSamplingIntervalNs: Long,
+    val thermalStatus: String,
+    val batteryTemperatureMinC: Double,
+    val batteryTemperatureMaxC: Double,
+    val batteryTemperatureRangeC: Double,
+    val orderPath: String,
+    val orderSha256: String,
+    val producerGitSha: String,
 )
+
+data class M05BBatteryObservation(val unit: String, val value: Double)
 
 data class M05BObservedStart(
     val appSha256: String?,
@@ -59,23 +70,29 @@ data class M05BObservedStart(
     val charging: Boolean?,
     val powerSource: String?,
     val hostBatteryOverrideRejected: Boolean?,
+    val powerSaveMode: Boolean?,
+    val batteryObservation: M05BBatteryObservation?,
+    val deviceIdleMode: Boolean?,
     val hostAdbTransport: String?,
     val appTransport: String?,
     val networkIdentityPersisted: Boolean?,
     val ambientToken: String?,
     val ambientConstancy: String?,
+    val ambientConstancyOperatorSupplied: Boolean?,
     val keepAwake: Boolean?,
     val brightnessMode: String?,
     val brightnessRaw: Double?,
     val brightnessScaleMin: Double?,
     val brightnessScaleMax: Double?,
-    val thermalStatus: String? = "none",
-    val batteryTemperatureMinC: Double? = 29.0,
-    val batteryTemperatureMaxC: Double? = 30.0,
-    val batteryTemperatureRangeC: Double? = 1.0,
+    val thermalStatus: String?,
+    val batteryTemperatureC: Double?,
 )
 
-data class M05BExecutionOrder(val cadencesFps: List<Int>)
+data class M05BExecutionOrder(
+    val cadencesFps: List<Int>,
+    val orderId: String,
+    val producerGitSha: String,
+)
 
 enum class M05BPredecessorStatus { NOT_APPLICABLE, COMPLETED, BLOCKED, UNAVAILABLE }
 
@@ -85,92 +102,141 @@ data class M05BRunAdmissionResult(
     val evaluatedConjunctIds: List<String>,
 )
 
-object M05BRunAdmission {
+internal object M05BRunAdmission {
     val REQUIRED_CONJUNCT_IDS: List<String> = listOf(
         "DEVICE.CLASS", "DEVICE.MANUFACTURER", "DEVICE.MODEL", "DEVICE.BUILD", "DEVICE.API",
         "IDENTITY.APP_DIGEST", "IDENTITY.MODEL_DIGEST", "IDENTITY.RUNTIME", "IDENTITY.DELEGATE",
         "IDENTITY.PREPROCESSING", "IDENTITY.DEVICE_UNIT", "THERMAL.STATUS", "THERMAL.RANGE",
         "POWER.CHARGING", "POWER.SOURCE",
-        "POWER.HOST_OVERRIDE", "CONNECTIVITY.HOST_WIFI_ADB", "CONNECTIVITY.APP_WIFI",
+        "POWER.HOST_OVERRIDE", "POWER.SAVE_MODE", "CONNECTIVITY.HOST_WIFI_ADB", "CONNECTIVITY.APP_WIFI",
         "AMBIENT.TOKEN", "AMBIENT.CONSTANCY", "DISPLAY.KEEP_AWAKE", "DISPLAY.BRIGHTNESS_MODE",
         "DISPLAY.BRIGHTNESS_VALUE", "DISPLAY.BRIGHTNESS_RANGE", "PROTOCOL.CAMERA_FPS",
         "PROTOCOL.CADENCE_SET", "PROTOCOL.DURATION", "PROTOCOL.OVERSHOOT", "PROTOCOL.COOLDOWN",
         "ORDER.PERMITTED", "SESSION.IDENTITY", "SESSION.INPUT_CLASS", "SESSION.NO_PERSON",
     )
 
-    fun evaluate(
+    fun evaluateDerived(
         envelope: M05BStartEnvelope,
         order: M05BExecutionOrder,
         observedStart: M05BObservedStart,
         sessionId: String,
-        cadenceFps: Int,
-        attemptSequence: Int,
-        predecessorStatus: M05BPredecessorStatus,
-        inputClass: String = "empty_scene",
-        operatorAttestedNoPerson: Boolean = true,
+        attemptContext: M05BAttemptContext,
+        inputClass: String,
+        operatorAttestedNoPerson: Boolean,
     ): M05BRunAdmissionResult {
         val blocking = mutableListOf<String>()
-        compare(envelope.appSha256, observedStart.appSha256, "IDENTITY.APP_DIGEST_MISMATCH", blocking)
-        compare(envelope.modelSha256, observedStart.modelSha256, "IDENTITY.MODEL_DIGEST_MISMATCH", blocking)
-        compare(envelope.runtimeVersion, observedStart.runtimeVersion, "IDENTITY.RUNTIME_MISMATCH", blocking)
-        compare(envelope.delegate, observedStart.delegate, "IDENTITY.DELEGATE_MISMATCH", blocking)
-        compare(envelope.preprocessingVersion, observedStart.preprocessingVersion, "IDENTITY.PREPROCESSING_MISMATCH", blocking)
-        compare(envelope.deviceUnitDigest, observedStart.deviceUnitDigest, "IDENTITY.DEVICE_UNIT_MISMATCH", blocking)
-        compare(envelope.deviceClass, observedStart.deviceClass, "DEVICE.CLASS_MISMATCH", blocking)
-        compare(envelope.manufacturer, observedStart.manufacturer, "DEVICE.MANUFACTURER_MISMATCH", blocking)
-        compare(envelope.model, observedStart.model, "DEVICE.MODEL_MISMATCH", blocking)
-        compare(envelope.deviceBuild, observedStart.deviceBuild, "DEVICE.BUILD_MISMATCH", blocking)
-        compare(envelope.apiLevel, observedStart.apiLevel, "DEVICE.API_MISMATCH", blocking)
-        compare(envelope.charging, observedStart.charging, "POWER.CHARGING", blocking)
-        compare(envelope.powerSource, observedStart.powerSource, "POWER.SOURCE_NOT_BATTERY", blocking)
-        compare(envelope.hostBatteryOverrideRejected, observedStart.hostBatteryOverrideRejected, "POWER.HOST_OVERRIDE", blocking)
-        compare(envelope.hostAdbTransport, observedStart.hostAdbTransport, "CONNECTIVITY.HOST_NOT_WIFI_ADB", blocking)
-        compare(envelope.appTransport, observedStart.appTransport, "CONNECTIVITY.APP_NOT_WIFI", blocking)
-        compare(envelope.networkIdentityPersisted, observedStart.networkIdentityPersisted, "CONNECTIVITY.NETWORK_IDENTITY", blocking)
-        compare(envelope.ambientToken, observedStart.ambientToken, "AMBIENT.TOKEN", blocking)
-        compare(envelope.ambientConstancy, observedStart.ambientConstancy, "AMBIENT.NOT_CONSTANT", blocking)
-        compare(envelope.thermalStatus, observedStart.thermalStatus, "THERMAL.STATUS", blocking)
-        compare(envelope.batteryTemperatureMinC, observedStart.batteryTemperatureMinC, "THERMAL.RANGE", blocking)
-        compare(envelope.batteryTemperatureMaxC, observedStart.batteryTemperatureMaxC, "THERMAL.RANGE", blocking)
-        compare(envelope.batteryTemperatureRangeC, observedStart.batteryTemperatureRangeC, "THERMAL.RANGE", blocking)
-        compare(envelope.keepAwake, observedStart.keepAwake, "DISPLAY.KEEP_AWAKE", blocking)
-        compare(envelope.brightnessMode, observedStart.brightnessMode, "DISPLAY.BRIGHTNESS_NOT_MANUAL", blocking)
-        compare(envelope.brightnessRaw, observedStart.brightnessRaw, "DISPLAY.BRIGHTNESS_VALUE", blocking)
-        compare(envelope.brightnessScaleMin, observedStart.brightnessScaleMin, "DISPLAY.BRIGHTNESS_RANGE", blocking)
-        compare(envelope.brightnessScaleMax, observedStart.brightnessScaleMax, "DISPLAY.BRIGHTNESS_RANGE", blocking)
-        if (observedStart.brightnessRaw == null) blocking += "DISPLAY.BRIGHTNESS_UNAVAILABLE"
-        if (observedStart.brightnessScaleMin == null || observedStart.brightnessScaleMax == null) blocking += "DISPLAY.BRIGHTNESS_UNAVAILABLE"
-        if (observedStart.brightnessRaw != null && observedStart.brightnessScaleMin != null && observedStart.brightnessScaleMax != null &&
-            observedStart.brightnessRaw !in observedStart.brightnessScaleMin..observedStart.brightnessScaleMax) {
-            blocking += "DISPLAY.BRIGHTNESS_RANGE"
+        val evaluated = mutableListOf<String>()
+        fun evaluate(id: String, check: () -> Unit) {
+            check()
+            evaluated += id
         }
-        if (envelope.cameraFps != 30) blocking += "PROTOCOL.CAMERA_FPS"
-        if (envelope.inferenceCadencesFps != listOf(10, 15, 30)) blocking += "PROTOCOL.CADENCE_SET"
-        if (envelope.durationNs != 1_500_000_000_000) blocking += "PROTOCOL.DURATION"
-        if (envelope.overshootNs != 1_000_000_000L) blocking += "PROTOCOL.OVERSHOOT"
-        if (envelope.cooldownMaxDurationNs <= 0L || envelope.cooldownSamplingIntervalNs <= 0L) {
-            blocking += "PROTOCOL.COOLDOWN"
+
+        evaluate("DEVICE.CLASS") {
+            compare(envelope.deviceClass, observedStart.deviceClass, "DEVICE.CLASS_MISMATCH", blocking)
+            if (envelope.deviceClass != "physical_device") blocking += "DEVICE.CLASS"
         }
-        if (envelope.deviceClass != "physical_device") blocking += "DEVICE.CLASS"
-        if (envelope.manufacturer != "samsung") blocking += "DEVICE.MANUFACTURER"
-        if (!Regex("^SM-S938[A-Z0-9]*$").matches(envelope.model)) blocking += "DEVICE.MODEL"
-        if (envelope.apiLevel != 36) blocking += "DEVICE.API"
-        if (envelope.charging || envelope.powerSource != "battery" || !envelope.hostBatteryOverrideRejected) {
-            blocking += "POWER.PROTOCOL"
+        evaluate("DEVICE.MANUFACTURER") {
+            compare(envelope.manufacturer, observedStart.manufacturer, "DEVICE.MANUFACTURER_MISMATCH", blocking)
+            if (envelope.manufacturer != "samsung") blocking += "DEVICE.MANUFACTURER"
         }
-        if (envelope.hostAdbTransport != "wifi" || envelope.appTransport != "wifi" || envelope.networkIdentityPersisted) {
-            blocking += "CONNECTIVITY.PROTOCOL"
+        evaluate("DEVICE.MODEL") {
+            compare(envelope.model, observedStart.model, "DEVICE.MODEL_MISMATCH", blocking)
+            if (!Regex("^SM-S938[A-Z0-9]*$").matches(envelope.model)) blocking += "DEVICE.MODEL"
         }
-        if (envelope.ambientConstancy !in listOf("constant", "changed", "unavailable")) blocking += "AMBIENT.CONSTANCY"
-        if (!envelope.keepAwake || envelope.brightnessMode != "manual") blocking += "DISPLAY.PROTOCOL"
-        if (order.cadencesFps != listOf(10, 15, 30) || cadenceFps !in listOf(10, 15, 30)) blocking += "ORDER.PERMITTED"
-        if (cadenceFps != 10 && predecessorStatus != M05BPredecessorStatus.COMPLETED) blocking += "ATTEMPT.PREDECESSOR_INCOMPLETE"
-        if (!Regex("^00000000-0000-4000-8000-[0-9a-f]{12}$").matches(sessionId)) blocking += "SESSION.IDENTITY"
-        if (attemptSequence < 1) blocking += "ATTEMPT.SEQUENCE"
-        if (inputClass !in listOf("empty_scene", "displayed_synthetic_figure")) blocking += "SESSION.INPUT_CLASS"
-        if (!operatorAttestedNoPerson) blocking += "SESSION.NO_PERSON"
-        if (envelope.ambientConstancy != "constant") blocking += "AMBIENT.NOT_CONSTANT"
-        return M05BRunAdmissionResult(true == blocking.distinct().isEmpty(), blocking.distinct(), REQUIRED_CONJUNCT_IDS)
+        evaluate("DEVICE.BUILD") { compare(envelope.deviceBuild, observedStart.deviceBuild, "DEVICE.BUILD_MISMATCH", blocking) }
+        evaluate("DEVICE.API") {
+            compare(envelope.apiLevel, observedStart.apiLevel, "DEVICE.API_MISMATCH", blocking)
+            if (envelope.apiLevel != 36) blocking += "DEVICE.API"
+        }
+        evaluate("IDENTITY.APP_DIGEST") { compare(envelope.appSha256, observedStart.appSha256, "IDENTITY.APP_DIGEST_MISMATCH", blocking) }
+        evaluate("IDENTITY.MODEL_DIGEST") { compare(envelope.modelSha256, observedStart.modelSha256, "IDENTITY.MODEL_DIGEST_MISMATCH", blocking) }
+        evaluate("IDENTITY.RUNTIME") { compare(envelope.runtimeVersion, observedStart.runtimeVersion, "IDENTITY.RUNTIME_MISMATCH", blocking) }
+        evaluate("IDENTITY.DELEGATE") { compare(envelope.delegate, observedStart.delegate, "IDENTITY.DELEGATE_MISMATCH", blocking) }
+        evaluate("IDENTITY.PREPROCESSING") { compare(envelope.preprocessingVersion, observedStart.preprocessingVersion, "IDENTITY.PREPROCESSING_MISMATCH", blocking) }
+        evaluate("IDENTITY.DEVICE_UNIT") { compare(envelope.deviceUnitDigest, observedStart.deviceUnitDigest, "IDENTITY.DEVICE_UNIT_MISMATCH", blocking) }
+        evaluate("THERMAL.STATUS") { compare(envelope.thermalStatus, observedStart.thermalStatus, "THERMAL.STATUS", blocking) }
+        evaluate("THERMAL.RANGE") {
+            val temperature = observedStart.batteryTemperatureC
+            if (temperature == null || !temperature.isFinite() ||
+                temperature !in envelope.batteryTemperatureMinC..envelope.batteryTemperatureMaxC
+            ) blocking += "THERMAL.RANGE"
+        }
+        evaluate("POWER.CHARGING") {
+            compare(envelope.charging, observedStart.charging, "POWER.CHARGING", blocking)
+            if (envelope.charging) blocking += "POWER.CHARGING"
+        }
+        evaluate("POWER.SOURCE") {
+            compare(envelope.powerSource, observedStart.powerSource, "POWER.SOURCE_NOT_BATTERY", blocking)
+            if (envelope.powerSource != "battery") blocking += "POWER.SOURCE_NOT_BATTERY"
+        }
+        evaluate("POWER.HOST_OVERRIDE") {
+            compare(envelope.hostBatteryOverrideRejected, observedStart.hostBatteryOverrideRejected, "POWER.HOST_OVERRIDE", blocking)
+            if (!envelope.hostBatteryOverrideRejected) blocking += "POWER.HOST_OVERRIDE"
+        }
+        evaluate("POWER.SAVE_MODE") {
+            compare(envelope.powerSaveMode, observedStart.powerSaveMode, "POWER.SAVE_MODE", blocking)
+            if (envelope.powerSaveMode || observedStart.powerSaveMode != false) blocking += "POWER.SAVE_MODE"
+        }
+        evaluate("CONNECTIVITY.HOST_WIFI_ADB") {
+            compare(envelope.hostAdbTransport, observedStart.hostAdbTransport, "CONNECTIVITY.HOST_NOT_WIFI_ADB", blocking)
+            if (envelope.hostAdbTransport != "wifi") blocking += "CONNECTIVITY.HOST_NOT_WIFI_ADB"
+        }
+        evaluate("CONNECTIVITY.APP_WIFI") {
+            compare(envelope.appTransport, observedStart.appTransport, "CONNECTIVITY.APP_NOT_WIFI", blocking)
+            compare(envelope.networkIdentityPersisted, observedStart.networkIdentityPersisted, "CONNECTIVITY.NETWORK_IDENTITY", blocking)
+            if (envelope.appTransport != "wifi" || envelope.networkIdentityPersisted) blocking += "CONNECTIVITY.APP_NOT_WIFI"
+        }
+        evaluate("AMBIENT.TOKEN") { compare(envelope.ambientToken, observedStart.ambientToken, "AMBIENT.TOKEN", blocking) }
+        evaluate("AMBIENT.CONSTANCY") {
+            compare(envelope.ambientConstancy, observedStart.ambientConstancy, "AMBIENT.NOT_CONSTANT", blocking)
+            compare(true, observedStart.ambientConstancyOperatorSupplied, "AMBIENT.ATTESTATION_MISSING", blocking)
+            if (envelope.ambientConstancy != "constant") blocking += "AMBIENT.NOT_CONSTANT"
+        }
+        evaluate("DISPLAY.KEEP_AWAKE") { compare(envelope.keepAwake, observedStart.keepAwake, "DISPLAY.KEEP_AWAKE", blocking) }
+        evaluate("DISPLAY.BRIGHTNESS_MODE") { compare(envelope.brightnessMode, observedStart.brightnessMode, "DISPLAY.BRIGHTNESS_NOT_MANUAL", blocking) }
+        evaluate("DISPLAY.BRIGHTNESS_VALUE") {
+            compare(envelope.brightnessRaw, observedStart.brightnessRaw, "DISPLAY.BRIGHTNESS_VALUE", blocking)
+            if (observedStart.brightnessRaw == null) blocking += "DISPLAY.BRIGHTNESS_UNAVAILABLE"
+        }
+        evaluate("DISPLAY.BRIGHTNESS_RANGE") {
+            compare(envelope.brightnessScaleMin, observedStart.brightnessScaleMin, "DISPLAY.BRIGHTNESS_RANGE", blocking)
+            compare(envelope.brightnessScaleMax, observedStart.brightnessScaleMax, "DISPLAY.BRIGHTNESS_RANGE", blocking)
+            val brightness = observedStart.brightnessRaw
+            val minimum = observedStart.brightnessScaleMin
+            val maximum = observedStart.brightnessScaleMax
+            if (minimum == null || maximum == null) blocking += "DISPLAY.BRIGHTNESS_UNAVAILABLE"
+            if (brightness != null && minimum != null && maximum != null && brightness !in minimum..maximum) {
+                blocking += "DISPLAY.BRIGHTNESS_RANGE"
+            }
+        }
+        evaluate("PROTOCOL.CAMERA_FPS") { if (envelope.cameraFps != 30) blocking += "PROTOCOL.CAMERA_FPS" }
+        evaluate("PROTOCOL.CADENCE_SET") { if (envelope.inferenceCadencesFps != listOf(10, 15, 30)) blocking += "PROTOCOL.CADENCE_SET" }
+        evaluate("PROTOCOL.DURATION") { if (envelope.durationNs != 1_500_000_000_000L) blocking += "PROTOCOL.DURATION" }
+        evaluate("PROTOCOL.OVERSHOOT") { if (envelope.overshootNs != 1_000_000_000L) blocking += "PROTOCOL.OVERSHOOT" }
+        evaluate("PROTOCOL.COOLDOWN") {
+            if (envelope.cooldownMaxDurationNs != 600_000_000_000L ||
+                envelope.cooldownSamplingIntervalNs != 1_000_000_000L
+            ) blocking += "PROTOCOL.COOLDOWN"
+        }
+        evaluate("ORDER.PERMITTED") {
+            if (order.cadencesFps != listOf(10, 15, 30) || attemptContext.cadenceFps !in listOf(10, 15, 30)) {
+                blocking += "ORDER.PERMITTED"
+            }
+            if (attemptContext.cadenceFps != 10 && attemptContext.predecessorStatus != M05BPredecessorStatus.COMPLETED) {
+                blocking += "ATTEMPT.PREDECESSOR_INCOMPLETE"
+            }
+            if (attemptContext.attemptSequence < 1) blocking += "ATTEMPT.SEQUENCE"
+            blocking += attemptContext.blockingCodes
+        }
+        evaluate("SESSION.IDENTITY") {
+            if (!Regex("^00000000-0000-4000-8000-[0-9a-f]{12}$").matches(sessionId)) blocking += "SESSION.IDENTITY"
+        }
+        evaluate("SESSION.INPUT_CLASS") {
+            if (inputClass !in listOf("empty_scene", "displayed_synthetic_figure")) blocking += "SESSION.INPUT_CLASS"
+        }
+        evaluate("SESSION.NO_PERSON") { if (!operatorAttestedNoPerson) blocking += "SESSION.NO_PERSON" }
+        check(evaluated == REQUIRED_CONJUNCT_IDS) { "admission did not execute the released conjunct set in order" }
+        return M05BRunAdmissionResult(blocking.distinct().isEmpty(), blocking.distinct(), evaluated)
     }
 
     private fun compare(expected: Any?, actual: Any?, code: String, blocking: MutableList<String>) {
@@ -179,87 +245,56 @@ object M05BRunAdmission {
 }
 
 data class M05BStartEnvelopeEvidence(
-    val envelope: M05BStartEnvelope,
+    val envelope: M05BStartEnvelope?,
     val order: M05BExecutionOrder,
     val observedStart: M05BObservedStart,
+    val baselineBlockingCodes: List<String> = emptyList(),
 )
 
 fun renderM05BStartEnvelopeEvidence(evidence: M05BStartEnvelopeEvidence): String {
-    val result = M05BRunAdmission.evaluate(
-        evidence.envelope, evidence.order, evidence.observedStart,
-        "00000000-0000-4000-8000-000000000001", 10, 1, M05BPredecessorStatus.NOT_APPLICABLE,
+    val envelope = evidence.envelope
+    val orderArtifact = M05BArtifactCodec.bindOrder(
+        evidence.order,
+        envelope?.orderPath ?: "execution-order.json",
     )
+    val envelopeArtifact = envelope?.let { M05BArtifactCodec.bindEnvelope(it, "envelope.json") }
+    val result = envelope?.let {
+        M05BRunAdmission.evaluateDerived(
+            it,
+            evidence.order,
+            evidence.observedStart,
+            "00000000-0000-4000-8000-000000000001",
+            M05BAttemptChain.derive(evidence.order, emptyList()),
+            "empty_scene",
+            true,
+        )
+    }
+    val bindingCodes = if (envelope == null) {
+        evidence.baselineBlockingCodes.ifEmpty { listOf("BASELINE.BLOCKED") }
+    } else {
+        buildList {
+            addAll(evidence.baselineBlockingCodes)
+            if (envelope.orderSha256 != orderArtifact.sha256) add("ORDER.DIGEST")
+            if (envelope.orderPath != orderArtifact.path) add("ORDER.PATH")
+            addAll(result?.blockingCodes.orEmpty())
+        }.distinct()
+    }
     val record: JsonObject = buildJsonObject {
         put("artifact_schema_version", "1.0.0")
         put("record_kind", "m05b_start_envelope_device_gate_observation")
         put("sanitized", true)
         put("non_participant_observation", true)
-        put("envelope", buildJsonObject {
-            put("device_class", evidence.envelope.deviceClass)
-            put("manufacturer", evidence.envelope.manufacturer)
-            put("model", evidence.envelope.model)
-            put("device_build", evidence.envelope.deviceBuild)
-            put("api_level", evidence.envelope.apiLevel)
-            put("app_sha256", evidence.envelope.appSha256)
-            put("model_sha256", evidence.envelope.modelSha256)
-            put("runtime_version", evidence.envelope.runtimeVersion)
-            put("delegate", evidence.envelope.delegate)
-            put("preprocessing_version", evidence.envelope.preprocessingVersion)
-            put("device_unit_digest", evidence.envelope.deviceUnitDigest)
-            put("charging", evidence.envelope.charging)
-            put("power_source", evidence.envelope.powerSource)
-            put("host_adb_transport", evidence.envelope.hostAdbTransport)
-            put("app_transport", evidence.envelope.appTransport)
-            put("network_identity_persisted", evidence.envelope.networkIdentityPersisted)
-            put("ambient_token", evidence.envelope.ambientToken)
-            put("ambient_constancy", evidence.envelope.ambientConstancy)
-            put("keep_awake", evidence.envelope.keepAwake)
-            put("brightness_mode", evidence.envelope.brightnessMode)
-            put("brightness_raw", evidence.envelope.brightnessRaw)
-            put("brightness_scale_min", evidence.envelope.brightnessScaleMin)
-            put("brightness_scale_max", evidence.envelope.brightnessScaleMax)
-            put("thermal_status", evidence.envelope.thermalStatus)
-            put("temperature_min_c", evidence.envelope.batteryTemperatureMinC)
-            put("temperature_max_c", evidence.envelope.batteryTemperatureMaxC)
-            put("temperature_range_c", evidence.envelope.batteryTemperatureRangeC)
-            put("camera_fps", evidence.envelope.cameraFps)
-            put("duration_ns", evidence.envelope.durationNs)
-            put("overshoot_ns", evidence.envelope.overshootNs)
-            put("cooldown_max_duration_ns", evidence.envelope.cooldownMaxDurationNs)
-            put("cooldown_sampling_interval_ns", evidence.envelope.cooldownSamplingIntervalNs)
-        })
-        putJsonArray("execution_order") { evidence.order.cadencesFps.forEach(::add) }
-        put("observed_start", buildJsonObject {
-            put("device_class", evidence.observedStart.deviceClass)
-            put("manufacturer", evidence.observedStart.manufacturer)
-            put("model", evidence.observedStart.model)
-            put("device_build", evidence.observedStart.deviceBuild)
-            put("api_level", evidence.observedStart.apiLevel)
-            put("app_sha256", evidence.observedStart.appSha256)
-            put("model_sha256", evidence.observedStart.modelSha256)
-            put("runtime_version", evidence.observedStart.runtimeVersion)
-            put("delegate", evidence.observedStart.delegate)
-            put("preprocessing_version", evidence.observedStart.preprocessingVersion)
-            put("device_unit_digest", evidence.observedStart.deviceUnitDigest)
-            put("charging", evidence.observedStart.charging)
-            put("power_source", evidence.observedStart.powerSource)
-            put("host_adb_transport", evidence.observedStart.hostAdbTransport)
-            put("app_transport", evidence.observedStart.appTransport)
-            put("network_identity_persisted", evidence.observedStart.networkIdentityPersisted)
-            put("ambient_token", evidence.observedStart.ambientToken)
-            put("ambient_constancy", evidence.observedStart.ambientConstancy)
-            put("keep_awake", evidence.observedStart.keepAwake)
-            put("brightness_mode", evidence.observedStart.brightnessMode)
-            put("brightness_raw", evidence.observedStart.brightnessRaw)
-            put("brightness_scale_min", evidence.observedStart.brightnessScaleMin)
-            put("brightness_scale_max", evidence.observedStart.brightnessScaleMax)
-            put("thermal_status", evidence.observedStart.thermalStatus)
-            put("temperature_min_c", evidence.observedStart.batteryTemperatureMinC)
-            put("temperature_max_c", evidence.observedStart.batteryTemperatureMaxC)
-            put("temperature_range_c", evidence.observedStart.batteryTemperatureRangeC)
-        })
-        putJsonArray("blocking_codes") { result.blockingCodes.forEach(::add) }
-        put("satisfies_s25_m05b_admission", result.admitted)
+        if (envelopeArtifact != null) {
+            put("envelope_path", envelopeArtifact.path)
+            put("envelope_sha256", envelopeArtifact.sha256)
+            put("envelope_json", envelopeArtifact.exactBytes.decodeToString())
+        }
+        put("order_path", orderArtifact.path)
+        put("order_sha256", orderArtifact.sha256)
+        put("execution_order_json", orderArtifact.exactBytes.decodeToString())
+        put("observed_start", M05BArtifactCodec.canonicalObservedStart(evidence.observedStart))
+        putJsonArray("blocking_codes") { bindingCodes.forEach(::add) }
+        put("satisfies_s25_m05b_admission", envelope != null && bindingCodes.isEmpty())
     }
     return Json.encodeToString(JsonObject.serializer(), record)
 }

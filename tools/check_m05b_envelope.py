@@ -12,7 +12,15 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
+
+from jsonschema import Draft202012Validator
+from observation_contracts.m05b_envelope import (
+    M05BKind,
+    canonical_json_bytes,
+    validate_m05b_document,
+)
+from observation_contracts.schema_loader import load_m05b_run_admission_schema
 
 EXIT_OK = 0
 EXIT_UNTRUSTED = 1
@@ -23,6 +31,7 @@ RECORD_KIND = "m05b_start_envelope_device_gate_observation"
 LEDGER_PATH = "docs/evidence/m05b-envelope/s25-ultra-m05b-envelope-ledger.json"
 _SUITE_MARKER = "class=com.calisthenics.diagnostic.probe.M05BEnvelopeDeviceGateTest"
 _RECORD_PATTERN = re.compile(r"M05BStartEnvelopeEvidence=(?P<json>\{.*\})")
+_STATUS_PATTERN = re.compile(r"M05BEnvelopeGateStatus=(?P<status>admitted|blocked)")
 _FORBIDDEN_KEYS = {
     "adb_serial",
     "endpoint",
@@ -40,12 +49,17 @@ _FORBIDDEN_KEYS = {
 }
 
 
-def check_transcript(transcript: str) -> dict[str, Any]:
+def check_transcript(
+    transcript: str,
+    expected_app_sha256: str | None = None,
+    expected_git_sha: str | None = None,
+) -> dict[str, Any]:
     """Validate one exact instrumentation transcript or exit with its gate status."""
-    if _SUITE_MARKER not in transcript or "OK (1 test)" not in transcript:
+    if _SUITE_MARKER not in transcript or "INSTRUMENTATION_CODE: -1" not in transcript:
         raise SystemExit(EXIT_UNTRUSTED)
     records = _RECORD_PATTERN.findall(transcript)
-    if len(records) != 1:
+    statuses = _STATUS_PATTERN.findall(transcript)
+    if len(records) != 1 or len(statuses) != 1:
         raise SystemExit(EXIT_UNTRUSTED)
     try:
         record = json.loads(records[0])
@@ -54,7 +68,11 @@ def check_transcript(transcript: str) -> dict[str, Any]:
     if not isinstance(record, dict):
         raise SystemExit(EXIT_UNTRUSTED)
     _validate_record_shape(record)
+    _validate_embedded_artifacts(record, expected_app_sha256, expected_git_sha)
     computed_admitted = not record["blocking_codes"]
+    expected_status = "admitted" if computed_admitted else "blocked"
+    if statuses[0] != expected_status:
+        raise SystemExit(EXIT_UNTRUSTED)
     if record["satisfies_s25_m05b_admission"] is not computed_admitted:
         raise SystemExit(EXIT_UNTRUSTED)
     if not computed_admitted:
@@ -104,6 +122,7 @@ def verify_recorded_ledger(
     if not isinstance(record, dict):
         raise TypeError("referenced evidence is not an object")
     _validate_record_shape(record)
+    _validate_embedded_artifacts(record, None, None)
     expected_status = "admitted" if not record["blocking_codes"] else "blocked"
     if ledger.get("admission_status") != expected_status:
         raise ValueError(
@@ -131,6 +150,89 @@ def _validate_record_shape(record: dict[str, Any]) -> None:
         raise SystemExit(EXIT_UNTRUSTED)
     if _contains_forbidden(record):
         raise SystemExit(EXIT_UNTRUSTED)
+    root_schema = load_m05b_run_admission_schema()
+    observed_schema = {
+        "$schema": root_schema["$schema"],
+        "$defs": root_schema["$defs"],
+        "$ref": "#/$defs/observed_start",
+    }
+    if any(
+        Draft202012Validator(observed_schema).iter_errors(record.get("observed_start"))
+    ):
+        raise SystemExit(EXIT_UNTRUSTED)
+
+
+def _validate_embedded_artifacts(
+    record: dict[str, Any],
+    expected_app_sha256: str | None,
+    expected_git_sha: str | None,
+) -> None:
+    documents: dict[str, dict[str, Any]] = {}
+    for prefix, kind, json_key in (
+        ("order", "execution_order", "execution_order_json"),
+        ("envelope", "start_envelope", "envelope_json"),
+    ):
+        encoded = record.get(json_key)
+        path = record.get(f"{prefix}_path")
+        digest = record.get(f"{prefix}_sha256")
+        if prefix == "envelope" and encoded is None and record["blocking_codes"]:
+            continue
+        if (
+            not isinstance(encoded, str)
+            or not isinstance(path, str)
+            or not isinstance(digest, str)
+        ):
+            raise SystemExit(EXIT_UNTRUSTED)
+        try:
+            _resolve_relative(Path("/artifact-root"), path)
+        except ValueError:
+            raise SystemExit(EXIT_UNTRUSTED) from None
+        try:
+            document = json.loads(encoded)
+        except json.JSONDecodeError:
+            raise SystemExit(EXIT_UNTRUSTED) from None
+        if not isinstance(document, dict):
+            raise SystemExit(EXIT_UNTRUSTED)
+        exact = encoded.encode("utf-8")
+        if (
+            canonical_json_bytes(document) != exact
+            or hashlib.sha256(exact).hexdigest() != digest
+        ):
+            raise SystemExit(EXIT_UNTRUSTED)
+        if validate_m05b_document(document, cast(M05BKind, kind)):
+            raise SystemExit(EXIT_UNTRUSTED)
+        documents[prefix] = document
+        if any(key in document for key in (f"{prefix}_sha256", "self_sha256")):
+            raise SystemExit(EXIT_UNTRUSTED)
+        if (
+            expected_git_sha is not None
+            and document.get("producer_git_sha") != expected_git_sha
+        ):
+            raise SystemExit(EXIT_UNTRUSTED)
+        if (
+            prefix == "envelope"
+            and expected_app_sha256 is not None
+            and document["device"]["app_sha256"] != expected_app_sha256
+        ):
+            raise SystemExit(EXIT_UNTRUSTED)
+    envelope = documents.get("envelope")
+    order = documents.get("order")
+    if envelope is not None and order is not None:
+        binding = envelope.get("order_binding")
+        if (
+            not isinstance(binding, dict)
+            or binding.get("path") != record.get("order_path")
+            or binding.get("sha256") != record.get("order_sha256")
+        ):
+            raise SystemExit(EXIT_UNTRUSTED)
+    elif expected_app_sha256 is not None:
+        observed = record.get("observed_start")
+        if (
+            not isinstance(observed, dict)
+            or not isinstance(observed.get("device"), dict)
+            or observed["device"].get("app_sha256") != expected_app_sha256
+        ):
+            raise SystemExit(EXIT_UNTRUSTED)
 
 
 def _contains_forbidden(value: object) -> bool:
@@ -153,8 +255,11 @@ def _resolve_relative(root: Path, relative: str) -> Path:
 
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
-    if len(args) != 1:
-        print(f"usage: {Path(sys.argv[0]).name} <transcript-file|->", file=sys.stderr)
+    if len(args) not in (1, 3):
+        print(
+            f"usage: {Path(sys.argv[0]).name} <transcript-file|-> [expected-app-sha256 expected-git-sha]",
+            file=sys.stderr,
+        )
         return EXIT_USAGE
     try:
         transcript = (
@@ -162,10 +267,14 @@ def main(argv: list[str] | None = None) -> int:
             if args[0] == "-"
             else Path(args[0]).read_text(encoding="utf-8")
         )
-        record = check_transcript(transcript)
+        record = check_transcript(
+            transcript,
+            args[1] if len(args) == 3 else None,
+            args[2] if len(args) == 3 else None,
+        )
     except (OSError, SystemExit) as error:
         if isinstance(error, SystemExit):
-            return int(error.code)
+            return error.code if isinstance(error.code, int) else EXIT_UNTRUSTED
         print(f"error: {error}", file=sys.stderr)
         return EXIT_UNTRUSTED
     print(json.dumps(record, sort_keys=True, separators=(",", ":")))

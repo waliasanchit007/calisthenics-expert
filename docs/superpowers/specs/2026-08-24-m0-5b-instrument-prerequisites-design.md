@@ -108,10 +108,15 @@ These are prerequisites, not defects in the completed replay/live-capture milest
 3. **Bound every session collection.** Emitted records are durably streamed. In-memory state may
    retain counters, the single in-flight submission, one failure, fixed-window aggregates, and a
    bounded tail/checkpoint only. No collection grows with delivered or emitted frame count.
-4. **One attempt, one atomic publication.** Required pose, media, synchronization, telemetry, and
-   manifest artifacts are staged under one attempt and become visible together through one rename.
-5. **Manifest last.** The manifest is written only after all required content is finalized, hashed,
-   reconciled, and fsynced. It is the commit record, not a progress file.
+4. **One attempt, one atomic publication.** Required pose, media, synchronization, telemetry, admission,
+   and manifest artifacts are staged under one attempt and become visible together through one rename.
+5. **Manifest last and exact-byte binding.** The manifest is written only after all required content is
+   finalized, hashed, reconciled, and fsynced. It is the commit record, not a progress file. Every
+   digest in an envelope, order, admission, session, or ledger record is SHA-256 over the exact bytes
+   of the referenced artifact. Canonical JSON writers produce those bytes deterministically; a parsed
+   object or a re-serialization with different whitespace/key ordering is never a digest substitute.
+   Canonical JSON artifacts must satisfy `path.read_bytes() == canonical_json_bytes(parse(path))` at
+   validation time, and an artifact never hashes a digest field contained within itself.
 6. **No vacuous synchronization.** A `live_conformance` claim requiring media cannot pass without
    video bytes, both clock-mapping parameters, frame-bound evidence, dropped-frame counts, and
    matching digests.
@@ -205,6 +210,10 @@ NEW -> OPEN -> SEALING -> PUBLISHED
 
 - `OPEN` accepts ordered pose records, encoded-video bytes/frame-pairing records, and telemetry
   samples from separately fenced producers.
+- For a sustained run, the same process boundary opens the attempt, derives admission from the exact
+  envelope/order bytes and observed start values, appends exactly one admission artifact, flushes and
+  fsyncs it, and only then starts capture. The admission artifact carries the attempt/session
+  association and exact envelope/order digests; a blocked or failed admission never starts capture.
 - Pose records are encoded and appended immediately; the writer never waits for finalization to
   receive the entire session.
 - Flush policy is deterministic and versioned: 150 pose records or five session-clock seconds,
@@ -262,6 +271,11 @@ Any failure before rename leaves classified staging residue and no committed ses
 rename but before parent fsync is `uncertain_durability`; it does not retry under the same session ID.
 A regression holds a live telemetry sampler across finalization and must fail until the stop/join
 fence prevents every post-seal append.
+
+The committed durable session artifact is authoritative for a sustained run. The Wi-Fi ADB
+`am instrument -w` transcript is a convenience transport and display channel only; losing it after
+the device has durably committed an attempt is a typed transport-loss observation awaiting binary-safe
+recovery of the committed artifact, not evidence that the run failed or permission to rerun it.
 
 ## 7. Synchronized non-participant video
 
@@ -449,7 +463,10 @@ Counts are derived from events and reconcile with the existing session counts. `
 drop remain distinct. The design does not infer upstream CameraX drops from downstream skips.
 
 Before sustained runs, one short 10/15/30 attribution sequence confirms that configured inference
-cadence changes admission while camera request remains 30 FPS. A mismatch blocks long runs.
+cadence changes admission while camera request remains 30 FPS. The device gate emits one typed record
+per cadence and a read-only host checker validates the records. A pending/recorded ledger under
+`docs/evidence/m05b-attribution/` is updated only by the explicit human recording step; a missing,
+pending, or blocking ledger blocks the sustained runs. A mismatch blocks long runs.
 
 ### 9.2 Telemetry
 
@@ -466,7 +483,12 @@ A versioned one-second fixed interval samples, from one scheduler and monotonic 
 
 Event-driven thermal callbacks may remain as supplemental detail but cannot substitute for fixed
 interval samples. Missing APIs are typed `UNAVAILABLE`; they are never encoded as zero. Samples are
-streamed durably and sequence-checked. Wall-clock time is not used for cadence or synchronization.
+streamed durably and sequence-checked. For every sustained run, validation also derives and records
+`fixed_sample_count`, first and last session-clock timestamps, and `max_inter_sample_gap_ns`. The
+count must satisfy `abs(fixed_sample_count - (floor(actual_span_s) + 2)) <= 1`, the maximum gap must
+not exceed two seconds, and an exceeded gap or missing end coverage is a typed blocking observation.
+Production enforces the fixed upper bound for 1,500 seconds; it never retains a collection that grows
+with frame count or elapsed time. Wall-clock time is not used for cadence or synchronization.
 
 ## 10. Frozen start-state envelope
 
@@ -479,6 +501,8 @@ sustained run. It contains:
 - admitted initial thermal status;
 - battery-temperature range/variability admitted by the baseline;
 - charging state fixed to unplugged;
+- power-save mode fixed to `false`;
+- observed battery level or charge counter recorded as a tagged, non-blocking start observation;
 - connectivity state fixed to Wi-Fi ADB connected;
 - ambient-condition identifier and operator-recorded constancy statement;
 - keep-awake behavior and brightness mode/value;
@@ -492,18 +516,36 @@ sustained run. It contains:
 
 No threshold is chosen after seeing a sustained result. The envelope is derived once from the fixed
 idle procedure, reviewed as evidence, and then frozen. Before each run a separate admission record
-references the envelope digest and contains the observed start values. A failed conjunct produces a
-typed blocked observation and does not start the run. Cooling waits do not relax the envelope.
+references the exact envelope and order digests and contains the observed start values. A failed
+conjunct produces a typed blocked observation and does not start the run. Cooling waits do not relax
+the envelope. The per-run cooldown observation is a required scalar
+`battery_temperature_c`, with no default: admission requires it to be within the frozen baseline
+minimum/maximum and requires the observed thermal status to equal the admitted initial status. Missing
+or invalid values are blocking, never passing defaults.
+Neither the envelope nor the observed-start wire object supplies synthetic defaults for load-bearing
+thermal fields.
 
-The order is recorded before any sustained run and cannot be reordered after observation. A rerun is
-a new attempt linked to the original condition and reason; it does not overwrite the first result.
+The order is recorded before any sustained run and cannot be reordered after observation. Every attempt
+is an immutable append-only entry in a hash chain containing `attempt_sequence`, `cadence_fps`,
+`admission_sha256`, `outcome`, and `previous_entry_sha256`. Admission derives the order position and
+predecessor status from that chain; callers cannot supply either value. Only a completed, non-blocking
+entry advances to the next cadence. Blocked attempts remain visible and a later attempt stays on the
+same cadence. A rerun is a new chained attempt linked to the original condition and reason; it never
+overwrites or replaces an earlier entry.
 
 ## 11. Sustained S25 characterization
 
+All implementation code, including the sustained-run controller, must be complete and built as one
+final app version before physical evidence is frozen. On that exact final build, execute the short
+10/15/30 attribution gate, derive and freeze the Task 7 envelope/order, and immediately execute the
+sustained runs. No app rebuild or source change may occur between attribution, envelope derivation,
+and sustained capture because the app SHA is part of the frozen envelope.
+
 Run exactly one 25-minute non-participant session for each configured inference cadence in the
-pre-registered order. The controller requests stop at exactly 1,500 seconds on the session-relative
-monotonic clock. A stop request later than 1,501 seconds is a typed blocking observation rather than a
-shorter/longer accepted run. All use:
+pre-registered order. The same process boundary opens the staging attempt, writes and fsyncs the
+admission artifact, then starts capture using the session-relative monotonic clock. The controller
+requests stop at exactly 1,500 seconds on that clock. A stop request later than 1,501 seconds is a
+typed blocking observation rather than a shorter/longer accepted run. All use:
 
 - the same authorised physical S25 identity;
 - camera cadence 30 FPS;
@@ -515,9 +557,21 @@ shorter/longer accepted run. All use:
 - `empty_scene` or an admitted displayed synthetic figure, never a person.
 
 Each run records the envelope/admission/order digests, start/end device identity, full stage counts,
-target and actual monotonic duration, achieved cadence time series, latency distribution inputs and
-percentiles, fixed-interval telemetry, thermal events, battery delta, source/process outcome, and
-typed blocking observations.
+target and actual monotonic duration, achieved cadence time series, latency histogram inputs and
+percentiles, fixed-interval telemetry and coverage, thermal events, battery delta, source/process
+outcome, and typed blocking observations. Latency uses a frozen bounded histogram with nanosecond
+upper bounds `[1000000,2000000,4000000,8000000,16000000,32000000,64000000,128000000,256000000,
+512000000,1024000000,2048000000,4096000000]` plus overflow, percentile ranks 50/95/99, and
+nearest-rank selection. Each percentile reports its containing lower/upper bucket bounds; no
+interpolated point estimate is reported. These are measurement-resolution constants, not acceptance
+thresholds, and are frozen before the first sustained run.
+
+The target must not run `pm clear` between sustained attempts. Before starting the next cadence it
+must recover and verify the previous committed durable artifact (binary-safe transfer, byte count, and
+SHA-256) and classify any remaining staging residue or unpublished attempt as a recorded blocked
+attempt. A transport-lost run whose session was durably committed remains awaiting recovery and cannot
+be rerun for that cadence. Only a proven `ABORTED` or `FAILED` attempt permits another attempt at the
+same cadence, recorded as a new immutable hash-chained entry.
 
 A zero-detection empty-scene run is valid for performance characterization but proves nothing about
 detection. A displayed-figure run with no detection leaves detection-dependent cells pending. The
@@ -533,8 +587,10 @@ boolean. It binds by path and SHA-256:
 - short synchronized-video evidence and host rehash evidence;
 - synthetic purge/tombstone rehearsal;
 - stage-attribution evidence;
+- recorded short 10/15/30 attribution evidence;
 - frozen envelope and execution-order artifact;
-- all three start-admission and sustained-run records;
+- every immutable attempt entry, including blocked, aborted, failed, and transport-lost entries, plus
+  all three completed start-admission and sustained-run records;
 - app/model/runtime/device/probe SHAs;
 - declared Android flagship-only scope and mid-range/iOS gaps.
 
@@ -576,13 +632,18 @@ review; privacy, synchronization, and final boundary contracts do.
    scope: purge/tombstone contracts, Android storage purge, host rehearsal, device and repository
    tests. `withdrawal_and_deletion` remains `UNDECIDED`.
 6. **Stage attribution and fixed telemetry**
-   Depends on 2. Write scope: live pipeline event model, Android probes, telemetry stream and tests.
+   Depends on 2. Write scope: live pipeline event model, Android probes, telemetry stream, short
+   10/15/30 attribution device gate, pending/recorded attribution ledger, and tests.
 7. **Frozen envelope and order admission**
    Depends on 6. Write scope: envelope/order schemas, derivation/admission tools, device gate, evidence
-   ledger validators. It must complete before Task 8 begins.
+   ledger validators. Its software/admission contract must be available before Task 8 controller
+   integration consumes it; its physical envelope/order freeze occurs after the Task 8 controller is
+   built and before Task 8's physical runs.
 8. **Sustained characterization**
-   Depends on 4, 6, and 7. Write scope: run command/evidence renderer and the three physical-device
-   evidence records. No contract is weakened in response to an observation.
+   Depends on 3, 4, 6, and 7 for physical characterization. Its software controller and evidence
+   renderer are implemented before the physical Task 6 attribution gate and Task 7 envelope freeze;
+   its three physical-device runs happen only after those gates pass on the exact final app build. No
+   contract is weakened in response to an observation.
 9. **Instrument-readiness binding and boundary**
    Depends on all prior tasks. Write scope: readiness schema/validator/CLI/ledger, integration test,
    final evidence references, and scope documentation.
@@ -610,7 +671,14 @@ Required evidence includes:
 - purge traversal, prefix, symlink, unknown-root, partial-delete, fsync, post-scan, idempotency, and
   tombstoned-ID re-admission negatives;
 - stage-count and fixed-sample cadence mutations;
+- fixed telemetry gap/end-coverage and bounded-sample mutations;
 - envelope-conjunct and pre-registered-order mutations;
+- scalar cooldown-temperature/default, power-save, hash-chain predecessor, and exact-byte digest
+  mutations;
+- fixed latency bucket-edge and percentile-rule mutations;
+- admission-before-capture ordering, durable-artifact recovery, no-`pm clear`, and transport-loss
+  retry-policy mutations;
+- short attribution gate and recorded-ledger mutations;
 - fixed 1,500-second duration and one-second stop-overshoot mutations;
 - physical S25 gate refusing emulators, unauthorized devices, charging, fake-unplug evidence,
   connectivity drift, and envelope mismatch;
@@ -634,6 +702,8 @@ Implementation stops and records a resume point when:
 - the S25 cannot meet the frozen start-state envelope without changing it;
 - connectivity, model, delegate, camera cadence, preprocessing, app build, or device identity changes
   across sustained runs;
+- a committed durable session artifact is not recoverable after transport loss;
+- a same-cadence rerun is proposed without a proven `ABORTED` or `FAILED` predecessor;
 - a task would require participant data, a privacy-policy acceptance, a paid service, a new device,
   iOS scope, or a changed product/research objective.
 
@@ -654,6 +724,7 @@ M0.5B is complete only when Tasks 1–9 are merged through protected CI and:
   parent durability, post-scan absence, idempotency, and re-admission rejection;
 - `withdrawal_and_deletion` is still visibly `UNDECIDED` and participant capture is still blocked;
 - fixed-interval telemetry and stage attribution reconcile;
+- the short 10/15/30 attribution gate is recorded and non-blocking on the exact final app build;
 - the envelope and cadence order were frozen before sustained data existed;
 - 10/15/30 inference-cadence S25 runs each target exactly 1,500 session-clock seconds under one
   unchanged start-state envelope, with camera at 30 FPS, unplugged Wi-Fi ADB, no video, and no

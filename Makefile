@@ -5,8 +5,10 @@ PYTHON ?= $(shell for candidate in python3.14 python3.13 python3.12 python3; do 
 done; printf '%s' python3)
 VENV_PYTHON := .venv/bin/python
 CLI := $(VENV_PYTHON) -m observation_contracts
+M05B_CANDIDATE_IDENTITY_FILE ?= .m05b-envelope-candidate.env
+M05B_ATTRIBUTION_IDENTITY_FILE ?= .m05b-attribution-candidate.json
 
-.PHONY: bootstrap verify verify-study-readiness verify-harness-jvm verify-harness-ios verify-harness-foundation verify-kotlin-export verify-harness-android-export-parity verify-harness-detection-replay verify-harness-s25-process-kill verify-harness-replay-export verify-harness-s25-five-run-replay verify-harness-s25-camera-probe verify-harness-s25-storage-exclusion verify-harness-s25-m05b-envelope verify-harness-s25-live-capture fetch-model-asset prepare-harness-gradle-dependencies
+.PHONY: bootstrap verify verify-study-readiness verify-harness-jvm verify-harness-ios verify-harness-foundation verify-kotlin-export verify-harness-android-export-parity verify-harness-detection-replay verify-harness-s25-process-kill verify-harness-replay-export verify-harness-s25-five-run-replay verify-harness-s25-camera-probe verify-harness-s25-storage-exclusion prepare-harness-s25-m05b-envelope-candidate verify-harness-s25-m05b-envelope verify-harness-s25-m05b-attribution verify-harness-s25-live-capture fetch-model-asset prepare-harness-gradle-dependencies
 
 bootstrap:
 	@command -v "$(PYTHON)" >/dev/null 2>&1 || { echo "error: Python interpreter '$(PYTHON)' was not found" >&2; exit 1; }
@@ -258,15 +260,30 @@ verify-kotlin-export:
 	./gradlew --no-daemon :shared:jvmTest :shared:generateSyntheticExport; \
 	first_manifest_hash=$$(shasum -a 256 shared/build/conformance/synthetic-session/manifest.json | awk '{print $$1}'); \
 	first_frames_hash=$$(shasum -a 256 shared/build/conformance/synthetic-session/frames.ndjson | awk '{print $$1}'); \
+	first_envelope_hash=$$(shasum -a 256 shared/build/conformance/synthetic-session/start-envelope.json | awk '{print $$1}'); \
+	first_order_hash=$$(shasum -a 256 shared/build/conformance/synthetic-session/execution-order.json | awk '{print $$1}'); \
+	first_admission_hash=$$(shasum -a 256 shared/build/conformance/synthetic-session/run-admission.json | awk '{print $$1}'); \
 	./gradlew --no-daemon :shared:generateSyntheticExport; \
 	second_manifest_hash=$$(shasum -a 256 shared/build/conformance/synthetic-session/manifest.json | awk '{print $$1}'); \
 	second_frames_hash=$$(shasum -a 256 shared/build/conformance/synthetic-session/frames.ndjson | awk '{print $$1}'); \
+	second_envelope_hash=$$(shasum -a 256 shared/build/conformance/synthetic-session/start-envelope.json | awk '{print $$1}'); \
+	second_order_hash=$$(shasum -a 256 shared/build/conformance/synthetic-session/execution-order.json | awk '{print $$1}'); \
+	second_admission_hash=$$(shasum -a 256 shared/build/conformance/synthetic-session/run-admission.json | awk '{print $$1}'); \
 	test "$$first_manifest_hash" = "$$second_manifest_hash"; \
 	test "$$first_frames_hash" = "$$second_frames_hash"; \
+	test "$$first_envelope_hash" = "$$second_envelope_hash"; \
+	test "$$first_order_hash" = "$$second_order_hash"; \
+	test "$$first_admission_hash" = "$$second_admission_hash"; \
 	printf 'manifest sha256: %s\n' "$$second_manifest_hash"; \
 	printf 'frames sha256: %s\n' "$$second_frames_hash"; \
+	printf 'start envelope sha256: %s\n' "$$second_envelope_hash"; \
+	printf 'execution order sha256: %s\n' "$$second_order_hash"; \
+	printf 'run admission sha256: %s\n' "$$second_admission_hash"; \
 	cd ../..; \
-	$(CLI) validate-session apps/diagnostic-harness/shared/build/conformance/synthetic-session/manifest.json apps/diagnostic-harness/shared/build/conformance/synthetic-session/frames.ndjson
+	$(CLI) validate-session apps/diagnostic-harness/shared/build/conformance/synthetic-session/manifest.json apps/diagnostic-harness/shared/build/conformance/synthetic-session/frames.ndjson; \
+	$(CLI) verify-m05b-envelope start_envelope apps/diagnostic-harness/shared/build/conformance/synthetic-session/start-envelope.json; \
+	$(CLI) verify-m05b-envelope execution_order apps/diagnostic-harness/shared/build/conformance/synthetic-session/execution-order.json; \
+	$(CLI) verify-m05b-envelope run_admission apps/diagnostic-harness/shared/build/conformance/synthetic-session/run-admission.json
 
 verify-study-readiness:
 	$(CLI) verify-study-readiness docs/protocols/study-readiness.m05.v1.json
@@ -402,15 +419,14 @@ verify-harness-s25-storage-exclusion:
 	if [ "$$instrument_status" -ne 0 ]; then exit "$$instrument_status"; fi; \
 	cd ../.. && $(VENV_PYTHON) tools/check_storage_exclusion.py "$$transcript"
 
-# M0.5B Task 7 physical start-envelope gate. The host checks Wi-Fi ADB and rejects Android battery
-# service override state, while the app observes its own connectivity, power, thermal, and scoped
-# device-unit values. The target prints one sanitized typed record and never writes the ledger.
-verify-harness-s25-m05b-envelope:
+# One-time preparation for the exact M0.5B candidate. This is deliberately separate from the
+# physical evidence sequence. It is the only target allowed to build, install, or clear app data.
+prepare-harness-s25-m05b-envelope-candidate:
 	@set -eu; \
 	device_count=$$(adb devices -l | tail -n +2 | awk '$$2 == "device"' | wc -l | tr -d ' '); \
-	if [ "$$device_count" -ne 1 ]; then echo "error: verify-harness-s25-m05b-envelope requires exactly one authorized attached device, found $$device_count" >&2; exit 1; fi; \
+	if [ "$$device_count" -ne 1 ]; then echo "error: candidate preparation requires exactly one authorized attached device, found $$device_count" >&2; exit 1; fi; \
 	serial=$$(adb devices -l | tail -n +2 | awk '$$2 == "device" {print $$1}'); \
-	case "$$serial" in emulator-*) echo "error: emulator is not authorized for the M0.5B S25 envelope gate" >&2; exit 1 ;; esac; \
+	case "$$serial" in emulator-*) echo "error: emulator is not authorized for M0.5B candidate preparation" >&2; exit 1 ;; esac; \
 	manufacturer=$$(adb -s "$$serial" shell getprop ro.product.manufacturer | tr -d '\r'); \
 	model=$$(adb -s "$$serial" shell getprop ro.product.model | tr -d '\r'); \
 	marketing_name=$$(adb -s "$$serial" shell getprop ro.config.marketing_name | tr -d '\r'); \
@@ -419,21 +435,114 @@ verify-harness-s25-m05b-envelope:
 	case "$$model_upper" in SM-S938*) authorized=1 ;; *) authorized=0 ;; esac; \
 	case "$$marketing_name" in *"S25 Ultra"*) authorized=1 ;; esac; \
 	if [ "$$manufacturer_lower" != samsung ] || [ "$$authorized" -ne 1 ]; then echo "error: attached target is not the authorized Samsung Galaxy S25 Ultra" >&2; exit 1; fi; \
-	battery_dump=$$(adb -s "$$serial" shell dumpsys battery | tr -d '\r'); \
-	host_override_rejected=true; \
-	if printf '%s\n' "$$battery_dump" | grep -Eq '(^|: )((AC|USB|Wireless|Dock) powered): true'; then host_override_rejected=false; fi; \
-	host_adb_transport=false; case "$$serial" in *:*) host_adb_transport=true ;; esac; \
+	if [ -n "$$(git status --porcelain --untracked-files=normal)" ]; then echo "error: candidate preparation requires a clean source tree" >&2; exit 1; fi; \
 	$(MAKE) fetch-model-asset; \
-	cd apps/diagnostic-harness && ./gradlew --no-daemon :androidApp:assembleDebug :androidApp:assembleDebugAndroidTest; \
-	adb -s "$$serial" install -r androidApp/build/outputs/apk/debug/androidApp-debug.apk; \
-	adb -s "$$serial" install -r androidApp/build/outputs/apk/androidTest/debug/androidApp-debug-androidTest.apk; \
+	(cd apps/diagnostic-harness && ./gradlew --no-daemon :androidApp:assembleDebug :androidApp:assembleDebugAndroidTest); \
+	adb -s "$$serial" install -r apps/diagnostic-harness/androidApp/build/outputs/apk/debug/androidApp-debug.apk; \
+	adb -s "$$serial" install -r apps/diagnostic-harness/androidApp/build/outputs/apk/androidTest/debug/androidApp-debug-androidTest.apk; \
 	clear_result=$$(adb -s "$$serial" shell pm clear com.calisthenics.diagnostic.android | tr -d '\r'); \
 	if [ "$$clear_result" != Success ]; then echo "error: pm clear returned '$$clear_result'" >&2; exit 1; fi; \
-	transcript=$$(mktemp); trap 'rm -f "$$transcript"' EXIT INT TERM; \
-	set +e; adb -s "$$serial" shell am instrument -w -r -e class com.calisthenics.diagnostic.probe.M05BEnvelopeDeviceGateTest -e host_adb_transport "$$([ "$$host_adb_transport" = true ] && echo wifi || echo unavailable)" -e host_battery_override_rejected "$$host_override_rejected" com.calisthenics.diagnostic.android.test/androidx.test.runner.AndroidJUnitRunner >"$$transcript" 2>&1; instrument_status=$$?; set -e; \
+	app_remote_apk=$$(adb -s "$$serial" shell pm path com.calisthenics.diagnostic.android | tr -d '\r' | sed -n 's/^package://p' | head -n 1); \
+	test_remote_apk=$$(adb -s "$$serial" shell pm path com.calisthenics.diagnostic.android.test | tr -d '\r' | sed -n 's/^package://p' | head -n 1); \
+	if [ -z "$$app_remote_apk" ] || [ -z "$$test_remote_apk" ]; then echo "error: installed candidate APK path is unavailable" >&2; exit 1; fi; \
+	candidate_tmp=$$(mktemp -d); identity_tmp="$(M05B_CANDIDATE_IDENTITY_FILE).tmp"; \
+	trap 'rm -rf "$$candidate_tmp"; rm -f "$$identity_tmp"' EXIT INT TERM; \
+	adb -s "$$serial" exec-out cat "$$app_remote_apk" > "$$candidate_tmp/app.apk"; \
+	adb -s "$$serial" exec-out cat "$$test_remote_apk" > "$$candidate_tmp/test.apk"; \
+	app_sha256=$$(shasum -a 256 "$$candidate_tmp/app.apk" | awk '{print $$1}'); \
+	test_sha256=$$(shasum -a 256 "$$candidate_tmp/test.apk" | awk '{print $$1}'); \
+	producer_git_sha=$$(git rev-parse HEAD); \
+	model_sha256=$$(sed -n 's/.*"sha256": "\([0-9a-f]*\)".*/\1/p' apps/diagnostic-harness/model-assets/live_model_provenance.json | head -n 1); \
+	backend_version=$$(sed -n 's/.*"tasks_vision_version": "\([^"]*\)".*/\1/p' apps/diagnostic-harness/model-assets/live_model_provenance.json | head -n 1); \
+	delegate=$$(sed -n 's/.*"delegate": "\([^"]*\)".*/\1/p' apps/diagnostic-harness/model-assets/live_model_provenance.json | head -n 1 | tr '[:upper:]' '[:lower:]'); \
+	runtime_version=$$(adb -s "$$serial" shell getprop ro.build.version.release | tr -d '\r'); \
+	printf 'M05B_CANDIDATE_APP_SHA256=%s\nM05B_CANDIDATE_TEST_SHA256=%s\nM05B_CANDIDATE_GIT_SHA=%s\nM05B_CANDIDATE_PROBE_GIT_SHA=%s\nM05B_CANDIDATE_MODEL_SHA256=%s\nM05B_CANDIDATE_RUNTIME_VERSION=%s\nM05B_CANDIDATE_BACKEND_VERSION=%s\nM05B_CANDIDATE_DELEGATE=%s\n' "$$app_sha256" "$$test_sha256" "$$producer_git_sha" "$$producer_git_sha" "$$model_sha256" "$$runtime_version" "$$backend_version" "$$delegate" > "$$identity_tmp"; \
+	mv "$$identity_tmp" "$(M05B_CANDIDATE_IDENTITY_FILE)"; \
+	identity_json_tmp="$(M05B_ATTRIBUTION_IDENTITY_FILE).tmp"; \
+	printf '{"app_git_sha":"%s","probe_git_sha":"%s","apk_sha256":"%s","model_sha256":"%s","runtime_version":"%s","backend_version":"%s","delegate":"%s"}\n' "$$producer_git_sha" "$$producer_git_sha" "$$app_sha256" "$$model_sha256" "$$runtime_version" "$$backend_version" "$$delegate" > "$$identity_json_tmp"; \
+	mv "$$identity_json_tmp" "$(M05B_ATTRIBUTION_IDENTITY_FILE)"; \
+	printf 'Prepared exact M0.5B candidate identity at %s and %s\napp_sha256=%s\ntest_sha256=%s\nproducer_git_sha=%s\n' "$(M05B_CANDIDATE_IDENTITY_FILE)" "$(M05B_ATTRIBUTION_IDENTITY_FILE)" "$$app_sha256" "$$test_sha256" "$$producer_git_sha"
+
+# M0.5B Task 7 physical start-envelope gate. It consumes an already-installed exact candidate;
+# rebuilding, reinstalling, package-task execution, model fetching, and app-data clearing are
+# prohibited during the evidence sequence. The target prints evidence and never writes the ledger.
+verify-harness-s25-m05b-envelope:
+	@set -eu; \
+	device_count=$$(adb devices -l | tail -n +2 | awk '$$2 == "device"' | wc -l | tr -d ' '); \
+	if [ "$$device_count" -ne 1 ]; then echo "error: verify-harness-s25-m05b-envelope requires exactly one authorized attached device, found $$device_count" >&2; exit 1; fi; \
+	serial=$$(adb devices -l | tail -n +2 | awk '$$2 == "device" {print $$1}'); \
+	case "$$serial" in emulator-*) echo "error: emulator is not authorized for the M0.5B S25 envelope gate" >&2; exit 1 ;; esac; \
+	if [ ! -f "$(M05B_CANDIDATE_IDENTITY_FILE)" ]; then echo "error: missing exact candidate identity; run prepare-harness-s25-m05b-envelope-candidate once" >&2; exit 1; fi; \
+	expected_app_sha256=$$(sed -n 's/^M05B_CANDIDATE_APP_SHA256=//p' "$(M05B_CANDIDATE_IDENTITY_FILE)"); \
+	expected_test_sha256=$$(sed -n 's/^M05B_CANDIDATE_TEST_SHA256=//p' "$(M05B_CANDIDATE_IDENTITY_FILE)"); \
+	expected_git_sha=$$(sed -n 's/^M05B_CANDIDATE_GIT_SHA=//p' "$(M05B_CANDIDATE_IDENTITY_FILE)"); \
+	for digest in "$$expected_app_sha256" "$$expected_test_sha256"; do printf '%s\n' "$$digest" | grep -Eq '^[0-9a-f]{64}$$' || { echo "error: malformed candidate digest" >&2; exit 1; }; done; \
+	printf '%s\n' "$$expected_git_sha" | grep -Eq '^[0-9a-f]{40}$$' || { echo "error: malformed candidate git SHA" >&2; exit 1; }; \
+	if [ "$$(git rev-parse HEAD)" != "$$expected_git_sha" ] || [ -n "$$(git status --porcelain --untracked-files=normal)" ]; then echo "error: source changed after candidate preparation" >&2; exit 1; fi; \
+	app_remote_apk=$$(adb -s "$$serial" shell pm path com.calisthenics.diagnostic.android | tr -d '\r' | sed -n 's/^package://p' | head -n 1); \
+	test_remote_apk=$$(adb -s "$$serial" shell pm path com.calisthenics.diagnostic.android.test | tr -d '\r' | sed -n 's/^package://p' | head -n 1); \
+	if [ -z "$$app_remote_apk" ] || [ -z "$$test_remote_apk" ]; then echo "error: prepared candidate is not installed" >&2; exit 1; fi; \
+	candidate_tmp=$$(mktemp -d); baseline_transcript=$$(mktemp); transcript=$$(mktemp); trap 'rm -rf "$$candidate_tmp"; rm -f "$$baseline_transcript" "$$transcript"' EXIT INT TERM; \
+	adb -s "$$serial" exec-out cat "$$app_remote_apk" > "$$candidate_tmp/app.apk"; \
+	adb -s "$$serial" exec-out cat "$$test_remote_apk" > "$$candidate_tmp/test.apk"; \
+	actual_app_sha256=$$(shasum -a 256 "$$candidate_tmp/app.apk" | awk '{print $$1}'); \
+	actual_test_sha256=$$(shasum -a 256 "$$candidate_tmp/test.apk" | awk '{print $$1}'); \
+	if [ "$$actual_app_sha256" != "$$expected_app_sha256" ] || [ "$$actual_test_sha256" != "$$expected_test_sha256" ]; then echo "error: installed candidate bytes differ from prepared identity" >&2; exit 1; fi; \
+	: "$${M05B_AMBIENT_TOKEN:?set M05B_AMBIENT_TOKEN to the bounded operator token}"; \
+	if [ "$${M05B_AMBIENT_CONSTANCY_ATTESTATION+x}" = x ]; then echo "error: AMBIENT.ATTESTATION_PRE_SUPPLIED; ambient constancy must be attested after the baseline" >&2; exit 1; fi; \
+	battery_dump=$$(adb -s "$$serial" shell dumpsys battery | tr -d '\r'); \
+	host_override_rejected=true; if printf '%s\n' "$$battery_dump" | grep -Eq '(^|: )((AC|USB|Wireless|Dock) powered): true'; then host_override_rejected=false; fi; \
+	host_adb_transport=false; case "$$serial" in *:*) host_adb_transport=true ;; esac; \
+	set +e; adb -s "$$serial" shell am instrument -w -r -e class com.calisthenics.diagnostic.probe.M05BEnvelopeDeviceGateTest#observeBaseline -e host_adb_transport "$$([ "$$host_adb_transport" = true ] && echo wifi || echo unavailable)" -e host_battery_override_rejected "$$host_override_rejected" -e m05b_ambient_token "$$M05B_AMBIENT_TOKEN" -e m05b_candidate_app_sha256 "$$expected_app_sha256" -e m05b_candidate_git_sha "$$expected_git_sha" com.calisthenics.diagnostic.android.test/androidx.test.runner.AndroidJUnitRunner >"$$baseline_transcript" 2>&1; baseline_status=$$?; set -e; \
+	cat "$$baseline_transcript"; printf 'M0.5B baseline instrumentation exit status: %s\n' "$$baseline_status"; \
+	if [ "$$baseline_status" -ne 0 ]; then exit "$$baseline_status"; fi; \
+	baseline_challenge=$$($(VENV_PYTHON) tools/check_m05b_baseline_phase.py "$$baseline_transcript"); \
+	printf 'After observing the completed baseline, attest ambient constancy (constant or changed): ' >/dev/tty; \
+	IFS= read -r M05B_AMBIENT_CONSTANCY_ATTESTATION </dev/tty; \
+	case "$$M05B_AMBIENT_CONSTANCY_ATTESTATION" in constant|changed) ;; *) echo "error: ambient constancy attestation must be constant or changed" >&2; exit 1 ;; esac; \
+	app_remote_apk=$$(adb -s "$$serial" shell pm path com.calisthenics.diagnostic.android | tr -d '\r' | sed -n 's/^package://p' | head -n 1); \
+	test_remote_apk=$$(adb -s "$$serial" shell pm path com.calisthenics.diagnostic.android.test | tr -d '\r' | sed -n 's/^package://p' | head -n 1); \
+	if [ -z "$$app_remote_apk" ] || [ -z "$$test_remote_apk" ]; then echo "error: prepared candidate disappeared after the baseline" >&2; exit 1; fi; \
+	adb -s "$$serial" exec-out cat "$$app_remote_apk" > "$$candidate_tmp/app-after-baseline.apk"; \
+	adb -s "$$serial" exec-out cat "$$test_remote_apk" > "$$candidate_tmp/test-after-baseline.apk"; \
+	actual_app_sha256=$$(shasum -a 256 "$$candidate_tmp/app-after-baseline.apk" | awk '{print $$1}'); \
+	actual_test_sha256=$$(shasum -a 256 "$$candidate_tmp/test-after-baseline.apk" | awk '{print $$1}'); \
+	if [ "$$actual_app_sha256" != "$$expected_app_sha256" ] || [ "$$actual_test_sha256" != "$$expected_test_sha256" ]; then echo "error: installed candidate changed during the baseline" >&2; exit 1; fi; \
+	set +e; adb -s "$$serial" shell am instrument -w -r -e class com.calisthenics.diagnostic.probe.M05BEnvelopeDeviceGateTest#attestAndEmit -e m05b_baseline_challenge "$$baseline_challenge" -e m05b_ambient_constancy_attestation "$$M05B_AMBIENT_CONSTANCY_ATTESTATION" -e m05b_candidate_app_sha256 "$$expected_app_sha256" -e m05b_candidate_git_sha "$$expected_git_sha" com.calisthenics.diagnostic.android.test/androidx.test.runner.AndroidJUnitRunner >"$$transcript" 2>&1; instrument_status=$$?; set -e; \
 	cat "$$transcript"; printf 'M0.5B envelope instrumentation exit status: %s\n' "$$instrument_status"; \
 	if [ "$$instrument_status" -ne 0 ]; then exit "$$instrument_status"; fi; \
-	cd ../.. && $(VENV_PYTHON) tools/check_m05b_envelope.py "$$transcript"
+	$(VENV_PYTHON) tools/check_m05b_envelope.py "$$transcript" "$$expected_app_sha256" "$$expected_git_sha"
+
+# Task 6's short attribution gate. It consumes the exact candidate prepared above and transfers
+# only the durable exports referenced by the exact instrumentation record. It never builds,
+# installs, clears app data, or writes the pending/recorded evidence ledger.
+verify-harness-s25-m05b-attribution:
+	@set -eu; \
+	device_count=$$(adb devices -l | tail -n +2 | awk '$$2 == "device"' | wc -l | tr -d ' '); \
+	if [ "$$device_count" -ne 1 ]; then echo "error: verify-harness-s25-m05b-attribution requires exactly one authorized attached device, found $$device_count" >&2; exit 1; fi; \
+	serial=$$(adb devices -l | tail -n +2 | awk '$$2 == "device" {print $$1}'); \
+	case "$$serial" in emulator-*) echo "error: emulator is not authorized for the S25 attribution gate" >&2; exit 1 ;; *:*) ;; *) echo "error: attribution gate requires Wi-Fi ADB, got '$$serial'" >&2; exit 1 ;; esac; \
+	manufacturer=$$(adb -s "$$serial" shell getprop ro.product.manufacturer | tr -d '\r'); \
+	model=$$(adb -s "$$serial" shell getprop ro.product.model | tr -d '\r'); \
+	marketing_name=$$(adb -s "$$serial" shell getprop ro.config.marketing_name | tr -d '\r'); \
+	if ! $(VENV_PYTHON) -c 'import sys; from pathlib import Path; sys.path.insert(0, str(Path("tools").resolve())); from check_five_run_replay import is_authorized_five_run_gate_target; raise SystemExit(0 if is_authorized_five_run_gate_target({"device_class":"physical_device", "manufacturer":sys.argv[1], "model":sys.argv[2], "marketing_name":sys.argv[3]}) else 1)' "$$manufacturer" "$$model" "$$marketing_name"; then echo "error: attached target is not the authorized Samsung Galaxy S25 Ultra" >&2; exit 1; fi; \
+	if [ ! -f "$(M05B_CANDIDATE_IDENTITY_FILE)" ] || [ ! -f "$(M05B_ATTRIBUTION_IDENTITY_FILE)" ]; then echo "error: exact attribution candidate identity is missing; run prepare-harness-s25-m05b-envelope-candidate once" >&2; exit 1; fi; \
+	expected_app_sha256=$$(sed -n 's/^M05B_CANDIDATE_APP_SHA256=//p' "$(M05B_CANDIDATE_IDENTITY_FILE)"); \
+	expected_test_sha256=$$(sed -n 's/^M05B_CANDIDATE_TEST_SHA256=//p' "$(M05B_CANDIDATE_IDENTITY_FILE)"); \
+	expected_git_sha=$$(sed -n 's/^M05B_CANDIDATE_GIT_SHA=//p' "$(M05B_CANDIDATE_IDENTITY_FILE)"); \
+	if [ "$$expected_git_sha" != "$$(git rev-parse HEAD)" ] || [ -n "$$(git status --porcelain --untracked-files=normal)" ]; then echo "error: source changed after candidate preparation" >&2; exit 1; fi; \
+	for digest in "$$expected_app_sha256" "$$expected_test_sha256"; do printf '%s\n' "$$digest" | grep -Eq '^[0-9a-f]{64}$$' || { echo "error: malformed candidate digest" >&2; exit 1; }; done; \
+	app_remote_apk=$$(adb -s "$$serial" shell pm path com.calisthenics.diagnostic.android | tr -d '\r' | sed -n 's/^package://p' | head -n 1); \
+	test_remote_apk=$$(adb -s "$$serial" shell pm path com.calisthenics.diagnostic.android.test | tr -d '\r' | sed -n 's/^package://p' | head -n 1); \
+	if [ -z "$$app_remote_apk" ] || [ -z "$$test_remote_apk" ]; then echo "error: exact attribution candidate is not installed" >&2; exit 1; fi; \
+	candidate_tmp=$$(mktemp -d); transcript=$$(mktemp); trap 'rm -rf "$$candidate_tmp"; rm -f "$$transcript"' EXIT INT TERM; \
+	adb -s "$$serial" exec-out cat "$$app_remote_apk" > "$$candidate_tmp/app.apk"; \
+	adb -s "$$serial" exec-out cat "$$test_remote_apk" > "$$candidate_tmp/test.apk"; \
+	actual_app_sha256=$$(shasum -a 256 "$$candidate_tmp/app.apk" | awk '{print $$1}'); actual_test_sha256=$$(shasum -a 256 "$$candidate_tmp/test.apk" | awk '{print $$1}'); \
+	if [ "$$actual_app_sha256" != "$$expected_app_sha256" ] || [ "$$actual_test_sha256" != "$$expected_test_sha256" ]; then echo "error: installed candidate bytes differ from prepared identity" >&2; exit 1; fi; \
+	set +e; adb -s "$$serial" shell am instrument -w -r -e class com.calisthenics.diagnostic.composition.M05BAttributionDeviceGateTest com.calisthenics.diagnostic.android.test/androidx.test.runner.AndroidJUnitRunner >"$$transcript" 2>&1; instrument_status=$$?; set -e; \
+	cat "$$transcript"; \
+	$(VENV_PYTHON) tools/check_m05b_attribution.py --serial "$$serial" --package com.calisthenics.diagnostic.android --transcript "$$transcript" --subprocess-exit-code "$$instrument_status" --prepared-identity "$(M05B_ATTRIBUTION_IDENTITY_FILE)"
 
 # Task 5's bounded physical live-capture evidence gate. The device test emits one typed record;
 # the host checker pulls and validates the exact export before deriving the final verdict. This

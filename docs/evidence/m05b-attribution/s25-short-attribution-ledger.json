@@ -1,0 +1,12 @@
+{
+  "ledger_schema_version": "1.0.0",
+  "status": "pending",
+  "scope": "M0.5B bounded non-participant short attribution at 10/15/30 inference FPS on one authorized Samsung Galaxy S25 Ultra",
+  "missing_precondition": "exact final candidate and authorized physical Samsung Galaxy S25 Ultra over Wi-Fi ADB are required; no physical attribution run has been recorded",
+  "device_status": "absent",
+  "non_claims": [
+    "no physical attribution observation has been recorded",
+    "no sustained M0.5B envelope run has been admitted",
+    "no participant capture or reliability claim is authorized"
+  ]
+}

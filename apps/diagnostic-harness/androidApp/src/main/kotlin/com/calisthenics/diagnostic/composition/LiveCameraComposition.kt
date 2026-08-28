@@ -81,6 +81,7 @@ import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import java.io.File
 import java.time.Instant
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -310,6 +311,8 @@ class LiveCameraComposition internal constructor(
         val mirrored: Boolean = false,
         val harnessGitSha: String = "0000000000000000000000000000000000000000",
         val provenance: ModelProvenance? = null,
+        /** Candidate identity copied into the manifest's extensible study context. */
+        val attributionIdentity: Map<String, String> = emptyMap(),
         val device: Device = Device("android", "unknown", "unknown", null, false),
         val startedAtUtc: String = Instant.now().toString(),
     )
@@ -1430,7 +1433,11 @@ class LiveCameraComposition internal constructor(
                 put("model_input_width", evidence.modelInputWidth)
                 put("model_input_height", evidence.modelInputHeight)
             },
-        )
+        ) + metadata.attributionIdentity.takeIf { it.isNotEmpty() }?.let { identity ->
+            mapOf("m05b_attribution_identity" to buildJsonObject {
+                identity.entries.sortedBy { it.key }.forEach { (key, value) -> put(key, value) }
+            })
+        }.orEmpty()
         return SessionManifest(
             schemaVersion = SemanticVersion("1.1.0"),
             sessionId = id,
@@ -1571,6 +1578,15 @@ class LiveCameraComposition internal constructor(
                     manifestMetadata = LiveManifestMetadata(
                         harnessGitSha = BuildConfig.PROBE_GIT_SHA,
                         provenance = provenance,
+                        attributionIdentity = mapOf(
+                            "app_git_sha" to BuildConfig.PROBE_GIT_SHA,
+                            "probe_git_sha" to BuildConfig.PROBE_GIT_SHA,
+                            "apk_sha256" to Sha256Digest.hex(File(context.applicationInfo.sourceDir).readBytes()),
+                            "model_sha256" to provenance.sha256,
+                            "runtime_version" to Build.VERSION.RELEASE,
+                            "backend_version" to provenance.tasksVisionVersion,
+                            "delegate" to provenance.delegate.lowercase(),
+                        ),
                         device = Device(
                             platform = "android",
                             osVersion = Build.VERSION.RELEASE,

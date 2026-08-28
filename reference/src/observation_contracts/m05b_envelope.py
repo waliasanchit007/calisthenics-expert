@@ -13,12 +13,13 @@ from jsonschema import Draft202012Validator
 
 from observation_contracts.errors import ValidationIssue
 from observation_contracts.schema_loader import (
+    load_m05b_attempt_entry_schema,
     load_m05b_execution_order_schema,
     load_m05b_run_admission_schema,
     load_m05b_start_envelope_schema,
 )
 
-M05BKind = Literal["start_envelope", "execution_order", "run_admission"]
+M05BKind = Literal["start_envelope", "execution_order", "run_admission", "attempt_entry"]
 
 REQUIRED_CONJUNCT_IDS: tuple[str, ...] = (
     "DEVICE.CLASS",
@@ -37,6 +38,7 @@ REQUIRED_CONJUNCT_IDS: tuple[str, ...] = (
     "POWER.CHARGING",
     "POWER.SOURCE",
     "POWER.HOST_OVERRIDE",
+    "POWER.SAVE_MODE",
     "CONNECTIVITY.HOST_WIFI_ADB",
     "CONNECTIVITY.APP_WIFI",
     "AMBIENT.TOKEN",
@@ -75,6 +77,7 @@ _SCHEMAS = {
     "start_envelope": load_m05b_start_envelope_schema,
     "execution_order": load_m05b_execution_order_schema,
     "run_admission": load_m05b_run_admission_schema,
+    "attempt_entry": load_m05b_attempt_entry_schema,
 }
 
 
@@ -124,6 +127,22 @@ def derive_start_envelope(
             "inference_cadences_fps": [10, 15, 30],
             "duration_ns": 1_500_000_000_000,
             "overshoot_ns": 1_000_000_000,
+            "latency_bucket_upper_bounds_ns": [
+                1_000_000,
+                2_000_000,
+                4_000_000,
+                8_000_000,
+                16_000_000,
+                32_000_000,
+                64_000_000,
+                128_000_000,
+                256_000_000,
+                512_000_000,
+                1_024_000_000,
+                2_048_000_000,
+                4_096_000_000,
+            ],
+            "latency_percentile_ranks": [50, 95, 99],
         },
         "order_binding": {"path": "execution-order.json", "sha256": order_sha256},
         "producer_git_sha": producer_git_sha,
@@ -228,147 +247,273 @@ def admit_run(
     _reject_forbidden_keys(observed_start)
 
     blocking: list[str] = []
-    _compare_section(
-        envelope,
-        observed_start,
-        "device",
-        blocking,
-        {
-            "device_class": "DEVICE.CLASS_MISMATCH",
-            "manufacturer": "DEVICE.MANUFACTURER_MISMATCH",
-            "model": "DEVICE.MODEL_MISMATCH",
-            "device_build": "DEVICE.BUILD_MISMATCH",
-            "api_level": "DEVICE.API_MISMATCH",
-            "app_sha256": "IDENTITY.APP_DIGEST_MISMATCH",
-            "model_sha256": "IDENTITY.MODEL_DIGEST_MISMATCH",
-            "runtime_version": "IDENTITY.RUNTIME_MISMATCH",
-            "delegate": "IDENTITY.DELEGATE_MISMATCH",
-            "preprocessing_version": "IDENTITY.PREPROCESSING_MISMATCH",
-            "device_unit_digest": "IDENTITY.DEVICE_UNIT_MISMATCH",
-        },
-    )
-    _require_section_values(
-        envelope,
-        observed_start,
-        "power",
-        blocking,
-        {
-            "charging": "POWER.CHARGING",
-            "power_source": "POWER.SOURCE_NOT_BATTERY",
-            "host_battery_override_rejected": "POWER.HOST_OVERRIDE",
-        },
-    )
-    _require_section_values(
-        envelope,
-        observed_start,
-        "connectivity",
-        blocking,
-        {
-            "host_adb_transport": "CONNECTIVITY.HOST_NOT_WIFI_ADB",
-            "app_transport": "CONNECTIVITY.APP_NOT_WIFI",
-            "network_identity_persisted": "CONNECTIVITY.NETWORK_IDENTITY",
-        },
-    )
-    _compare_section(
-        envelope,
-        observed_start,
-        "ambient",
-        blocking,
-        {"token": "AMBIENT.TOKEN", "constancy": "AMBIENT.NOT_CONSTANT"},
-    )
-    _compare_section(
-        envelope,
-        observed_start,
-        "thermal",
-        blocking,
-        {
-            "initial_status": "THERMAL.STATUS",
-            "battery_temperature_min_c": "THERMAL.RANGE",
-            "battery_temperature_max_c": "THERMAL.RANGE",
-            "battery_temperature_range_c": "THERMAL.RANGE",
-        },
-    )
-    _compare_section(
-        envelope,
-        observed_start,
-        "display",
-        blocking,
-        {
-            "keep_awake": "DISPLAY.KEEP_AWAKE",
-            "brightness_mode": "DISPLAY.BRIGHTNESS_NOT_MANUAL",
-            "brightness_raw": "DISPLAY.BRIGHTNESS_VALUE",
-            "brightness_scale_min": "DISPLAY.BRIGHTNESS_RANGE",
-            "brightness_scale_max": "DISPLAY.BRIGHTNESS_RANGE",
-        },
-    )
-    _require_non_null(
-        observed_start, "display", "brightness_raw", "DISPLAY.BRIGHTNESS_UNAVAILABLE", blocking
-    )
-    _require_non_null(
-        observed_start,
-        "display",
-        "brightness_scale_min",
-        "DISPLAY.BRIGHTNESS_UNAVAILABLE",
-        blocking,
-    )
-    _require_non_null(
-        observed_start,
-        "display",
-        "brightness_scale_max",
-        "DISPLAY.BRIGHTNESS_UNAVAILABLE",
-        blocking,
-    )
-    display = _section(observed_start, "display")
-    raw = display.get("brightness_raw")
-    lower = display.get("brightness_scale_min")
-    upper = display.get("brightness_scale_max")
-    if (
-        isinstance(raw, (int, float))
-        and isinstance(lower, (int, float))
-        and isinstance(upper, (int, float))
-        and not lower <= raw <= upper
-    ):
-        blocking.append("DISPLAY.BRIGHTNESS_RANGE")
+    evaluated: list[str] = []
 
-    power = _section(observed_start, "power")
-    if power.get("charging") is not False:
-        blocking.append("POWER.CHARGING")
-    if power.get("power_source") != "battery":
-        blocking.append("POWER.SOURCE_NOT_BATTERY")
-    if power.get("host_battery_override_rejected") is not True:
-        blocking.append("POWER.HOST_OVERRIDE")
-    connectivity = _section(observed_start, "connectivity")
-    if connectivity.get("host_adb_transport") != "wifi":
-        blocking.append("CONNECTIVITY.HOST_NOT_WIFI_ADB")
-    if connectivity.get("app_transport") != "wifi":
-        blocking.append("CONNECTIVITY.APP_NOT_WIFI")
-    if connectivity.get("network_identity_persisted") is not False:
-        blocking.append("CONNECTIVITY.NETWORK_IDENTITY")
-    ambient = _section(observed_start, "ambient")
-    if ambient.get("constancy") != "constant":
-        blocking.append("AMBIENT.NOT_CONSTANT")
+    def evaluate(conjunct_id: str, *findings: tuple[bool, str]) -> None:
+        for failed, code in findings:
+            if failed:
+                blocking.append(code)
+        evaluated.append(conjunct_id)
+
+    def mismatch(
+        expected: Mapping[str, object], observed: Mapping[str, object], field: str
+    ) -> bool:
+        return (
+            field not in observed
+            or observed[field] is None
+            or expected.get(field) != observed[field]
+        )
+
+    envelope_device = _section(envelope, "device")
+    observed_device = _section(observed_start, "device")
+    evaluate(
+        "DEVICE.CLASS",
+        (mismatch(envelope_device, observed_device, "device_class"), "DEVICE.CLASS_MISMATCH"),
+        (envelope_device.get("device_class") != "physical_device", "DEVICE.CLASS"),
+    )
+    evaluate(
+        "DEVICE.MANUFACTURER",
+        (
+            mismatch(envelope_device, observed_device, "manufacturer"),
+            "DEVICE.MANUFACTURER_MISMATCH",
+        ),
+        (envelope_device.get("manufacturer") != "samsung", "DEVICE.MANUFACTURER"),
+    )
+    model = envelope_device.get("model")
+    evaluate(
+        "DEVICE.MODEL",
+        (mismatch(envelope_device, observed_device, "model"), "DEVICE.MODEL_MISMATCH"),
+        (
+            not isinstance(model, str) or re.fullmatch(r"SM-S938[A-Z0-9]*", model) is None,
+            "DEVICE.MODEL",
+        ),
+    )
+    evaluate(
+        "DEVICE.BUILD",
+        (mismatch(envelope_device, observed_device, "device_build"), "DEVICE.BUILD_MISMATCH"),
+    )
+    evaluate(
+        "DEVICE.API",
+        (mismatch(envelope_device, observed_device, "api_level"), "DEVICE.API_MISMATCH"),
+        (envelope_device.get("api_level") != 36, "DEVICE.API"),
+    )
+    evaluate(
+        "IDENTITY.APP_DIGEST",
+        (mismatch(envelope_device, observed_device, "app_sha256"), "IDENTITY.APP_DIGEST_MISMATCH"),
+    )
+    evaluate(
+        "IDENTITY.MODEL_DIGEST",
+        (
+            mismatch(envelope_device, observed_device, "model_sha256"),
+            "IDENTITY.MODEL_DIGEST_MISMATCH",
+        ),
+    )
+    evaluate(
+        "IDENTITY.RUNTIME",
+        (
+            mismatch(envelope_device, observed_device, "runtime_version"),
+            "IDENTITY.RUNTIME_MISMATCH",
+        ),
+    )
+    evaluate(
+        "IDENTITY.DELEGATE",
+        (mismatch(envelope_device, observed_device, "delegate"), "IDENTITY.DELEGATE_MISMATCH"),
+    )
+    evaluate(
+        "IDENTITY.PREPROCESSING",
+        (
+            mismatch(envelope_device, observed_device, "preprocessing_version"),
+            "IDENTITY.PREPROCESSING_MISMATCH",
+        ),
+    )
+    evaluate(
+        "IDENTITY.DEVICE_UNIT",
+        (
+            mismatch(envelope_device, observed_device, "device_unit_digest"),
+            "IDENTITY.DEVICE_UNIT_MISMATCH",
+        ),
+    )
+
+    envelope_thermal = _section(envelope, "thermal")
+    observed_thermal = _section(observed_start, "thermal")
+    evaluate(
+        "THERMAL.STATUS",
+        (mismatch(envelope_thermal, observed_thermal, "initial_status"), "THERMAL.STATUS"),
+    )
+    observed_temperature = observed_thermal.get("battery_temperature_c")
+    minimum_temperature = envelope_thermal.get("battery_temperature_min_c")
+    maximum_temperature = envelope_thermal.get("battery_temperature_max_c")
+    evaluate(
+        "THERMAL.RANGE",
+        (
+            not (
+                isinstance(observed_temperature, (int, float))
+                and isinstance(minimum_temperature, (int, float))
+                and isinstance(maximum_temperature, (int, float))
+                and minimum_temperature <= observed_temperature <= maximum_temperature
+            ),
+            "THERMAL.RANGE",
+        ),
+    )
+
+    envelope_power = _section(envelope, "power")
+    observed_power = _section(observed_start, "power")
+    evaluate(
+        "POWER.CHARGING",
+        (mismatch(envelope_power, observed_power, "charging"), "POWER.CHARGING"),
+        (envelope_power.get("charging") is not False, "POWER.CHARGING"),
+    )
+    evaluate(
+        "POWER.SOURCE",
+        (mismatch(envelope_power, observed_power, "power_source"), "POWER.SOURCE_NOT_BATTERY"),
+        (envelope_power.get("power_source") != "battery", "POWER.SOURCE_NOT_BATTERY"),
+    )
+    evaluate(
+        "POWER.HOST_OVERRIDE",
+        (
+            mismatch(envelope_power, observed_power, "host_battery_override_rejected"),
+            "POWER.HOST_OVERRIDE",
+        ),
+        (envelope_power.get("host_battery_override_rejected") is not True, "POWER.HOST_OVERRIDE"),
+    )
+    evaluate(
+        "POWER.SAVE_MODE",
+        (mismatch(envelope_power, observed_power, "power_save_mode"), "POWER.SAVE_MODE"),
+        (envelope_power.get("power_save_mode") is not False, "POWER.SAVE_MODE"),
+        (observed_power.get("power_save_mode") is not False, "POWER.SAVE_MODE"),
+    )
+
+    envelope_connectivity = _section(envelope, "connectivity")
+    observed_connectivity = _section(observed_start, "connectivity")
+    evaluate(
+        "CONNECTIVITY.HOST_WIFI_ADB",
+        (
+            mismatch(envelope_connectivity, observed_connectivity, "host_adb_transport"),
+            "CONNECTIVITY.HOST_NOT_WIFI_ADB",
+        ),
+        (
+            envelope_connectivity.get("host_adb_transport") != "wifi",
+            "CONNECTIVITY.HOST_NOT_WIFI_ADB",
+        ),
+    )
+    evaluate(
+        "CONNECTIVITY.APP_WIFI",
+        (
+            mismatch(envelope_connectivity, observed_connectivity, "app_transport"),
+            "CONNECTIVITY.APP_NOT_WIFI",
+        ),
+        (
+            mismatch(envelope_connectivity, observed_connectivity, "network_identity_persisted"),
+            "CONNECTIVITY.NETWORK_IDENTITY",
+        ),
+        (envelope_connectivity.get("app_transport") != "wifi", "CONNECTIVITY.APP_NOT_WIFI"),
+        (
+            envelope_connectivity.get("network_identity_persisted") is not False,
+            "CONNECTIVITY.APP_NOT_WIFI",
+        ),
+    )
+
+    envelope_ambient = _section(envelope, "ambient")
+    observed_ambient = _section(observed_start, "ambient")
+    evaluate(
+        "AMBIENT.TOKEN",
+        (mismatch(envelope_ambient, observed_ambient, "token"), "AMBIENT.TOKEN"),
+    )
+    evaluate(
+        "AMBIENT.CONSTANCY",
+        (mismatch(envelope_ambient, observed_ambient, "constancy"), "AMBIENT.NOT_CONSTANT"),
+        (envelope_ambient.get("constancy") != "constant", "AMBIENT.NOT_CONSTANT"),
+        (
+            observed_ambient.get("constancy_operator_supplied") is not True,
+            "AMBIENT.ATTESTATION_MISSING",
+        ),
+    )
+
+    envelope_display = _section(envelope, "display")
+    observed_display = _section(observed_start, "display")
+    evaluate(
+        "DISPLAY.KEEP_AWAKE",
+        (mismatch(envelope_display, observed_display, "keep_awake"), "DISPLAY.KEEP_AWAKE"),
+    )
+    evaluate(
+        "DISPLAY.BRIGHTNESS_MODE",
+        (
+            mismatch(envelope_display, observed_display, "brightness_mode"),
+            "DISPLAY.BRIGHTNESS_NOT_MANUAL",
+        ),
+    )
+    raw = observed_display.get("brightness_raw")
+    lower = observed_display.get("brightness_scale_min")
+    upper = observed_display.get("brightness_scale_max")
+    evaluate(
+        "DISPLAY.BRIGHTNESS_VALUE",
+        (
+            mismatch(envelope_display, observed_display, "brightness_raw"),
+            "DISPLAY.BRIGHTNESS_VALUE",
+        ),
+        (raw is None, "DISPLAY.BRIGHTNESS_UNAVAILABLE"),
+    )
+    evaluate(
+        "DISPLAY.BRIGHTNESS_RANGE",
+        (
+            mismatch(envelope_display, observed_display, "brightness_scale_min"),
+            "DISPLAY.BRIGHTNESS_RANGE",
+        ),
+        (
+            mismatch(envelope_display, observed_display, "brightness_scale_max"),
+            "DISPLAY.BRIGHTNESS_RANGE",
+        ),
+        (lower is None or upper is None, "DISPLAY.BRIGHTNESS_UNAVAILABLE"),
+        (
+            isinstance(raw, (int, float))
+            and isinstance(lower, (int, float))
+            and isinstance(upper, (int, float))
+            and not lower <= raw <= upper,
+            "DISPLAY.BRIGHTNESS_RANGE",
+        ),
+    )
 
     protocol = _section(envelope, "protocol")
-    if protocol != {
-        "camera_fps": 30,
-        "inference_cadences_fps": [10, 15, 30],
-        "duration_ns": 1_500_000_000_000,
-        "overshoot_ns": 1_000_000_000,
-    }:
-        blocking.extend(
-            [
-                "PROTOCOL.CAMERA_FPS",
-                "PROTOCOL.CADENCE_SET",
-                "PROTOCOL.DURATION",
-                "PROTOCOL.OVERSHOOT",
-            ]
-        )
+    expected_latency_buckets = [
+        1_000_000,
+        2_000_000,
+        4_000_000,
+        8_000_000,
+        16_000_000,
+        32_000_000,
+        64_000_000,
+        128_000_000,
+        256_000_000,
+        512_000_000,
+        1_024_000_000,
+        2_048_000_000,
+        4_096_000_000,
+    ]
+    evaluate(
+        "PROTOCOL.CAMERA_FPS",
+        (protocol.get("camera_fps") != 30, "PROTOCOL.CAMERA_FPS"),
+    )
+    evaluate(
+        "PROTOCOL.CADENCE_SET",
+        (protocol.get("inference_cadences_fps") != [10, 15, 30], "PROTOCOL.CADENCE_SET"),
+    )
+    evaluate(
+        "PROTOCOL.DURATION",
+        (protocol.get("duration_ns") != 1_500_000_000_000, "PROTOCOL.DURATION"),
+    )
+    evaluate(
+        "PROTOCOL.OVERSHOOT",
+        (protocol.get("overshoot_ns") != 1_000_000_000, "PROTOCOL.OVERSHOOT"),
+        (
+            protocol.get("latency_bucket_upper_bounds_ns") != expected_latency_buckets,
+            "PROTOCOL.LATENCY_BUCKETS",
+        ),
+        (protocol.get("latency_percentile_ranks") != [50, 95, 99], "PROTOCOL.LATENCY_PERCENTILES"),
+    )
     procedure = _section(envelope, "procedure")
     procedure_without_digest = {
         key: value for key, value in procedure.items() if key != "procedure_sha256"
     }
-    if procedure.get("procedure_sha256") != canonical_sha256(procedure_without_digest):
-        blocking.append("PROTOCOL.PROCEDURE_DIGEST")
     procedure_durations = [
         procedure.get(key)
         for key in (
@@ -378,26 +523,53 @@ def admit_run(
             "cooldown_sampling_interval_ns",
         )
     ]
-    if not all(isinstance(duration, int) and duration > 0 for duration in procedure_durations):
-        blocking.append("PROTOCOL.COOLDOWN")
+    evaluate(
+        "PROTOCOL.COOLDOWN",
+        (
+            procedure.get("procedure_sha256") != canonical_sha256(procedure_without_digest),
+            "PROTOCOL.PROCEDURE_DIGEST",
+        ),
+        (
+            procedure_durations != [300_000_000_000, 1_000_000_000, 600_000_000_000, 1_000_000_000],
+            "PROTOCOL.COOLDOWN",
+        ),
+    )
+
     order_cadences = order.get("cadences_fps", [])
-    if not isinstance(order_cadences, list) or order_cadences != [10, 15, 30]:
-        blocking.append("ORDER.PERMITTED")
     order_binding = _section(envelope, "order_binding")
-    if order_binding.get("sha256") != canonical_sha256(order):
-        blocking.append("ORDER.DIGEST")
-    if cadence_fps not in (10, 15, 30):
-        blocking.append("ORDER.PERMITTED")
-    if cadence_fps != 10 and predecessor_status != "completed":
-        blocking.append("ATTEMPT.PREDECESSOR_INCOMPLETE")
-    if not re.fullmatch(r"00000000-0000-4000-8000-[0-9a-f]{12}", session_id):
-        blocking.append("SESSION.IDENTITY")
-    if attempt_sequence < 1:
-        blocking.append("ATTEMPT.SEQUENCE")
-    if input_class not in ("empty_scene", "displayed_synthetic_figure"):
-        blocking.append("SESSION.INPUT_CLASS")
-    if not operator_attested_no_person:
-        blocking.append("SESSION.NO_PERSON")
+    evaluate(
+        "ORDER.PERMITTED",
+        (
+            not isinstance(order_cadences, list) or order_cadences != [10, 15, 30],
+            "ORDER.PERMITTED",
+        ),
+        (order_binding.get("sha256") != canonical_sha256(order), "ORDER.DIGEST"),
+        (order_binding.get("path") != order_path, "ORDER.PATH"),
+        (cadence_fps not in (10, 15, 30), "ORDER.PERMITTED"),
+        (
+            cadence_fps != 10 and predecessor_status != "completed",
+            "ATTEMPT.PREDECESSOR_INCOMPLETE",
+        ),
+        (attempt_sequence < 1, "ATTEMPT.SEQUENCE"),
+    )
+    evaluate(
+        "SESSION.IDENTITY",
+        (
+            re.fullmatch(r"00000000-0000-4000-8000-[0-9a-f]{12}", session_id) is None,
+            "SESSION.IDENTITY",
+        ),
+    )
+    evaluate(
+        "SESSION.INPUT_CLASS",
+        (
+            input_class not in ("empty_scene", "displayed_synthetic_figure"),
+            "SESSION.INPUT_CLASS",
+        ),
+    )
+    evaluate("SESSION.NO_PERSON", (not operator_attested_no_person, "SESSION.NO_PERSON"))
+
+    if tuple(evaluated) != REQUIRED_CONJUNCT_IDS:
+        raise RuntimeError("admission did not execute the released conjunct set in order")
 
     observed = copy.deepcopy(dict(observed_start))
     blocking = list(dict.fromkeys(blocking))
@@ -415,7 +587,7 @@ def admit_run(
         "order_path": order_path,
         "envelope_sha256": canonical_sha256(envelope),
         "order_sha256": canonical_sha256(order),
-        "evaluated_conjunct_ids": list(REQUIRED_CONJUNCT_IDS),
+        "evaluated_conjunct_ids": evaluated,
         "blocking_codes": blocking,
         "admission_status": "admitted" if not blocking else "blocked",
         "observed_start": observed,

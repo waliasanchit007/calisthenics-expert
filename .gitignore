@@ -19,6 +19,8 @@ apps/diagnostic-harness/model-assets/*.bin
 apps/diagnostic-harness/model-assets/*.onnx
 apps/diagnostic-harness/model-assets/*.task
 apps/diagnostic-harness/model-assets/*.tflite
+.m05b-envelope-candidate.env
+.m05b-attribution-candidate.json
 
 # Raw study media and secret material are never repository content.
 *.aac

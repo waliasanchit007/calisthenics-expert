@@ -65,8 +65,14 @@
     },
     "power": {
       "type": "object", "additionalProperties": false,
-      "required": ["charging", "power_source", "host_battery_override_rejected"],
-      "properties": {"charging": {"const": false}, "power_source": {"const": "battery"}, "host_battery_override_rejected": {"const": true}}
+      "required": ["charging", "power_source", "host_battery_override_rejected", "power_save_mode", "baseline_battery_observation"],
+      "properties": {
+        "charging": {"const": false},
+        "power_source": {"const": "battery"},
+        "host_battery_override_rejected": {"const": true},
+        "power_save_mode": {"const": false},
+        "baseline_battery_observation": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/battery_observation"}]}
+      }
     },
     "connectivity": {
       "type": "object", "additionalProperties": false,
@@ -85,8 +91,12 @@
     },
     "ambient": {
       "type": "object", "additionalProperties": false,
-      "required": ["token", "constancy"],
-      "properties": {"token": {"$ref": "#/$defs/slug"}, "constancy": {"enum": ["constant", "changed", "unavailable"]}}
+      "required": ["token", "constancy", "constancy_source"],
+      "properties": {
+        "token": {"$ref": "#/$defs/slug"},
+        "constancy": {"const": "constant"},
+        "constancy_source": {"const": "operator_attestation_end_of_baseline"}
+      }
     },
     "display": {
       "type": "object", "additionalProperties": false,
@@ -98,11 +108,18 @@
     },
     "protocol": {
       "type": "object", "additionalProperties": false,
-      "required": ["camera_fps", "inference_cadences_fps", "duration_ns", "overshoot_ns"],
+      "required": ["camera_fps", "inference_cadences_fps", "duration_ns", "overshoot_ns", "latency_bucket_upper_bounds_ns", "latency_percentile_ranks"],
       "properties": {
         "camera_fps": {"const": 30}, "inference_cadences_fps": {"const": [10, 15, 30]},
-        "duration_ns": {"const": 1500000000000}, "overshoot_ns": {"const": 1000000000}
+        "duration_ns": {"const": 1500000000000}, "overshoot_ns": {"const": 1000000000},
+        "latency_bucket_upper_bounds_ns": {"const": [1000000, 2000000, 4000000, 8000000, 16000000, 32000000, 64000000, 128000000, 256000000, 512000000, 1024000000, 2048000000, 4096000000]},
+        "latency_percentile_ranks": {"const": [50, 95, 99]}
       }
+    },
+    "battery_observation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["unit", "value"],
+      "properties": {"unit": {"enum": ["percent", "microamp_hours"]}, "value": {"type": "number"}}
     }
   }
 }

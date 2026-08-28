@@ -36,6 +36,8 @@ def _baseline() -> dict[str, object]:
             "charging": False,
             "power_source": "battery",
             "host_battery_override_rejected": True,
+            "power_save_mode": False,
+            "baseline_battery_observation": {"unit": "percent", "value": 80.0},
         },
         "connectivity": {
             "host_adb_transport": "wifi",
@@ -48,7 +50,11 @@ def _baseline() -> dict[str, object]:
             "battery_temperature_max_c": 30.0,
             "battery_temperature_range_c": 1.0,
         },
-        "ambient": {"token": "ambient-01", "constancy": "constant"},
+        "ambient": {
+            "token": "ambient-01",
+            "constancy": "constant",
+            "constancy_source": "operator_attestation_end_of_baseline",
+        },
         "display": {
             "keep_awake": True,
             "brightness_mode": "manual",
@@ -83,8 +89,35 @@ def _order() -> dict[str, object]:
     }
 
 
+def _attempt_entry() -> dict[str, object]:
+    return {
+        "attempt_entry_schema_version": "1.0.0",
+        "record_kind": "m05b_attempt_entry",
+        "attempt_sequence": 1,
+        "cadence_fps": 10,
+        "admission_sha256": "e" * 64,
+        "outcome": "completed",
+        "previous_entry_sha256": None,
+    }
+
+
 def _observed_start() -> dict[str, object]:
-    return copy.deepcopy(_baseline())
+    observed = copy.deepcopy(_baseline())
+    observed["power"] = {
+        "charging": False,
+        "power_source": "battery",
+        "host_battery_override_rejected": True,
+        "power_save_mode": False,
+        "battery_observation": {"unit": "percent", "value": 79.0},
+        "device_idle_mode": False,
+    }
+    observed["thermal"] = {"initial_status": "none", "battery_temperature_c": 29.5}
+    observed["ambient"] = {
+        "token": "ambient-01",
+        "constancy": "constant",
+        "constancy_operator_supplied": True,
+    }
+    return observed
 
 
 def _admission(**changes: object) -> dict[str, object]:
@@ -105,7 +138,7 @@ def _admission(**changes: object) -> dict[str, object]:
         attempt_sequence=1,
         predecessor_status="not_applicable",
         envelope_path="envelope.json",
-        order_path="order.json",
+        order_path="execution-order.json",
     )
 
 
@@ -139,6 +172,19 @@ def test_execution_order_requires_duplicate_free_exact_permutation() -> None:
         assert validate_m05b_document(invalid, "execution_order")
 
 
+def test_attempt_entry_schema_is_registered_and_rejects_invalid_chain_fields() -> None:
+    assert validate_m05b_document(_attempt_entry(), "attempt_entry") == []
+
+    assert validate_m05b_document(
+        _attempt_entry() | {"previous_entry_sha256": "not-a-digest"},
+        "attempt_entry",
+    )
+    assert validate_m05b_document(
+        _attempt_entry() | {"cadence_fps": 60},
+        "attempt_entry",
+    )
+
+
 def test_admission_derives_admitted_status_and_exact_required_conjunct_set() -> None:
     record = _admission()
 
@@ -149,6 +195,36 @@ def test_admission_derives_admitted_status_and_exact_required_conjunct_set() -> 
     assert "success" not in record
     assert "verdict" not in record
     assert "admitted" not in record
+
+
+def test_tagged_battery_observation_is_explicitly_nullable_and_non_blocking() -> None:
+    baseline = _baseline()
+    baseline["power"] = {
+        **baseline["power"],  # type: ignore[index]
+        "baseline_battery_observation": None,
+    }
+    envelope = derive_start_envelope(
+        baseline,
+        _procedure(),
+        "d" * 40,
+        canonical_sha256(_order()),
+    )
+    observed = _observed_start()
+    observed["power"] = {**observed["power"], "battery_observation": None}  # type: ignore[index]
+    record = admit_run(
+        envelope=envelope,
+        order=_order(),
+        observed_start=observed,
+        session_id="00000000-0000-4000-8000-000000000001",
+        cadence_fps=10,
+        attempt_sequence=1,
+        predecessor_status="not_applicable",
+        envelope_path="envelope.json",
+        order_path="execution-order.json",
+    )
+    assert validate_m05b_document(envelope, "start_envelope") == []
+    assert validate_m05b_document(record, "run_admission") == []
+    assert record["admission_status"] == "admitted"
 
 
 def test_required_conjunct_ids_are_the_released_literal_set() -> None:
@@ -169,6 +245,7 @@ def test_required_conjunct_ids_are_the_released_literal_set() -> None:
         "POWER.CHARGING",
         "POWER.SOURCE",
         "POWER.HOST_OVERRIDE",
+        "POWER.SAVE_MODE",
         "CONNECTIVITY.HOST_WIFI_ADB",
         "CONNECTIVITY.APP_WIFI",
         "AMBIENT.TOKEN",
@@ -202,6 +279,7 @@ def test_required_conjunct_ids_are_the_released_literal_set() -> None:
         ("power.charging", True, "POWER.CHARGING"),
         ("power.power_source", "usb", "POWER.SOURCE_NOT_BATTERY"),
         ("power.host_battery_override_rejected", False, "POWER.HOST_OVERRIDE"),
+        ("power.power_save_mode", True, "POWER.SAVE_MODE"),
         ("connectivity.host_adb_transport", "usb", "CONNECTIVITY.HOST_NOT_WIFI_ADB"),
         ("connectivity.app_transport", "cellular", "CONNECTIVITY.APP_NOT_WIFI"),
         ("ambient.constancy", "changed", "AMBIENT.NOT_CONSTANT"),
@@ -224,9 +302,7 @@ def test_each_start_conjunct_is_load_bearing(field: str, value: object, code: st
         ("device.device_build", "other-build", "DEVICE.BUILD_MISMATCH"),
         ("device.api_level", 35, "DEVICE.API_MISMATCH"),
         ("thermal.initial_status", "light", "THERMAL.STATUS"),
-        ("thermal.battery_temperature_min_c", 30.0, "THERMAL.RANGE"),
-        ("thermal.battery_temperature_max_c", 31.0, "THERMAL.RANGE"),
-        ("thermal.battery_temperature_range_c", 2.0, "THERMAL.RANGE"),
+        ("thermal.battery_temperature_c", 31.0, "THERMAL.RANGE"),
         ("ambient.token", "ambient-02", "AMBIENT.TOKEN"),
         ("display.brightness_raw", 129, "DISPLAY.BRIGHTNESS_VALUE"),
         ("display.brightness_scale_min", 1, "DISPLAY.BRIGHTNESS_RANGE"),
@@ -258,7 +334,7 @@ def test_duration_overshoot_cooldown_camera_and_cadence_are_load_bearing() -> No
         attempt_sequence=2,
         predecessor_status="blocked",
         envelope_path="envelope.json",
-        order_path="order.json",
+        order_path="execution-order.json",
     )
     assert "ATTEMPT.PREDECESSOR_INCOMPLETE" in blocked["blocking_codes"]
 
@@ -301,7 +377,7 @@ def test_session_attempt_input_and_no_person_mutations_block_and_remain_schema_v
             attempt_sequence=sequence,
             predecessor_status=predecessor,
             envelope_path="envelope.json",
-            order_path="order.json",
+            order_path="execution-order.json",
             input_class=input_class,
             operator_attested_no_person=no_person,
         )
@@ -324,7 +400,7 @@ def test_exact_digest_and_order_binding_are_load_bearing() -> None:
         attempt_sequence=1,
         predecessor_status="not_applicable",
         envelope_path="envelope.json",
-        order_path="order.json",
+        order_path="execution-order.json",
     )
     assert record["envelope_sha256"] != bad_envelope["envelope_sha256"]
     assert "envelope_sha256" in record
@@ -344,7 +420,7 @@ def test_order_and_procedure_digest_bindings_block_tampering() -> None:
         attempt_sequence=1,
         predecessor_status="not_applicable",
         envelope_path="envelope.json",
-        order_path="order.json",
+        order_path="execution-order.json",
     )
     assert "ORDER.DIGEST" in blocked_order["blocking_codes"]
 
@@ -362,7 +438,7 @@ def test_order_and_procedure_digest_bindings_block_tampering() -> None:
         attempt_sequence=1,
         predecessor_status="not_applicable",
         envelope_path="envelope.json",
-        order_path="order.json",
+        order_path="execution-order.json",
     )
     assert "PROTOCOL.PROCEDURE_DIGEST" in blocked_procedure["blocking_codes"]
 
@@ -399,7 +475,7 @@ def test_nested_privacy_forbidden_fields_are_rejected_before_admission() -> None
             attempt_sequence=1,
             predecessor_status="not_applicable",
             envelope_path="envelope.json",
-            order_path="order.json",
+            order_path="execution-order.json",
         )
 
 
@@ -414,7 +490,7 @@ def test_forged_verdict_fields_are_rejected_even_when_true() -> None:
             attempt_sequence=1,
             predecessor_status="not_applicable",
             envelope_path="envelope.json",
-            order_path="order.json",
+            order_path="execution-order.json",
             caller_fields={"success": True},
         )
 
@@ -444,3 +520,6 @@ def test_cli_validates_m05b_artifacts_and_returns_contract_exit_codes(tmp_path: 
     assert main(["verify-m05b-envelope", "execution_order", str(path)]) == 0
     path.write_text(json.dumps(_order() | {"cadences_fps": [10, 10, 30]}), encoding="utf-8")
     assert main(["verify-m05b-envelope", "execution_order", str(path)]) == 2
+
+    path.write_text(json.dumps(_attempt_entry()), encoding="utf-8")
+    assert main(["verify-m05b-envelope", "attempt_entry", str(path)]) == 0

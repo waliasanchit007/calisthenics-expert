@@ -21,6 +21,7 @@ from check_camera_capability_probe import (
 
 CAMERA_LEDGER = "docs/evidence/device-probes/s25-ultra-camera-capability-ledger.json"
 LIVE_CAPTURE_LEDGER = "docs/evidence/live-capture/s25-ultra-live-capture-ledger.json"
+M05B_ATTRIBUTION_LEDGER = "docs/evidence/m05b-attribution/s25-short-attribution-ledger.json"
 
 
 def _copy_recorded_ledger(root: Path, ledger_relative: str, destination: Path) -> str:
@@ -311,6 +312,13 @@ def test_s25_live_capture_ledger_reports_pending_or_verifies_recorded_content() 
     else:
         verified = verify_live_ledger(ROOT, LIVE_CAPTURE_LEDGER)
         assert verified["live_admission"] == "admitted"
+
+
+def test_s25_m05b_attribution_ledger_reports_pending_or_verifies_recorded_content() -> None:
+    import check_m05b_attribution
+
+    verified = check_m05b_attribution.verify_recorded_ledger(ROOT, M05B_ATTRIBUTION_LEDGER)
+    assert verified["status"] == "pending" or verified["satisfies_s25_attribution_gate"] is True
 
 
 def test_the_committed_camera_ledger_passes_the_shared_recorded_ledger_check() -> None:

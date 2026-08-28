@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://calisthenics-expert.local/contracts/tooling/m05b_attempt_entry.v1.schema.json",
+  "title": "M0.5B immutable attempt-chain entry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["attempt_entry_schema_version", "record_kind", "attempt_sequence", "cadence_fps", "admission_sha256", "outcome", "previous_entry_sha256"],
+  "properties": {
+    "attempt_entry_schema_version": {"const": "1.0.0"},
+    "record_kind": {"const": "m05b_attempt_entry"},
+    "attempt_sequence": {"type": "integer", "minimum": 1},
+    "cadence_fps": {"enum": [10, 15, 30]},
+    "admission_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "outcome": {"enum": ["completed", "blocked", "aborted", "failed", "transport_lost"]},
+    "previous_entry_sha256": {"anyOf": [{"type": "null"}, {"type": "string", "pattern": "^[0-9a-f]{64}$"}]}
+  }
+}

@@ -110,6 +110,23 @@ class DurableSessionWriterTest {
     }
 
     @Test
+    fun sealingWithAdmissionReconcilesPoseByArtifactIdentity() {
+        val writer = DefaultDurableSessionWriter(FakeStorage(), sessionId())
+        writer.open()
+        writer.appendAdmissionArtifact("{\"admitted\":true}".encodeToByteArray())
+        writer.appendPose(frame(0, 0))
+
+        val sealed = writer.seal(FinalSessionAggregates(counts = counts(emitted = 1, posePresent = 1)))
+
+        assertEquals(
+            listOf(DurableArtifact.RUN_ADMISSION, DurableArtifact.POSE_STREAM),
+            sealed.artifacts.map { it.artifact },
+        )
+        assertEquals(1L, sealed.artifacts.single { it.artifact == DurableArtifact.POSE_STREAM }.reconciliation.recordCount)
+        assertEquals(1L, sealed.artifacts.single { it.artifact == DurableArtifact.RUN_ADMISSION }.reconciliation.recordCount)
+    }
+
+    @Test
     fun storageFailureIsTypedAndLeavesWriterFailedWithoutRetryLoop() {
         val storage = RecordingStorage(failOn = "append:POSE_STREAM")
         val writer = DefaultDurableSessionWriter(storage, sessionId())

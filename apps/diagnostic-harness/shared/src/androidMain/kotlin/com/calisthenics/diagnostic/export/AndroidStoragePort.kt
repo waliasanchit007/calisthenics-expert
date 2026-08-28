@@ -212,6 +212,9 @@ class AndroidStoragePort(override val roots: StorageRoots) : StoragePort {
     override fun reconcileArtifact(attempt: StagingAttempt, artifact: DurableArtifact): ArtifactReconciliation {
         val path = artifactPath(attempt, artifact)
         if (!Files.exists(path)) return ArtifactReconciliation(0L, EMPTY_SHA256, 0L, if (artifact == DurableArtifact.POSE_STREAM) 0L else null)
+        if (artifact == DurableArtifact.RUN_ADMISSION) {
+            return Files.newInputStream(path).use { reconcileRunAdmissionBytes(it.readBytes()) }
+        }
 
         val digest = MessageDigest.getInstance("SHA-256")
         var recordCount = 0L
@@ -236,6 +239,7 @@ class AndroidStoragePort(override val roots: StorageRoots) : StoragePort {
                         expectedTelemetrySequence++
                         previousTelemetryTimeNs = telemetry.second
                     }
+                    DurableArtifact.RUN_ADMISSION -> error("run admission reconciliation returned above")
                 }
                 recordCount++
             }
@@ -276,6 +280,7 @@ class AndroidStoragePort(override val roots: StorageRoots) : StoragePort {
         Paths.get(attempt.path, when (artifact) {
             DurableArtifact.POSE_STREAM -> FRAMES_FILE_NAME
             DurableArtifact.TELEMETRY -> TELEMETRY_FILE_NAME
+            DurableArtifact.RUN_ADMISSION -> RUN_ADMISSION_FILE_NAME
         })
 
     private fun checkpointPath(attempt: StagingAttempt): Path = Paths.get(attempt.path, CHECKPOINT_FILE_NAME)
@@ -322,6 +327,7 @@ class AndroidStoragePort(override val roots: StorageRoots) : StoragePort {
     private companion object {
         const val FRAMES_FILE_NAME = "frames.ndjson"
         const val TELEMETRY_FILE_NAME = "telemetry.ndjson"
+        const val RUN_ADMISSION_FILE_NAME = "run-admission.json"
         const val CHECKPOINT_FILE_NAME = "checkpoint"
         const val MANIFEST_FILE_NAME = "manifest.json"
         const val ABORT_MARKER_FILE_NAME = "abort-marker.json"

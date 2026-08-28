@@ -17,7 +17,9 @@
 - Camera cadence remains 30 FPS. Sustained inference cadences are exactly 10, 15, and 30 FPS for exactly 1,500 session-clock seconds, with at most one second of stop-request overshoot.
 - Every per-frame or per-submission in-memory collection is bounded independently of session length.
 - The manifest is the final commit record. No committed session appears before every payload is reconciled, hashed, re-read, fsynced, and renamed once.
+- Every artifact digest is SHA-256 over the exact referenced file bytes. Canonical JSON writers define those bytes; parsed-object reserialization is never a digest substitute, and an artifact does not hash a digest field inside itself.
 - Video is enabled only for short synchronization/purge runs. Sustained characterization records `video_enabled=false`.
+- The sustained-run target never runs `pm clear` between attempts. A durably committed session remains authoritative even if its Wi-Fi transcript is lost; only a proven `ABORTED` or `FAILED` attempt permits a same-cadence retry.
 - Device runs are observations. A command may exit non-zero after successfully emitting a typed blocking record; no contract is narrowed to force green.
 - Every gate conjunct ships with a mutation that must turn its behavioral test red. Success is an exit code, never grepped output.
 - Run `make fetch-model-asset` in every fresh worktree before an Android delivery build. Keep `apps/diagnostic-harness/local.properties` checkout-local and ignored.
@@ -351,6 +353,7 @@ git commit -m "feat: publish synchronized Android video sessions"
 - Create: common stage-event and telemetry contracts under `shared/src/commonMain/.../telemetry/`
 - Create: Android thermal/battery/connectivity/display/lifecycle probes under `androidApp/src/main/.../telemetry/`
 - Create: common and Android tests under matching `*Test/.../telemetry/`
+- Create: short 10/15/30 attribution device gate, host checker, and pending/recorded ledger under `docs/evidence/m05b-attribution/`
 - Modify: `LiveCameraComposition.kt`, `CameraXFrameSource.kt`, inference/preprocessing bridge, `DurableSessionWriter.kt`, manifest derivation
 
 **Interfaces:**
@@ -362,7 +365,7 @@ git commit -m "feat: publish synchronized Android video sessions"
 - [x] **Step 2: Prove current code lacks full attribution and fixed sampling**
 - [x] **Step 3: Implement one monotonic-clock event stream and fixed one-second sampler**
 - [x] **Step 4: Fence finalization by cancel, join, terminal sample, then seal**
-- [ ] **Step 5: Add short 10/15/30 attribution evidence proving camera request remains 30 FPS**
+- [ ] **Step 5: Add a device gate for one short 10/15/30 attribution sequence proving each configured inference cadence changes admission while the camera request remains 30 FPS. Emit one typed record per cadence, use a pending/recorded ledger under `docs/evidence/m05b-attribution/`, and never let the command write the ledger. This physical step runs only after the Task 8 controller is built on the exact final app version; no app rebuild may occur afterward.**
 - [x] **Step 6: Mutate each stage disposition, sample sequence, unavailable encoding, and join fence**
 - [x] **Step 7: Run full local gates and commit `feat: record fixed M0.5B pipeline telemetry`**
 
@@ -380,14 +383,24 @@ git commit -m "feat: publish synchronized Android video sessions"
 - Modify: CLI, schema loader, device-evidence ledger tests, `Makefile`
 
 **Interfaces:**
-- Envelope fixes device/build/model/runtime/delegate/preprocessing, unplugged power, Wi-Fi ADB, ambient ID, keep-awake/brightness, camera 30, inference set 10/15/30, duration 1,500 seconds, one-second overshoot, cooldown rule, and pre-registered order digest.
-- Admission is computed from observed start values and envelope digest; callers cannot pass success.
+- Envelope fixes device/build/model/runtime/delegate/preprocessing, unplugged power, power-save false,
+  Wi-Fi ADB, ambient ID, keep-awake/brightness, camera 30, inference set 10/15/30, duration 1,500
+  seconds, one-second overshoot, cooldown rule, and pre-registered order digest. Battery level or
+  charge is recorded as a tagged, non-blocking observation.
+- Admission is computed from observed start values and exact envelope/order bytes; callers cannot pass
+  success, order position, or predecessor status. Cooldown uses a required scalar battery temperature
+  with no passing default.
+- Attempts are immutable append-only, hash-chained entries containing sequence, cadence, admission
+  digest, outcome, and predecessor digest. Exact artifact bytes are the only digest source.
 
 - [ ] **Step 1: Write RED schema/derivation/admission tests with literal envelopes**
 - [ ] **Step 2: Implement idle-baseline derivation and freeze-by-digest**
 - [ ] **Step 3: Implement per-run admission and typed blocking observations**
 - [ ] **Step 4: Add S25 gate that rejects emulator, charging, fake-unplug evidence, connectivity drift, device/build/model mismatch, and reordered cadence**
-- [ ] **Step 5: Run one non-participant idle derivation on S25 and record envelope/order before Task 8**
+- [ ] **Step 5: On the exact final app build, after the Task 8 controller and all other code are
+  complete and after Task 6's short attribution records are non-blocking, run the non-participant idle
+  derivation on the S25 and record/freeze the envelope and order immediately before Task 8's sustained
+  runs. Do not rebuild or change source between attribution, freeze, and sustained capture.**
 - [ ] **Step 6: Mutate every conjunct and require non-zero admission**
 - [ ] **Step 7: Verify and commit `feat: freeze M0.5B run admission envelope`**
 
@@ -395,19 +408,38 @@ git commit -m "feat: publish synchronized Android video sessions"
 
 ### Task 8: Three sustained S25 characterizations
 
+**Dependencies:** Tasks 3, 4, 6, and 7. Task 7's software/admission contract is consumed during
+controller implementation; its physical envelope/order evidence and Task 6's recorded attribution
+ledger are required before any sustained device run.
+
 **Files:**
 - Create: sustained-run contract/schema, Python validator, Kotlin record/renderer, host checker, device gate, and three evidence ledgers under `docs/evidence/m05b-sustained/`
 - Modify: live composition/controller and `Makefile`
 
 **Interfaces:**
-- One run command consumes the frozen envelope/order and cadence; it requests stop at 1,500,000,000,000 ns and blocks if request exceeds 1,501,000,000,000 ns.
-- Records video disabled, camera 30 FPS, requested/achieved inference cadence, full stage accounting, latency inputs/percentiles, fixed telemetry, battery delta, process/source outcome, and typed blockers.
+- One run command consumes the frozen envelope/order and cadence through the same process boundary that
+  opens the staging attempt, appends and fsyncs the exact admission artifact, and only then starts
+  capture. It requests stop at 1,500,000,000,000 ns on the session clock and blocks if the request
+  exceeds 1,501,000,000,000 ns.
+- Records video disabled, camera 30 FPS, requested/achieved inference cadence, full stage accounting,
+  fixed-bucket latency inputs and nearest-rank percentile bounds, fixed telemetry with gap/end
+  coverage, battery delta, process/source outcome, and typed blockers. The latency edges and percentile
+  rule are frozen before physical runs.
 
-- [ ] **Step 1: Write RED duration/order/accounting tests**
+- [ ] **Step 1: Write RED duration/order/accounting tests. Prove the same-attempt admission-before-capture
+  boundary, scalar cooldown temperature with no defaults, immutable attempt-chain order/predecessor
+  derivation, fixed latency histogram protocol, and telemetry gap/end coverage.**
 - [ ] **Step 2: Implement the sustained controller and typed evidence renderer**
 - [ ] **Step 3: Mutation-check 1,500 seconds, one-second overshoot, video false, camera 30, envelope/order identity, and all stage equations**
-- [ ] **Step 4: Execute exactly one 25-minute run per 10/15/30 cadence in pre-registered order on the authorized unplugged S25 over Wi-Fi ADB**
-- [ ] **Step 5: Record every result honestly; a blocked observation remains blocking and is never overwritten by a rerun**
+- [ ] **Step 4: After the Task 6 short attribution gate and Task 7 envelope/order are recorded on the
+  exact final app build, execute exactly one 25-minute run per 10/15/30 cadence in pre-registered
+  order on the authorized unplugged S25 over Wi-Fi ADB. Do not rebuild between those physical gates
+  and the sustained runs.**
+- [ ] **Step 5: Record every result honestly; a blocked observation remains blocking and is never
+  overwritten by a rerun. Never run `pm clear` between runs. Recover and rehash each committed durable
+  session artifact before the next cadence; the durable artifact is authoritative over the transcript.
+  A transport-lost but durably committed session awaits recovery and cannot be rerun. Only a proven
+  `ABORTED` or `FAILED` attempt permits another same-cadence attempt, as a new hash-chained entry.**
 - [ ] **Step 6: Run validators and commit `feat: record S25 sustained instrument evidence`**
 
 ---
@@ -423,6 +455,10 @@ git commit -m "feat: publish synchronized Android video sessions"
 
 **Interfaces:**
 - `verify-instrument-readiness RECORD` rehashes and validates registry/exclusion, streaming/process-kill, synchronized video/host transfer, purge/tombstone, stage attribution, envelope/order, three admissions/runs, and app/model/runtime/device/probe identities.
+- Readiness also requires the recorded short 10/15/30 attribution ledger, exact-byte digest
+  validation, and every immutable attempt entry, including blocked, aborted, failed, and transport-lost
+  entries. A durably committed transport-lost session must be recovered rather than replaced by a
+  same-cadence rerun.
 - Readiness is derived and scoped only to “M0.5B non-participant instrument prerequisites passed on this S25”; it cannot authorize participant capture.
 
 - [ ] **Step 1: Write RED binding tests**
@@ -462,4 +498,4 @@ Require protected CI green. Preserve branches/worktrees. Merge and tag remain re
 - **Write-scope check:** Task 6 may run in parallel with Tasks 3–5 only after Task 2, because its new telemetry package is disjoint; any shared edit to `LiveCameraComposition.kt` serializes the final composition commit. Device tasks are always serialized.
 - **Type consistency:** Task 1 registry feeds Tasks 2/5/9; Task 2 sealed artifacts feed Tasks 3/4/6; Task 3 contracts feed Task 4; Task 6 feeds Tasks 7/8; Task 7 envelope/order feeds Task 8; all feed Task 9.
 - **Authority check:** No task accepts privacy policy, enables participant capture, moves a tag, adds paid/network services, or claims iOS/mid-range equivalence.
-- **Execution order:** Start Task 1 only after this plan is merged. Do not begin Task 3 contract release until its physical probe is recorded and non-blocking; do not begin Task 8 until Task 7 evidence is frozen.
+- **Execution order:** Start Task 1 only after this plan is merged. Do not begin Task 3 contract release until its physical probe is recorded and non-blocking. Complete all implementation code through the Task 8 controller first; then, on that exact final app build, run Task 6's short 10/15/30 attribution gate, derive and freeze Task 7's envelope/order, and immediately execute Task 8's sustained runs. No app rebuild or source change may occur between those physical steps. Task 9 follows recovery and validation of every durable artifact and immutable attempt entry.

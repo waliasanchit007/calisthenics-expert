@@ -122,7 +122,10 @@ def _build_parser() -> _ArgumentParser:
         "verify-m05b-envelope", help="validate one M0.5B envelope, order, or admission artifact"
     )
     _add_format_option(m05b)
-    m05b.add_argument("kind", choices=("start_envelope", "execution_order", "run_admission"))
+    m05b.add_argument(
+        "kind",
+        choices=("start_envelope", "execution_order", "run_admission", "attempt_entry"),
+    )
     m05b.add_argument("artifact", type=Path)
     m05b.set_defaults(handler=_verify_m05b)
     return parser
