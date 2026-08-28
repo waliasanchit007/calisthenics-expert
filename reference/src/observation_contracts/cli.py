@@ -12,6 +12,7 @@ from typing import Any, NoReturn
 from observation_contracts.errors import ValidationIssue
 from observation_contracts.fixture_integrity import verify_fixture
 from observation_contracts.m05b_envelope import validate_m05b_document
+from observation_contracts.m05b_sustained import validate_sustained_record
 from observation_contracts.preprocessing import verify_preprocessing_vector
 from observation_contracts.repository_guard import GuardMode, guard_repository
 from observation_contracts.schema_loader import ArtifactKind, load_strict_json
@@ -128,6 +129,13 @@ def _build_parser() -> _ArgumentParser:
     )
     m05b.add_argument("artifact", type=Path)
     m05b.set_defaults(handler=_verify_m05b)
+
+    sustained = commands.add_parser(
+        "verify-m05b-sustained", help="validate one M0.5B sustained-run observation"
+    )
+    _add_format_option(sustained)
+    sustained.add_argument("record", type=Path)
+    sustained.set_defaults(handler=_verify_m05b_sustained)
     return parser
 
 
@@ -207,6 +215,15 @@ def _verify_m05b(arguments: argparse.Namespace) -> list[ValidationIssue]:
     except (OSError, json.JSONDecodeError) as error:
         return [_input_issue(path, arguments.kind, f"could not read JSON: {error}")]
     return validate_m05b_document(document, arguments.kind, str(path))
+
+
+def _verify_m05b_sustained(arguments: argparse.Namespace) -> list[ValidationIssue]:
+    path: Path = arguments.record
+    try:
+        document = load_strict_json(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        return [_input_issue(path, "m05b_sustained_run", f"could not read JSON: {error}")]
+    return validate_sustained_record(document, str(path))
 
 
 def _load_json(path: Path, kind: ArtifactKind) -> tuple[object | None, list[ValidationIssue]]:

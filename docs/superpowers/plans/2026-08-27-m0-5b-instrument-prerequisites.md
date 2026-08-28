@@ -393,16 +393,16 @@ git commit -m "feat: publish synchronized Android video sessions"
 - Attempts are immutable append-only, hash-chained entries containing sequence, cadence, admission
   digest, outcome, and predecessor digest. Exact artifact bytes are the only digest source.
 
-- [ ] **Step 1: Write RED schema/derivation/admission tests with literal envelopes**
-- [ ] **Step 2: Implement idle-baseline derivation and freeze-by-digest**
-- [ ] **Step 3: Implement per-run admission and typed blocking observations**
-- [ ] **Step 4: Add S25 gate that rejects emulator, charging, fake-unplug evidence, connectivity drift, device/build/model mismatch, and reordered cadence**
+- [x] **Step 1: Write RED schema/derivation/admission tests with literal envelopes**
+- [x] **Step 2: Implement idle-baseline derivation and freeze-by-digest**
+- [x] **Step 3: Implement per-run admission and typed blocking observations**
+- [x] **Step 4: Add S25 gate that rejects emulator, charging, fake-unplug evidence, connectivity drift, device/build/model mismatch, and reordered cadence**
 - [ ] **Step 5: On the exact final app build, after the Task 8 controller and all other code are
   complete and after Task 6's short attribution records are non-blocking, run the non-participant idle
   derivation on the S25 and record/freeze the envelope and order immediately before Task 8's sustained
   runs. Do not rebuild or change source between attribution, freeze, and sustained capture.**
-- [ ] **Step 6: Mutate every conjunct and require non-zero admission**
-- [ ] **Step 7: Verify and commit `feat: freeze M0.5B run admission envelope`**
+- [x] **Step 6: Mutate every conjunct and require non-zero admission**
+- [x] **Step 7: Verify and commit `feat: freeze M0.5B run admission envelope`**
 
 ---
 

@@ -1,0 +1,5 @@
+{
+  "ledger_schema_version": "1.0.0",
+  "status": "pending",
+  "missing_precondition": "physical sustained run on the authorized S25 after recorded attribution and frozen envelope/order evidence"
+}
