@@ -1,0 +1,12 @@
+{
+  "ledger_schema_version": "1.0.0",
+  "status": "pending",
+  "scope": "M0.5B non-participant frozen start envelope and execution-order admission on the authorized Samsung Galaxy S25 Ultra",
+  "missing_precondition": "authorized physical Samsung Galaxy S25 Ultra connected over Wi-Fi ADB for one idle-baseline derivation",
+  "device_status": "absent",
+  "non_claims": [
+    "no physical envelope or execution-order observation has been recorded",
+    "no sustained run has been admitted",
+    "no participant capture or privacy decision is authorized"
+  ]
+}

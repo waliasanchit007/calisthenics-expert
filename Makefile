@@ -6,7 +6,7 @@ done; printf '%s' python3)
 VENV_PYTHON := .venv/bin/python
 CLI := $(VENV_PYTHON) -m observation_contracts
 
-.PHONY: bootstrap verify verify-study-readiness verify-harness-jvm verify-harness-ios verify-harness-foundation verify-kotlin-export verify-harness-android-export-parity verify-harness-detection-replay verify-harness-s25-process-kill verify-harness-replay-export verify-harness-s25-five-run-replay verify-harness-s25-camera-probe verify-harness-s25-storage-exclusion verify-harness-s25-live-capture fetch-model-asset prepare-harness-gradle-dependencies
+.PHONY: bootstrap verify verify-study-readiness verify-harness-jvm verify-harness-ios verify-harness-foundation verify-kotlin-export verify-harness-android-export-parity verify-harness-detection-replay verify-harness-s25-process-kill verify-harness-replay-export verify-harness-s25-five-run-replay verify-harness-s25-camera-probe verify-harness-s25-storage-exclusion verify-harness-s25-m05b-envelope verify-harness-s25-live-capture fetch-model-asset prepare-harness-gradle-dependencies
 
 bootstrap:
 	@command -v "$(PYTHON)" >/dev/null 2>&1 || { echo "error: Python interpreter '$(PYTHON)' was not found" >&2; exit 1; }
@@ -401,6 +401,39 @@ verify-harness-s25-storage-exclusion:
 	cat "$$transcript"; \
 	if [ "$$instrument_status" -ne 0 ]; then exit "$$instrument_status"; fi; \
 	cd ../.. && $(VENV_PYTHON) tools/check_storage_exclusion.py "$$transcript"
+
+# M0.5B Task 7 physical start-envelope gate. The host checks Wi-Fi ADB and rejects Android battery
+# service override state, while the app observes its own connectivity, power, thermal, and scoped
+# device-unit values. The target prints one sanitized typed record and never writes the ledger.
+verify-harness-s25-m05b-envelope:
+	@set -eu; \
+	device_count=$$(adb devices -l | tail -n +2 | awk '$$2 == "device"' | wc -l | tr -d ' '); \
+	if [ "$$device_count" -ne 1 ]; then echo "error: verify-harness-s25-m05b-envelope requires exactly one authorized attached device, found $$device_count" >&2; exit 1; fi; \
+	serial=$$(adb devices -l | tail -n +2 | awk '$$2 == "device" {print $$1}'); \
+	case "$$serial" in emulator-*) echo "error: emulator is not authorized for the M0.5B S25 envelope gate" >&2; exit 1 ;; esac; \
+	manufacturer=$$(adb -s "$$serial" shell getprop ro.product.manufacturer | tr -d '\r'); \
+	model=$$(adb -s "$$serial" shell getprop ro.product.model | tr -d '\r'); \
+	marketing_name=$$(adb -s "$$serial" shell getprop ro.config.marketing_name | tr -d '\r'); \
+	manufacturer_lower=$$(printf '%s' "$$manufacturer" | tr '[:upper:]' '[:lower:]'); \
+	model_upper=$$(printf '%s' "$$model" | tr '[:lower:]' '[:upper:]'); \
+	case "$$model_upper" in SM-S938*) authorized=1 ;; *) authorized=0 ;; esac; \
+	case "$$marketing_name" in *"S25 Ultra"*) authorized=1 ;; esac; \
+	if [ "$$manufacturer_lower" != samsung ] || [ "$$authorized" -ne 1 ]; then echo "error: attached target is not the authorized Samsung Galaxy S25 Ultra" >&2; exit 1; fi; \
+	battery_dump=$$(adb -s "$$serial" shell dumpsys battery | tr -d '\r'); \
+	host_override_rejected=true; \
+	if printf '%s\n' "$$battery_dump" | grep -Eq '(^|: )((AC|USB|Wireless|Dock) powered): true'; then host_override_rejected=false; fi; \
+	host_adb_transport=false; case "$$serial" in *:*) host_adb_transport=true ;; esac; \
+	$(MAKE) fetch-model-asset; \
+	cd apps/diagnostic-harness && ./gradlew --no-daemon :androidApp:assembleDebug :androidApp:assembleDebugAndroidTest; \
+	adb -s "$$serial" install -r androidApp/build/outputs/apk/debug/androidApp-debug.apk; \
+	adb -s "$$serial" install -r androidApp/build/outputs/apk/androidTest/debug/androidApp-debug-androidTest.apk; \
+	clear_result=$$(adb -s "$$serial" shell pm clear com.calisthenics.diagnostic.android | tr -d '\r'); \
+	if [ "$$clear_result" != Success ]; then echo "error: pm clear returned '$$clear_result'" >&2; exit 1; fi; \
+	transcript=$$(mktemp); trap 'rm -f "$$transcript"' EXIT INT TERM; \
+	set +e; adb -s "$$serial" shell am instrument -w -r -e class com.calisthenics.diagnostic.probe.M05BEnvelopeDeviceGateTest -e host_adb_transport "$$([ "$$host_adb_transport" = true ] && echo wifi || echo unavailable)" -e host_battery_override_rejected "$$host_override_rejected" com.calisthenics.diagnostic.android.test/androidx.test.runner.AndroidJUnitRunner >"$$transcript" 2>&1; instrument_status=$$?; set -e; \
+	cat "$$transcript"; printf 'M0.5B envelope instrumentation exit status: %s\n' "$$instrument_status"; \
+	if [ "$$instrument_status" -ne 0 ]; then exit "$$instrument_status"; fi; \
+	cd ../.. && $(VENV_PYTHON) tools/check_m05b_envelope.py "$$transcript"
 
 # Task 5's bounded physical live-capture evidence gate. The device test emits one typed record;
 # the host checker pulls and validates the exact export before deriving the final verdict. This

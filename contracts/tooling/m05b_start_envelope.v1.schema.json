@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://calisthenics-expert.local/contracts/tooling/m05b_start_envelope.v1.schema.json",
+  "title": "M0.5B frozen start envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["start_envelope_schema_version", "record_kind", "envelope_id", "procedure", "device", "power", "connectivity", "thermal", "ambient", "display", "protocol", "order_binding", "producer_git_sha"],
+  "properties": {
+    "start_envelope_schema_version": {"const": "1.0.0"},
+    "record_kind": {"const": "m05b_start_envelope"},
+    "envelope_id": {"$ref": "#/$defs/slug"},
+    "procedure": {"$ref": "#/$defs/procedure"},
+    "device": {"$ref": "#/$defs/device"},
+    "power": {"$ref": "#/$defs/power"},
+    "connectivity": {"$ref": "#/$defs/connectivity"},
+    "thermal": {"$ref": "#/$defs/thermal"},
+    "ambient": {"$ref": "#/$defs/ambient"},
+    "display": {"$ref": "#/$defs/display"},
+    "protocol": {"$ref": "#/$defs/protocol"},
+    "order_binding": {"$ref": "#/$defs/artifact_ref"},
+    "producer_git_sha": {"$ref": "#/$defs/git_sha"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "git_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "slug": {"type": "string", "pattern": "^[a-z0-9]+(?:[-_][a-z0-9]+)*$"},
+    "version": {"type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"},
+    "positive_ns": {"type": "integer", "minimum": 1},
+    "artifact_ref": {
+      "type": "object", "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {"type": "string", "pattern": "^(?![/\\\\])(?![A-Za-z]:)(?!.*(?:^|[/\\\\])\\.\\.(?:[/\\\\]|$))[^\\u0000]+$"},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "procedure": {
+      "type": "object", "additionalProperties": false,
+      "required": ["procedure_version", "procedure_sha256", "idle_baseline_duration_ns", "sampling_interval_ns", "cooldown_max_duration_ns", "cooldown_sampling_interval_ns"],
+      "properties": {
+        "procedure_version": {"$ref": "#/$defs/version"},
+        "procedure_sha256": {"$ref": "#/$defs/sha256"},
+        "idle_baseline_duration_ns": {"$ref": "#/$defs/positive_ns"},
+        "sampling_interval_ns": {"$ref": "#/$defs/positive_ns"},
+        "cooldown_max_duration_ns": {"$ref": "#/$defs/positive_ns"},
+        "cooldown_sampling_interval_ns": {"$ref": "#/$defs/positive_ns"}
+      }
+    },
+    "device": {
+      "type": "object", "additionalProperties": false,
+      "required": ["device_class", "manufacturer", "model", "device_build", "api_level", "app_sha256", "model_sha256", "runtime_version", "delegate", "preprocessing_version", "device_unit_digest"],
+      "properties": {
+        "device_class": {"const": "physical_device"},
+        "manufacturer": {"const": "samsung"},
+        "model": {"type": "string", "pattern": "^SM-S938[A-Z0-9]*$"},
+        "device_build": {"type": "string", "minLength": 1},
+        "api_level": {"const": 36},
+        "app_sha256": {"$ref": "#/$defs/sha256"},
+        "model_sha256": {"$ref": "#/$defs/sha256"},
+        "runtime_version": {"type": "string", "minLength": 1},
+        "delegate": {"enum": ["CPU", "GPU"]},
+        "preprocessing_version": {"$ref": "#/$defs/version"},
+        "device_unit_digest": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "power": {
+      "type": "object", "additionalProperties": false,
+      "required": ["charging", "power_source", "host_battery_override_rejected"],
+      "properties": {"charging": {"const": false}, "power_source": {"const": "battery"}, "host_battery_override_rejected": {"const": true}}
+    },
+    "connectivity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["host_adb_transport", "app_transport", "network_identity_persisted"],
+      "properties": {"host_adb_transport": {"const": "wifi"}, "app_transport": {"const": "wifi"}, "network_identity_persisted": {"const": false}}
+    },
+    "thermal": {
+      "type": "object", "additionalProperties": false,
+      "required": ["initial_status", "battery_temperature_min_c", "battery_temperature_max_c", "battery_temperature_range_c"],
+      "properties": {
+        "initial_status": {"enum": ["none", "light", "moderate"]},
+        "battery_temperature_min_c": {"type": "number"},
+        "battery_temperature_max_c": {"type": "number"},
+        "battery_temperature_range_c": {"type": "number", "minimum": 0}
+      }
+    },
+    "ambient": {
+      "type": "object", "additionalProperties": false,
+      "required": ["token", "constancy"],
+      "properties": {"token": {"$ref": "#/$defs/slug"}, "constancy": {"enum": ["constant", "changed", "unavailable"]}}
+    },
+    "display": {
+      "type": "object", "additionalProperties": false,
+      "required": ["keep_awake", "brightness_mode", "brightness_raw", "brightness_scale_min", "brightness_scale_max"],
+      "properties": {
+        "keep_awake": {"const": true}, "brightness_mode": {"const": "manual"},
+        "brightness_raw": {"type": "number"}, "brightness_scale_min": {"type": "number"}, "brightness_scale_max": {"type": "number"}
+      }
+    },
+    "protocol": {
+      "type": "object", "additionalProperties": false,
+      "required": ["camera_fps", "inference_cadences_fps", "duration_ns", "overshoot_ns"],
+      "properties": {
+        "camera_fps": {"const": 30}, "inference_cadences_fps": {"const": [10, 15, 30]},
+        "duration_ns": {"const": 1500000000000}, "overshoot_ns": {"const": 1000000000}
+      }
+    }
+  }
+}

@@ -11,6 +11,7 @@ from typing import Any, NoReturn
 
 from observation_contracts.errors import ValidationIssue
 from observation_contracts.fixture_integrity import verify_fixture
+from observation_contracts.m05b_envelope import validate_m05b_document
 from observation_contracts.preprocessing import verify_preprocessing_vector
 from observation_contracts.repository_guard import GuardMode, guard_repository
 from observation_contracts.schema_loader import ArtifactKind, load_strict_json
@@ -116,6 +117,14 @@ def _build_parser() -> _ArgumentParser:
     _add_format_option(participant_gate)
     participant_gate.add_argument("manifest", type=Path)
     participant_gate.set_defaults(handler=_verify_participant_capture_gate)
+
+    m05b = commands.add_parser(
+        "verify-m05b-envelope", help="validate one M0.5B envelope, order, or admission artifact"
+    )
+    _add_format_option(m05b)
+    m05b.add_argument("kind", choices=("start_envelope", "execution_order", "run_admission"))
+    m05b.add_argument("artifact", type=Path)
+    m05b.set_defaults(handler=_verify_m05b)
     return parser
 
 
@@ -188,6 +197,15 @@ def _verify_participant_capture_gate(arguments: argparse.Namespace) -> list[Vali
     return verify_study_readiness(arguments.manifest, require_participant_ready=True)
 
 
+def _verify_m05b(arguments: argparse.Namespace) -> list[ValidationIssue]:
+    path: Path = arguments.artifact
+    try:
+        document = load_strict_json(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        return [_input_issue(path, arguments.kind, f"could not read JSON: {error}")]
+    return validate_m05b_document(document, arguments.kind, str(path))
+
+
 def _load_json(path: Path, kind: ArtifactKind) -> tuple[object | None, list[ValidationIssue]]:
     try:
         document = load_strict_json(path.read_text(encoding="utf-8"))
@@ -207,7 +225,7 @@ def _load_frames(path: Path) -> tuple[list[dict[str, object]], list[ValidationIs
         return [], [_input_issue(path, "raw_pose_frame", f"could not read NDJSON: {error}")]
 
 
-def _input_issue(path: Path, kind: ArtifactKind, message: str) -> ValidationIssue:
+def _input_issue(path: Path, kind: str, message: str) -> ValidationIssue:
     return ValidationIssue(
         code="SCHEMA.INVALID",
         artifact_path=str(path),

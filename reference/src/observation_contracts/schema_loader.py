@@ -86,6 +86,21 @@ def storage_location_registry_schema_path() -> Path:
     return repository_root() / "contracts" / "tooling" / "storage_location_registry.v1.schema.json"
 
 
+def m05b_start_envelope_schema_path() -> Path:
+    """Return the released M0.5B frozen-start-envelope schema."""
+    return repository_root() / "contracts" / "tooling" / "m05b_start_envelope.v1.schema.json"
+
+
+def m05b_run_admission_schema_path() -> Path:
+    """Return the released M0.5B run-admission schema."""
+    return repository_root() / "contracts" / "tooling" / "m05b_run_admission.v1.schema.json"
+
+
+def m05b_execution_order_schema_path() -> Path:
+    """Return the released M0.5B execution-order schema."""
+    return repository_root() / "contracts" / "tooling" / "m05b_execution_order.v1.schema.json"
+
+
 @cache
 def load_schema(kind: ArtifactKind, major: int = SUPPORTED_MAJOR) -> Mapping[str, object]:
     """Return the parsed Draft 2020-12 schema for one artifact kind and major version."""
@@ -130,6 +145,24 @@ def load_study_condition_matrix_schema() -> Mapping[str, object]:
 def load_storage_location_registry_schema() -> Mapping[str, object]:
     """Return the parsed released storage-location registry tooling schema."""
     return _load_tooling_schema(storage_location_registry_schema_path())
+
+
+@cache
+def load_m05b_start_envelope_schema() -> Mapping[str, object]:
+    """Return the released M0.5B frozen-start-envelope schema."""
+    return _load_tooling_schema(m05b_start_envelope_schema_path())
+
+
+@cache
+def load_m05b_run_admission_schema() -> Mapping[str, object]:
+    """Return the released M0.5B run-admission schema."""
+    return _load_tooling_schema(m05b_run_admission_schema_path())
+
+
+@cache
+def load_m05b_execution_order_schema() -> Mapping[str, object]:
+    """Return the released M0.5B execution-order schema."""
+    return _load_tooling_schema(m05b_execution_order_schema_path())
 
 
 @cache

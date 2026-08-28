@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://calisthenics-expert.local/contracts/tooling/m05b_execution_order.v1.schema.json",
+  "title": "M0.5B pre-registered execution order",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["execution_order_schema_version", "record_kind", "order_id", "cadences_fps", "producer_git_sha"],
+  "properties": {
+    "execution_order_schema_version": {"const": "1.0.0"},
+    "record_kind": {"const": "m05b_execution_order"},
+    "order_id": {"type": "string", "pattern": "^[a-z0-9]+(?:[-_][a-z0-9]+)*$"},
+    "cadences_fps": {"type": "array", "prefixItems": [{"const": 10}, {"const": 15}, {"const": 30}], "items": false, "minItems": 3, "maxItems": 3, "uniqueItems": true},
+    "producer_git_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+  }
+}

@@ -114,7 +114,7 @@ class FakeStorage(
 
     override fun reconcileArtifact(attempt: StagingAttempt, artifact: DurableArtifact): ArtifactReconciliation {
         val bytes = fakeAttempt(attempt).artifactBytes[artifact] ?: ByteArray(0)
-        val lines = bytes.toString(Charsets.UTF_8).lineSequence().filter { it.isNotEmpty() }.toList()
+        val lines = bytes.decodeToString().lineSequence().filter { it.isNotEmpty() }.toList()
         return ArtifactReconciliation(
             byteLength = bytes.size.toLong(),
             sha256 = Sha256Digest.hex(bytes),
