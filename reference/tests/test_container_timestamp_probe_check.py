@@ -130,6 +130,13 @@ def test_exact_suite_accepts_one_passing_test() -> None:
     require_exact_suite(_transcript(_record()))
 
 
+def test_exact_suite_accepts_android_runner_start_and_completion_markers() -> None:
+    transcript = _transcript(_record())
+    transcript += f"INSTRUMENTATION_STATUS: class={SUITE}\n"
+
+    require_exact_suite(transcript)
+
+
 @pytest.mark.parametrize(
     "result_line",
     ["OK (0 tests)", "FAILURES!!!", "OK (2 tests)"],

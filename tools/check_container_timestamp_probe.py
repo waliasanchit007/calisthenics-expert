@@ -166,8 +166,11 @@ def _require(condition: bool, detail: str) -> None:
 def require_exact_suite(transcript: str) -> None:
     suites = _SUITE_LINE.findall(transcript)
     _require(
-        suites == [SUITE],
-        f"transcript must contain exactly one suite class={SUITE!r}, found {suites!r}",
+        len(suites) in {1, 2} and set(suites) == {SUITE},
+        (
+            "transcript must contain only the requested suite class "
+            f"{SUITE!r} in one runner marker or its start/completion pair, found {suites!r}"
+        ),
     )
     _require(
         len(_PASSING_RUN.findall(transcript)) == 1,

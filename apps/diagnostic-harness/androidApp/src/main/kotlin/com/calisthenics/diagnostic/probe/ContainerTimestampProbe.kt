@@ -159,8 +159,11 @@ class ContainerTimestampProbe(private val context: Context) {
 
     private companion object {
         const val MIME_TYPE = "video/avc"
-        const val WIDTH = 32
-        const val HEIGHT = 32
+        // The S25 vendor AVC encoder rejects the otherwise valid 32x32 probe format at configure
+        // time. Keep the synthetic plane small, aligned, and inside the hardware encoder's
+        // supported size envelope; pixel content and timestamp semantics are unchanged.
+        const val WIDTH = 256
+        const val HEIGHT = 256
         const val BIT_RATE = 128_000
         const val FRAME_RATE = 30
         const val FRAME_INTERVAL_US = 33_333L
