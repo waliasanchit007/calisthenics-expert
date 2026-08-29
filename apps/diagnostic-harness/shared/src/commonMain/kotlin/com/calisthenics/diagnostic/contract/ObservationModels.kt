@@ -47,6 +47,15 @@ data class SessionManifest(
     val machineInferenceFailures: List<MachineInferenceFailure>,
     val captureQualityObserved: CaptureQualityObserved,
     val studyContext: Map<String, JsonElement>,
+    val rawPoseStream: ArtifactReference? = null,
+    val synchronizationEvidence: ArtifactReference? = null,
+    val mediaRequired: Boolean? = null,
+)
+
+data class ArtifactReference(
+    val pathRef: String,
+    val sha256: Sha256,
+    val schemaVersion: SemanticVersion,
 )
 
 data class RawPoseFrame(

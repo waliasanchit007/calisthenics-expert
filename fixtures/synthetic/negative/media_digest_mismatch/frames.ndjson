@@ -1,0 +1,1 @@
+{"raw_pose_frame_schema_version":"1.0.0","session_id":"3f1c2a90-7b45-4c8e-9d21-6a0e5b4c3d27","frame_index":0,"capture_timestamp_ns":100,"inference_start_ns":101,"inference_end_ns":102,"pose_present":false,"normalized_image_landmarks":null,"world_landmarks":null,"image_width":1,"image_height":1,"frames_skipped_since_last_emitted_record":0}

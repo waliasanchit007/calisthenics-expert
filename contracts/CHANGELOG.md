@@ -4,6 +4,23 @@ This changelog records releases of the observation schemas and their supporting
 tooling contracts. Application, harness, model, and analysis-package versions
 are independent of these contracts.
 
+## [1.3.0] - 2026-08-29
+
+Backward-compatible minor release of the synchronized non-participant session contract.
+
+- `SessionManifest v1.2.0` adds optional digest-bound `raw_pose_stream` and
+  `synchronization_evidence` references plus the advisory `media_required` flag.
+- `synchronization_evidence v1.0.0` records observed video/metadata PTS samples,
+  endpoint identities, count reconciliation, and the derived constant-offset mapping.
+- Artifact presence is authoritative for `live_conformance`; `media_required` cannot bypass
+  validation. The admitted S25 probe observed a constant submitted-minus-demuxed offset of
+  1,000,000 us. The validator derives the offset from all samples and does not use its magnitude
+  as a quality threshold.
+- Added stable session failures: `SESSION.MEDIA_REQUIRED_MISSING`,
+  `SESSION.MEDIA_REQUIREMENT_CONTRADICTED`, `SESSION.MEDIA_DIGEST_MISMATCH`,
+  `SESSION.SYNC_EVIDENCE_MISSING`, `SESSION.SYNC_CLOCK_MAPPING`,
+  `SESSION.SYNC_ENDPOINT_MISMATCH`, and `SESSION.VIDEO_COUNT_MISMATCH`.
+
 ## [1.2.0] - 2026-08-24
 
 Tooling-contract release for the synthetic-only M0.5A study-readiness operating gate. This

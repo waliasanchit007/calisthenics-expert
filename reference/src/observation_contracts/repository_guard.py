@@ -601,12 +601,15 @@ def _validated_manifest_references(
         return frozenset()
     if not isinstance(document, Mapping):
         return frozenset()
-    media_references = document.get("media_references")
-    if not isinstance(media_references, list):
-        return frozenset()
-
     references: set[str] = set()
-    for media_reference in media_references:
+    media_references = document.get("media_references")
+    media_values = media_references if isinstance(media_references, list) else []
+    artifact_values = [
+        artifact
+        for key in ("raw_pose_stream", "synchronization_evidence")
+        if isinstance(artifact := document.get(key), Mapping)
+    ]
+    for media_reference in [*media_values, *artifact_values]:
         if not isinstance(media_reference, Mapping):
             continue
         reference = _resolve_reference(manifest_path, media_reference.get("path_ref"))

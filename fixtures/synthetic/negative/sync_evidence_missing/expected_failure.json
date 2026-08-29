@@ -1,0 +1,7 @@
+{
+  "tooling_schema_version": "1.0.0",
+  "command": "validate-session",
+  "expected_error_code": "SESSION.SYNC_EVIDENCE_MISSING",
+  "artifact_path": "fixtures/synthetic/negative/sync_evidence_missing/manifest.json",
+  "description": "synthetic synchronization contract negative"
+}
