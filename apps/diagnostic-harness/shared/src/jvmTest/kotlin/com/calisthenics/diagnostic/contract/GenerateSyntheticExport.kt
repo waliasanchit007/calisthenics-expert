@@ -13,8 +13,6 @@ import com.calisthenics.diagnostic.export.DurableArtifact
 import com.calisthenics.diagnostic.export.ArtifactReconciliation
 import com.calisthenics.diagnostic.export.DefaultDurableSessionWriter
 import com.calisthenics.diagnostic.export.StorageRoots
-import com.calisthenics.diagnostic.export.StorageLocationId
-import com.calisthenics.diagnostic.export.StorageLocationRegistry
 import com.calisthenics.diagnostic.export.StreamReconciliation
 import com.calisthenics.diagnostic.session.DeterministicCore
 import com.calisthenics.diagnostic.session.FinalizationResult

@@ -152,9 +152,10 @@ def test_sustained_semantic_codes_await_task3_4_registry_integration() -> None:
         "SOURCE.OUTCOME",
         "BLOCKING_CODES.MISMATCH",
     }
-    # Task 3 owns the coordinated 1.3.0 contract/error-code release after its
-    # physical precondition; Task 8 must not preempt that release from WIP.
-    assert registry["registry_version"] == "1.2.0"
+    # Task 3 completed its coordinated 1.3.0 contract/error-code release after its
+    # physical precondition. Task 4 has not released yet, so Task 8 must still not
+    # preempt the remaining registry integration from WIP.
+    assert registry["registry_version"] == "1.3.0"
     assert draft_task8_codes.isdisjoint(released)
 
 
