@@ -1,0 +1,7 @@
+{
+  "tooling_schema_version": "1.0.0",
+  "command": "validate-session",
+  "expected_error_code": "SESSION.MEDIA_REQUIREMENT_CONTRADICTED",
+  "artifact_path": "fixtures/synthetic/negative/media_requirement_contradicted/manifest.json",
+  "description": "synthetic synchronization contract negative"
+}

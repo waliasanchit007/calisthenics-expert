@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://calisthenics-movement-intelligence.local/contracts/schema/synchronization_evidence.v1.schema.json",
+  "title": "SynchronizationEvidence v1",
+  "description": "Digest-bound non-participant evidence joining one session video, raw pose stream, and their observed timestamp mapping.",
+  "type": "object",
+  "required": [
+    "synchronization_evidence_schema_version",
+    "session_id",
+    "manifest_session_id",
+    "video_role",
+    "video_path_ref",
+    "video_sha256",
+    "video_byte_length",
+    "raw_pose_stream_path_ref",
+    "raw_pose_stream_sha256",
+    "container",
+    "codec",
+    "camera_timestamp_domain",
+    "encoder_timestamp_domain",
+    "mapping_method",
+    "container_offset_ns",
+    "container_drift_ns_per_s",
+    "video_pts_us",
+    "samples",
+    "first_camera_frame_timestamp_ns",
+    "last_camera_frame_timestamp_ns",
+    "first_encoded_frame_pts_us",
+    "last_encoded_frame_pts_us",
+    "first_pose_capture_timestamp_ns",
+    "last_pose_capture_timestamp_ns",
+    "counts",
+    "producer_git_sha",
+    "device_model",
+    "device_api_level",
+    "device_abi"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "synchronization_evidence_schema_version": {"$ref": "#/$defs/semantic_version"},
+    "session_id": {"$ref": "#/$defs/uuid"},
+    "manifest_session_id": {"$ref": "#/$defs/uuid"},
+    "video_role": {"type": "string", "const": "session_video"},
+    "video_path_ref": {"type": "string", "minLength": 1},
+    "video_sha256": {"$ref": "#/$defs/sha256"},
+    "video_byte_length": {"type": "integer", "minimum": 0},
+    "raw_pose_stream_path_ref": {"type": "string", "minLength": 1},
+    "raw_pose_stream_sha256": {"$ref": "#/$defs/sha256"},
+    "container": {"type": "string", "minLength": 1},
+    "codec": {"type": "string", "minLength": 1},
+    "camera_timestamp_domain": {"type": "string", "minLength": 1},
+    "encoder_timestamp_domain": {"type": "string", "minLength": 1},
+    "mapping_method": {"type": "string", "const": "camera_capture_to_container_pts_constant_offset_v1"},
+    "container_offset_ns": {"type": "integer"},
+    "container_drift_ns_per_s": {"type": "number", "const": 0},
+    "video_pts_us": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "integer", "minimum": 0}
+    },
+    "samples": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/sample"}
+    },
+    "first_camera_frame_timestamp_ns": {"type": "integer", "minimum": 0},
+    "last_camera_frame_timestamp_ns": {"type": "integer", "minimum": 0},
+    "first_encoded_frame_pts_us": {"type": "integer", "minimum": 0},
+    "last_encoded_frame_pts_us": {"type": "integer", "minimum": 0},
+    "first_pose_capture_timestamp_ns": {"type": "integer", "minimum": 0},
+    "last_pose_capture_timestamp_ns": {"type": "integer", "minimum": 0},
+    "counts": {"$ref": "#/$defs/counts"},
+    "producer_git_sha": {"$ref": "#/$defs/git_sha"},
+    "device_model": {"type": "string", "minLength": 1},
+    "device_api_level": {"type": "integer", "minimum": 1},
+    "device_abi": {"type": "string", "minLength": 1}
+  },
+  "$defs": {
+    "semantic_version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    },
+    "uuid": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "git_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "sample": {
+      "type": "object",
+      "required": ["frame_index", "rebased_capture_timestamp_ns", "submitted_pts_us", "demuxed_pts_us"],
+      "additionalProperties": true,
+      "properties": {
+        "frame_index": {"type": "integer", "minimum": 0},
+        "rebased_capture_timestamp_ns": {"type": "integer", "minimum": 0},
+        "submitted_pts_us": {"type": "integer", "minimum": 0},
+        "demuxed_pts_us": {"type": "integer", "minimum": 0}
+      }
+    },
+    "counts": {
+      "type": "object",
+      "required": [
+        "delivered_camera_callbacks",
+        "encoded_video_frames",
+        "submitted_inference_frames",
+        "emitted_pose_records",
+        "dropped_before_encoder",
+        "encoder_failures",
+        "inference_skipped_frames",
+        "inference_failures"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "delivered_camera_callbacks": {"type": "integer", "minimum": 0},
+        "encoded_video_frames": {"type": "integer", "minimum": 0},
+        "submitted_inference_frames": {"type": "integer", "minimum": 0},
+        "emitted_pose_records": {"type": "integer", "minimum": 0},
+        "dropped_before_encoder": {"type": "integer", "minimum": 0},
+        "encoder_failures": {"type": "integer", "minimum": 0},
+        "inference_skipped_frames": {"type": "integer", "minimum": 0},
+        "inference_failures": {"type": "integer", "minimum": 0}
+      }
+    }
+  }
+}

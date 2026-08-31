@@ -142,6 +142,37 @@ class ObservationJsonTest {
     }
 
     @Test
+    fun manifestRoundTripPreservesSessionManifest12SynchronizationFields() {
+        val source = buildJsonObject {
+            Json.parseToJsonElement(encodeManifest(sampleManifest())).jsonObject.forEach { (key, value) ->
+                put(key, value)
+            }
+            put("session_manifest_schema_version", "1.2.0")
+            put("raw_pose_stream", buildJsonObject {
+                put("path_ref", "frames.ndjson")
+                put("sha256", "0".repeat(64))
+                put("schema_version", "1.0.0")
+            })
+            put("synchronization_evidence", buildJsonObject {
+                put("path_ref", "sync.json")
+                put("sha256", "1".repeat(64))
+                put("schema_version", "1.0.0")
+            })
+            put("media_required", true)
+        }.toString()
+
+        val decoded = decodeManifest(source)
+        val roundTripped = encodeManifest(decoded)
+
+        assertEquals(SemanticVersion("1.2.0"), decoded.schemaVersion)
+        assertEquals(ArtifactReference("frames.ndjson", Sha256("0".repeat(64)), SemanticVersion("1.0.0")), decoded.rawPoseStream)
+        assertEquals(true, decoded.mediaRequired)
+        assertContains(roundTripped, "\"raw_pose_stream\"")
+        assertContains(roundTripped, "\"synchronization_evidence\"")
+        assertContains(roundTripped, "\"media_required\":true")
+    }
+
+    @Test
     fun missingRequiredFieldsAreRejected() {
         val manifest = Json.parseToJsonElement(encodeManifest(sampleManifest())).jsonObject.toMutableMap()
         manifest.remove("counts")

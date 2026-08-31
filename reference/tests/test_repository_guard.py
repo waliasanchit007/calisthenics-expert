@@ -321,6 +321,37 @@ def test_admits_all_three_declared_synthetic_fixture_classes(tmp_path: Path) -> 
     assert guard_repository(root, mode="staged") == []
 
 
+def test_admits_declared_synchronization_evidence_in_positive_fixture(
+    tmp_path: Path,
+) -> None:
+    root = _repository(tmp_path)
+    fixture_root = "fixtures/synthetic/valid/synchronization"
+    frame = b"\x01\x02\x03"
+    _write(root, f"{fixture_root}/decoded/frame.rgb24", frame)
+    _write(
+        root,
+        f"{fixture_root}/fixture_metadata.json",
+        _json(_fixture_metadata("decoded/frame.rgb24", frame)),
+    )
+    _write(
+        root,
+        f"{fixture_root}/manifest.json",
+        _json(
+            {
+                "media_references": [{"path_ref": "media/session.bin"}],
+                "raw_pose_stream": {"path_ref": "frames.ndjson"},
+                "synchronization_evidence": {"path_ref": "sync.json"},
+            }
+        ),
+    )
+    _write(root, f"{fixture_root}/frames.ndjson", b"frames\n")
+    _write(root, f"{fixture_root}/sync.json", b"synchronization evidence\n")
+    _write(root, f"{fixture_root}/media/session.bin", b"synthetic video bytes")
+    _stage(root)
+
+    assert guard_repository(root, mode="staged") == []
+
+
 @pytest.mark.parametrize("mode", ["staged", "tracked"])
 def test_rejects_undeclared_positive_fixture_sibling_in_both_index_modes(
     tmp_path: Path, mode: str

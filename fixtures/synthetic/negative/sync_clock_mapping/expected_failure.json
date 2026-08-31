@@ -1,0 +1,7 @@
+{
+  "tooling_schema_version": "1.0.0",
+  "command": "validate-session",
+  "expected_error_code": "SESSION.SYNC_CLOCK_MAPPING",
+  "artifact_path": "fixtures/synthetic/negative/sync_clock_mapping/manifest.json",
+  "description": "synthetic synchronization contract negative"
+}

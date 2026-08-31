@@ -349,6 +349,16 @@
         "$ref": "#/$defs/media_reference"
       }
     },
+    "raw_pose_stream": {
+      "$ref": "#/$defs/artifact_reference"
+    },
+    "synchronization_evidence": {
+      "$ref": "#/$defs/artifact_reference"
+    },
+    "media_required": {
+      "description": "Whether this live-conformance session requires synchronized media. Artifact presence remains authoritative.",
+      "type": "boolean"
+    },
     "counts": {
       "description": "Capture-path counts. Their exact identities are reconciled by the semantic validator, not here.",
       "type": "object",
@@ -543,6 +553,28 @@
         "sync_drift_ns_per_s": {
           "description": "Estimated drift of that offset. Required alongside an offset; the pairing rule is enforced by the semantic validator.",
           "type": "number"
+        }
+      }
+    },
+    "artifact_reference": {
+      "description": "Digest-bound reference to a session payload emitted outside the manifest.",
+      "type": "object",
+      "required": [
+        "path_ref",
+        "sha256",
+        "schema_version"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "path_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "schema_version": {
+          "$ref": "#/$defs/semantic_version"
         }
       }
     },

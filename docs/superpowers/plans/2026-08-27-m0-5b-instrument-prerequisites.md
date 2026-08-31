@@ -231,11 +231,11 @@ git commit -m "feat: stream M0.5B sessions durably"
 - Contract release adds optional `raw_pose_stream`, `synchronization_evidence`, and `media_required` to SessionManifest 1.2.0.
 - Stable failures: `SESSION.MEDIA_REQUIRED_MISSING`, `SESSION.MEDIA_REQUIREMENT_CONTRADICTED`, `SESSION.MEDIA_DIGEST_MISMATCH`, `SESSION.SYNC_EVIDENCE_MISSING`, `SESSION.SYNC_CLOCK_MAPPING`, `SESSION.SYNC_ENDPOINT_MISMATCH`, `SESSION.VIDEO_COUNT_MISMATCH`.
 
-- [ ] **Step 1: Write and verify the probe RED tests**
+- [x] **Step 1: Write and verify the probe RED tests**
 
 Assert non-zero input sequence, exact demux count/order, one constant offset, device/API/app SHA binding, and a blocking typed result for varying transforms.
 
-- [ ] **Step 2: Implement and commit the probe only**
+- [x] **Step 2: Implement and commit the probe only**
 
 Add `make verify-harness-s25-container-timestamp-probe`; emit via instrumentation status and never write the ledger. Commit:
 

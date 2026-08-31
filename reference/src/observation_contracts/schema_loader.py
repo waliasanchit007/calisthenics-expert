@@ -23,6 +23,7 @@ ArtifactKind = Literal[
     "raw_pose_frame",
     "annotation",
     "fixture_metadata",
+    "synchronization_evidence",
 ]
 
 ARTIFACT_KINDS: tuple[ArtifactKind, ...] = get_args(ArtifactKind)
@@ -35,6 +36,7 @@ SCHEMA_VERSION_FIELDS: Mapping[ArtifactKind, str] = {
     "raw_pose_frame": "raw_pose_frame_schema_version",
     "annotation": "annotation_schema_version",
     "fixture_metadata": "fixture_metadata_schema_version",
+    "synchronization_evidence": "synchronization_evidence_schema_version",
 }
 """Per-artifact version field. Each artifact family is versioned independently."""
 

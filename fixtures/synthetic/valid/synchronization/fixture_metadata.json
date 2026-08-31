@@ -1,0 +1,27 @@
+{
+  "fixture_metadata_schema_version": "1.0.0",
+  "fixture_id": "7b8c9d0e-1f2a-4b3c-8d4e-5f6a7b8c9d0e",
+  "synthetic": true,
+  "preprocessing_contract_version": "1.0.0",
+  "frame_width": 2,
+  "frame_height": 1,
+  "pixel_format": "rgb24",
+  "color_space": "srgb",
+  "color_range": "full",
+  "channel_order": "rgb",
+  "orientation": "upright",
+  "frames": [
+    {
+      "frame_index": 0,
+      "timestamp_ns": 0,
+      "path": "decoded/frame_000000.rgb24",
+      "byte_length": 6,
+      "sha256": "f33ae3bc9a22cd7564990a794789954409977013966fb1a8f43c35776b833a95"
+    }
+  ],
+  "generation": {
+    "generator_name": "synchronized_contract_fixture",
+    "generator_version": "1.0.0",
+    "description": "synthetic RGB24 admission marker for synchronized session artifacts"
+  }
+}

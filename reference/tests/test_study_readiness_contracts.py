@@ -192,7 +192,7 @@ def test_new_study_error_codes_are_unique_and_appended() -> None:
         "STUDY.SYNTHETIC_DETECTION_PENDING",
         "STUDY.LOCATION_REGISTRY",
     ]
-    assert registry["registry_version"] == "1.2.0"
+    assert registry["registry_version"] == "1.3.0"
     assert registry["codes"][-len(expected) :] == expected
     for code in expected:
         assert registry["codes"].count(code) == 1

@@ -43,6 +43,13 @@ def test_every_negative_fixture_fails_with_declared_code() -> None:
         "landmark_count",
         "fixture_checksum",
         "replay_media_role",
+        "media_required_missing",
+        "media_requirement_contradicted",
+        "media_digest_mismatch",
+        "sync_evidence_missing",
+        "sync_clock_mapping",
+        "sync_endpoint_mismatch",
+        "video_count_mismatch",
     }
     for case in cases:
         result = run_declared_validation(case)
@@ -179,6 +186,34 @@ def test_committed_fixture_replay_group_is_fully_valid() -> None:
     )
     assert fixture_metadata["synthetic"] is True
     assert issues == []
+
+
+def test_committed_synchronization_group_is_fully_valid_and_pins_s25_offset() -> None:
+    synchronization = repository_root() / "fixtures/synthetic/valid/synchronization"
+    manifest_path = synchronization / "manifest.json"
+    frames_path = synchronization / "frames.ndjson"
+    evidence_path = synchronization / "sync.json"
+    manifest = _json(manifest_path)
+    evidence = _json(evidence_path)
+
+    issues = validate_document(manifest, "session_manifest", str(manifest_path))
+    frames, frame_issues = validate_ndjson(frames_path)
+    issues.extend(frame_issues)
+    issues.extend(validate_frame_stream(manifest, frames, str(manifest_path), str(frames_path)))
+    issues.extend(validate_session_manifest_semantics(manifest, frames, str(manifest_path)))
+    issues.extend(validate_document(evidence, "synchronization_evidence", str(evidence_path)))
+
+    assert issues == []
+    assert manifest["session_manifest_schema_version"] == "1.2.0"
+    assert manifest["media_required"] is True
+    assert evidence["container_offset_ns"] == 1_000_000_000
+    assert [
+        sample["submitted_pts_us"] - sample["demuxed_pts_us"] for sample in evidence["samples"]
+    ] == [
+        1_000_000,
+        1_000_000,
+        1_000_000,
+    ]
 
 
 def test_committed_fixture_replay_sequence_matches_raw_stream_and_accounting() -> None:

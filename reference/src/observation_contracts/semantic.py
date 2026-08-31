@@ -23,9 +23,11 @@ second time here, so this module never re-reports a shape problem under a semant
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from observation_contracts.errors import ValidationIssue
@@ -43,6 +45,14 @@ _NORMALIZED = "normalized_image_landmarks"
 _WORLD = "world_landmarks"
 _SESSION_COUNT_CODE = "SESSION.COUNT_MISMATCH"
 _SESSION_MEDIA_ROLE_CODE = "SESSION.MEDIA_ROLE"
+_MEDIA_REQUIRED_MISSING_CODE = "SESSION.MEDIA_REQUIRED_MISSING"
+_MEDIA_REQUIREMENT_CONTRADICTED_CODE = "SESSION.MEDIA_REQUIREMENT_CONTRADICTED"
+_MEDIA_DIGEST_MISMATCH_CODE = "SESSION.MEDIA_DIGEST_MISMATCH"
+_SYNC_EVIDENCE_MISSING_CODE = "SESSION.SYNC_EVIDENCE_MISSING"
+_SYNC_CLOCK_MAPPING_CODE = "SESSION.SYNC_CLOCK_MAPPING"
+_SYNC_ENDPOINT_MISMATCH_CODE = "SESSION.SYNC_ENDPOINT_MISMATCH"
+_VIDEO_COUNT_MISMATCH_CODE = "SESSION.VIDEO_COUNT_MISMATCH"
+_SYNC_MAPPING_METHOD = "camera_capture_to_container_pts_constant_offset_v1"
 _FAILURE_CLASSIFICATIONS = frozenset({"backend_call_failed", "session_teardown_timeout"})
 
 
@@ -377,7 +387,443 @@ def validate_session_manifest_semantics(
                     )
                 )
 
+    issues.extend(_synchronization_issues(manifest, frames, path))
+
     return issues
+
+
+def _synchronization_issues(
+    manifest: Mapping[str, Any], frames: Sequence[Mapping[str, Any]], path: str
+) -> list[ValidationIssue]:
+    """Reconcile the optional M0.5B synchronized-session payloads.
+
+    Artifact presence, rather than the advisory ``media_required`` flag, selects the full
+    validation path. The admitted S25 observation supplies the container-origin mapping
+    semantics; the validator derives that offset from every sample and does not apply a
+    residual-magnitude quality threshold.
+    """
+    if (_text(manifest, "session_kind") or "live_study") != "live_conformance":
+        return []
+
+    media_references = manifest.get("media_references")
+    references = media_references if isinstance(media_references, list) else []
+    video_references = [
+        reference
+        for reference in references
+        if isinstance(reference, Mapping) and _text(reference, "role") == "session_video"
+    ]
+    sync_reference = _mapping_or_none(manifest.get("synchronization_evidence"))
+    raw_reference = _mapping_or_none(manifest.get("raw_pose_stream"))
+    published_video = _published_video_bytes(path, video_references)
+    artifact_present = bool(video_references or sync_reference or published_video)
+    media_required = manifest.get("media_required")
+
+    if media_required is not True and artifact_present:
+        return [
+            _session_issue(
+                path,
+                "video or synchronization artifacts require media_required=true",
+                pointer="/media_required",
+                expected=True,
+                actual=media_required,
+                code=_MEDIA_REQUIREMENT_CONTRADICTED_CODE,
+            )
+        ]
+    if media_required is not True and not artifact_present:
+        return []
+
+    if not video_references or raw_reference is None:
+        return [
+            _session_issue(
+                path,
+                "media-required live_conformance must reference session video and raw pose stream",
+                pointer="/media_references" if not video_references else "/raw_pose_stream",
+                expected="one session_video and one raw_pose_stream reference",
+                actual="missing",
+                code=_MEDIA_REQUIRED_MISSING_CODE,
+            )
+        ]
+    if len(video_references) != 1:
+        return [
+            _session_issue(
+                path,
+                "media-required live_conformance must contain exactly one session_video reference",
+                pointer="/media_references",
+                expected=1,
+                actual=len(video_references),
+                code=_VIDEO_COUNT_MISMATCH_CODE,
+            )
+        ]
+    if sync_reference is None:
+        return [
+            _session_issue(
+                path,
+                "media-required live_conformance must reference synchronization evidence",
+                pointer="/synchronization_evidence",
+                expected="one synchronization_evidence reference",
+                actual="missing",
+                code=_SYNC_EVIDENCE_MISSING_CODE,
+            )
+        ]
+
+    video_reference = video_references[0]
+    evidence_path = _payload_path(path, sync_reference.get("path_ref"))
+    if evidence_path is None or not evidence_path.is_file():
+        return [
+            _session_issue(
+                path,
+                "synchronization evidence reference does not resolve to a file",
+                pointer="/synchronization_evidence/path_ref",
+                expected="readable file",
+                actual=sync_reference.get("path_ref"),
+                code=_SYNC_EVIDENCE_MISSING_CODE,
+            )
+        ]
+    try:
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return [
+            _session_issue(
+                path,
+                "synchronization evidence is not readable JSON",
+                pointer="/synchronization_evidence/path_ref",
+                expected="JSON object",
+                actual=str(evidence_path),
+                code=_SYNC_EVIDENCE_MISSING_CODE,
+            )
+        ]
+    if not isinstance(evidence, Mapping):
+        return [
+            _session_issue(
+                path,
+                "synchronization evidence must be a JSON object",
+                pointer="/synchronization_evidence/path_ref",
+                expected="object",
+                actual=type(evidence).__name__,
+                code=_SYNC_EVIDENCE_MISSING_CODE,
+            )
+        ]
+
+    digest_issue = _synchronization_digest_issue(
+        manifest,
+        frames,
+        path,
+        video_reference,
+        raw_reference,
+        sync_reference,
+        evidence,
+        evidence_path,
+    )
+    if digest_issue is not None:
+        return [digest_issue]
+
+    count_issue = _synchronization_count_issue(manifest, frames, path, evidence)
+    if count_issue is not None:
+        return [count_issue]
+    endpoint_issue = _synchronization_endpoint_issue(
+        manifest, frames, path, video_reference, raw_reference, evidence
+    )
+    if endpoint_issue is not None:
+        return [endpoint_issue]
+    mapping_issue = _synchronization_mapping_issue(path, evidence)
+    return [mapping_issue] if mapping_issue is not None else []
+
+
+def _synchronization_digest_issue(
+    manifest: Mapping[str, Any],
+    frames: Sequence[Mapping[str, Any]],
+    path: str,
+    video_reference: Mapping[str, Any],
+    raw_reference: Mapping[str, Any],
+    sync_reference: Mapping[str, Any],
+    evidence: Mapping[str, Any],
+    evidence_path: Path,
+) -> ValidationIssue | None:
+    """Return one digest mismatch for any sealed synchronized payload."""
+    video_path = _payload_path(path, video_reference.get("path_ref"))
+    raw_path = _payload_path(path, raw_reference.get("path_ref"))
+    if video_path is None or raw_path is None or not video_path.is_file() or not raw_path.is_file():
+        return _session_issue(
+            path,
+            "synchronized payload reference does not resolve to a file",
+            pointer="/media_references/0/path_ref",
+            expected="readable media and raw pose files",
+            actual={"video": str(video_path), "raw_pose_stream": str(raw_path)},
+            code=_MEDIA_DIGEST_MISMATCH_CODE,
+        )
+
+    def digest(file_path: Path) -> str:
+        hasher = hashlib.sha256()
+        with file_path.open("rb") as handle:
+            while chunk := handle.read(64 * 1024):
+                hasher.update(chunk)
+        return hasher.hexdigest()
+
+    video_sha = digest(video_path)
+    raw_sha = digest(raw_path)
+    evidence_sha = digest(evidence_path)
+    expected_video_sha = _text(video_reference, "sha256")
+    expected_raw_sha = _text(raw_reference, "sha256")
+    expected_evidence_sha = _text(sync_reference, "sha256")
+    if (
+        video_sha != expected_video_sha
+        or raw_sha != expected_raw_sha
+        or evidence_sha != expected_evidence_sha
+        or _text(evidence, "video_sha256") != expected_video_sha
+        or _text(evidence, "raw_pose_stream_sha256") != expected_raw_sha
+    ):
+        return _session_issue(
+            path,
+            "synchronized payload SHA-256 does not match its manifest-bound digest",
+            pointer="/synchronization_evidence/sha256",
+            expected={"video": expected_video_sha, "raw_pose_stream": expected_raw_sha},
+            actual={"video": video_sha, "raw_pose_stream": raw_sha},
+            code=_MEDIA_DIGEST_MISMATCH_CODE,
+        )
+    byte_length = _integer(evidence, "video_byte_length")
+    if byte_length is not None and byte_length != video_path.stat().st_size:
+        return _session_issue(
+            path,
+            "video byte length does not match the finalized video bytes",
+            pointer="/synchronization_evidence/video_byte_length",
+            expected=video_path.stat().st_size,
+            actual=byte_length,
+            code=_MEDIA_DIGEST_MISMATCH_CODE,
+        )
+    return None
+
+
+def _synchronization_count_issue(
+    manifest: Mapping[str, Any],
+    frames: Sequence[Mapping[str, Any]],
+    path: str,
+    evidence: Mapping[str, Any],
+) -> ValidationIssue | None:
+    counts = _mapping(evidence, "counts")
+    video_pts = evidence.get("video_pts_us")
+    samples = evidence.get("samples")
+    if not isinstance(video_pts, list) or not isinstance(samples, list):
+        return _session_issue(
+            path,
+            "video and metadata sample arrays are missing",
+            pointer="/samples",
+            expected="arrays",
+            actual=None,
+            code=_VIDEO_COUNT_MISMATCH_CODE,
+        )
+    encoded = _integer(counts, "encoded_video_frames")
+    delivered = _integer(counts, "delivered_camera_callbacks")
+    dropped = _integer(counts, "dropped_before_encoder")
+    encoder_failures = _integer(counts, "encoder_failures")
+    # The first two identities are checked against the manifest below; the remaining
+    # identities are checked against the stream that is independently available here.
+    manifest_counts = _mapping(manifest, "counts")
+    identities = (
+        ("delivered_camera_callbacks", "camera_frames_received"),
+        ("submitted_inference_frames", "inference_frames_submitted"),
+        ("emitted_pose_records", "inference_records_emitted"),
+        ("inference_skipped_frames", "frames_skipped_before_inference"),
+        ("inference_failures", "inference_failures"),
+    )
+    for evidence_key, manifest_key in identities:
+        if _integer(counts, evidence_key) != _integer(manifest_counts, manifest_key):
+            return _session_issue(
+                path,
+                "synchronization count does not match the session manifest",
+                pointer=f"/synchronization_evidence/counts/{evidence_key}",
+                expected=_integer(manifest_counts, manifest_key),
+                actual=_integer(counts, evidence_key),
+                code=_VIDEO_COUNT_MISMATCH_CODE,
+            )
+    if (
+        encoded != len(video_pts)
+        or encoded != len(samples)
+        or delivered is None
+        or dropped is None
+        or encoder_failures is None
+        or delivered != encoded + dropped + encoder_failures
+    ):
+        return _session_issue(
+            path,
+            "video and callback counts do not reconcile",
+            pointer="/synchronization_evidence/counts",
+            expected="delivered=encoded+dropped+encoder_failures",
+            actual=counts,
+            code=_VIDEO_COUNT_MISMATCH_CODE,
+        )
+    return None
+
+
+def _synchronization_endpoint_issue(
+    manifest: Mapping[str, Any],
+    frames: Sequence[Mapping[str, Any]],
+    path: str,
+    video_reference: Mapping[str, Any],
+    raw_reference: Mapping[str, Any],
+    evidence: Mapping[str, Any],
+) -> ValidationIssue | None:
+    samples = evidence.get("samples")
+    video_pts = evidence.get("video_pts_us")
+    if (
+        not isinstance(samples, list)
+        or not samples
+        or not isinstance(video_pts, list)
+        or not video_pts
+    ):
+        return _session_issue(
+            path,
+            "synchronization endpoint samples are missing",
+            pointer="/samples",
+            expected="non-empty samples",
+            actual=None,
+            code=_SYNC_ENDPOINT_MISMATCH_CODE,
+        )
+    first = samples[0] if isinstance(samples[0], Mapping) else {}
+    last = samples[-1] if isinstance(samples[-1], Mapping) else {}
+    frame_first = frames[0] if frames else {}
+    frame_last = frames[-1] if frames else {}
+    checks = (
+        ("first_camera_frame_timestamp_ns", first.get("rebased_capture_timestamp_ns")),
+        ("last_camera_frame_timestamp_ns", last.get("rebased_capture_timestamp_ns")),
+        ("first_encoded_frame_pts_us", video_pts[0]),
+        ("last_encoded_frame_pts_us", video_pts[-1]),
+        ("first_pose_capture_timestamp_ns", frame_first.get("capture_timestamp_ns")),
+        ("last_pose_capture_timestamp_ns", frame_last.get("capture_timestamp_ns")),
+    )
+    for field, expected in checks:
+        if evidence.get(field) != expected:
+            return _session_issue(
+                path,
+                "synchronization endpoint does not match observed samples",
+                pointer=f"/{field}",
+                expected=expected,
+                actual=evidence.get(field),
+                code=_SYNC_ENDPOINT_MISMATCH_CODE,
+            )
+    if (
+        evidence.get("session_id") != manifest.get("session_id")
+        or evidence.get("manifest_session_id") != manifest.get("session_id")
+        or evidence.get("video_role") != video_reference.get("role")
+        or evidence.get("video_path_ref") != video_reference.get("path_ref")
+        or evidence.get("raw_pose_stream_path_ref") != raw_reference.get("path_ref")
+    ):
+        return _session_issue(
+            path,
+            "synchronization evidence endpoint is not joined to the manifest",
+            pointer="/session_id",
+            expected=manifest.get("session_id"),
+            actual=evidence.get("session_id"),
+            code=_SYNC_ENDPOINT_MISMATCH_CODE,
+        )
+    return None
+
+
+def _synchronization_mapping_issue(
+    path: str, evidence: Mapping[str, Any]
+) -> ValidationIssue | None:
+    if (
+        evidence.get("mapping_method") != _SYNC_MAPPING_METHOD
+        or evidence.get("container_drift_ns_per_s") != 0
+    ):
+        return _session_issue(
+            path,
+            "synchronization evidence does not use the admitted constant-offset mapping",
+            pointer="/mapping_method",
+            expected=_SYNC_MAPPING_METHOD,
+            actual=evidence.get("mapping_method"),
+            code=_SYNC_CLOCK_MAPPING_CODE,
+        )
+    samples = evidence.get("samples")
+    if not isinstance(samples, list) or not samples:
+        return _session_issue(
+            path,
+            "synchronization samples are missing",
+            pointer="/samples",
+            expected="non-empty samples",
+            actual=None,
+            code=_SYNC_CLOCK_MAPPING_CODE,
+        )
+    offsets: list[int] = []
+    for sample in samples:
+        if not isinstance(sample, Mapping):
+            return _session_issue(
+                path,
+                "synchronization sample is not an object",
+                pointer="/samples",
+                expected="object",
+                actual=sample,
+                code=_SYNC_CLOCK_MAPPING_CODE,
+            )
+        submitted = _integer(sample, "submitted_pts_us")
+        demuxed = _integer(sample, "demuxed_pts_us")
+        rebased = _integer(sample, "rebased_capture_timestamp_ns")
+        if submitted is None or demuxed is None or rebased is None or submitted != rebased // 1_000:
+            return _session_issue(
+                path,
+                "submitted PTS is not derived from the rebased camera timestamp",
+                pointer="/samples",
+                expected="submitted_pts_us=floor(rebased_capture_timestamp_ns/1000)",
+                actual=sample,
+                code=_SYNC_CLOCK_MAPPING_CODE,
+            )
+        offsets.append((submitted - demuxed) * 1_000)
+    if len(set(offsets)) != 1 or evidence.get("container_offset_ns") != offsets[0]:
+        return _session_issue(
+            path,
+            "container offset is not one constant value derived from every sample",
+            pointer="/container_offset_ns",
+            expected=offsets[0] if offsets else None,
+            actual=evidence.get("container_offset_ns"),
+            code=_SYNC_CLOCK_MAPPING_CODE,
+        )
+    video_pts = evidence.get("video_pts_us")
+    demuxed_pts = [
+        sample.get("demuxed_pts_us") for sample in samples if isinstance(sample, Mapping)
+    ]
+    if video_pts != demuxed_pts:
+        return _session_issue(
+            path,
+            "video and metadata tracks do not carry identical demuxed PTS",
+            pointer="/video_pts_us",
+            expected=demuxed_pts,
+            actual=video_pts,
+            code=_SYNC_CLOCK_MAPPING_CODE,
+        )
+    return None
+
+
+def _published_video_bytes(path: str, references: Sequence[object]) -> bool:
+    """Recognize a directly published video beside the manifest or via a video reference."""
+    for reference in references:
+        if isinstance(reference, Mapping):
+            payload = _payload_path(path, reference.get("path_ref"))
+            if payload is not None and payload.is_file():
+                return True
+    parent = Path(path).resolve().parent
+    return (
+        any(
+            child.is_file() and child.suffix.lower() in {".mp4", ".mkv", ".mov", ".webm"}
+            for child in parent.iterdir()
+        )
+        if parent.is_dir()
+        else False
+    )
+
+
+def _payload_path(manifest_path: str, raw_path: object) -> Path | None:
+    if not isinstance(raw_path, str) or not raw_path or Path(raw_path).is_absolute():
+        return None
+    root = Path(manifest_path).resolve().parent
+    candidate = (root / raw_path).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return None
+    return candidate
+
+
+def _mapping_or_none(value: object) -> Mapping[str, Any] | None:
+    return value if isinstance(value, Mapping) else None
 
 
 def validate_annotations(

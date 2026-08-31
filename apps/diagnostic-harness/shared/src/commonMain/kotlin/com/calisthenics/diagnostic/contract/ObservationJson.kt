@@ -40,6 +40,9 @@ fun encodeManifest(manifest: SessionManifest): String {
         field("clock") { clock(manifest.clock) }
         field("available_observations") { availableObservations(manifest.availableObservations) }
         field("media_references") { array(manifest.mediaReferences) { mediaReference(it) } }
+        manifest.rawPoseStream?.let { field("raw_pose_stream") { artifactReference(it) } }
+        manifest.synchronizationEvidence?.let { field("synchronization_evidence") { artifactReference(it) } }
+        manifest.mediaRequired?.let { field("media_required") { bool(it) } }
         field("counts") { counts(manifest.counts) }
         field("machine_inference_failures") { array(manifest.machineInferenceFailures) { machineFailure(it) } }
         field("capture_quality_observed") { captureQuality(manifest.captureQualityObserved) }
@@ -77,6 +80,9 @@ fun decodeManifest(json: String): SessionManifest = decode("manifest") {
         clock = root.requiredObject("clock").decodeClock(),
         availableObservations = root.requiredObject("available_observations").decodeAvailableObservations(),
         mediaReferences = root.requiredArray("media_references").map { it.objectValue("media_reference").decodeMediaReference() },
+        rawPoseStream = root.optionalObject("raw_pose_stream")?.decodeArtifactReference(),
+        synchronizationEvidence = root.optionalObject("synchronization_evidence")?.decodeArtifactReference(),
+        mediaRequired = root.optionalBoolean("media_required"),
         counts = root.requiredObject("counts").decodeCounts(),
         machineInferenceFailures = root.requiredArray("machine_inference_failures")
             .map { it.objectValue("machine_inference_failure").decodeMachineFailure() },
@@ -231,6 +237,14 @@ private fun StringBuilder.mediaReference(value: MediaReference) {
     field("sha256") { string(value.sha256.value) }
     value.syncOffsetNs?.let { field("sync_offset_ns") { long(it) } }
     value.syncDriftNsPerS?.let { field("sync_drift_ns_per_s") { number(it) } }
+    append('}')
+}
+
+private fun StringBuilder.artifactReference(value: ArtifactReference) {
+    append('{')
+    field("path_ref") { string(value.pathRef) }
+    field("sha256") { string(value.sha256.value) }
+    field("schema_version") { string(value.schemaVersion.value) }
     append('}')
 }
 
@@ -389,6 +403,7 @@ private fun JsonObject.required(key: String): JsonElement =
 
 private fun JsonObject.requiredObject(key: String): JsonObject = required(key).objectValue(key)
 private fun JsonObject.requiredArray(key: String): JsonArray = required(key).arrayValue(key)
+private fun JsonObject.optionalObject(key: String): JsonObject? = get(key)?.objectValue(key)
 
 private fun JsonElement.arrayValue(key: String): JsonArray =
     (this as? JsonArray) ?: throw ContractDecodeException("$key must be a JSON array")
@@ -431,6 +446,8 @@ private fun JsonObject.requiredBoolean(key: String): Boolean {
     val primitive = required(key) as? JsonPrimitive ?: throw ContractDecodeException("$key must be a boolean")
     return primitive.booleanOrNull ?: throw ContractDecodeException("$key must be a boolean")
 }
+
+private fun JsonObject.optionalBoolean(key: String): Boolean? = if (containsKey(key)) requiredBoolean(key) else null
 
 private fun JsonObject.requiredVersion(key: String): SemanticVersion = SemanticVersion(requiredString(key))
 private fun JsonObject.requiredUuid(key: String): Uuid = Uuid(requiredString(key))
@@ -517,6 +534,12 @@ private fun JsonObject.decodeMediaReference() = MediaReference(
     sha256 = requiredSha256("sha256"),
     syncOffsetNs = optionalLong("sync_offset_ns"),
     syncDriftNsPerS = optionalDouble("sync_drift_ns_per_s"),
+)
+
+private fun JsonObject.decodeArtifactReference() = ArtifactReference(
+    pathRef = requiredString("path_ref"),
+    sha256 = requiredSha256("sha256"),
+    schemaVersion = requiredVersion("schema_version"),
 )
 
 private fun JsonObject.decodeCounts() = Counts(
@@ -632,6 +655,10 @@ private fun validateManifest(value: SessionManifest) {
         require(failure.classification in setOf("backend_call_failed", "session_teardown_timeout")) {
             "failure classification is not recognized"
         }
+    }
+    listOfNotNull(value.rawPoseStream, value.synchronizationEvidence).forEach { reference ->
+        require(reference.pathRef.isNotEmpty()) { "artifact reference path_ref must not be empty" }
+        requireSupportedMajor(reference.schemaVersion, "session artifact")
     }
 }
 
