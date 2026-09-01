@@ -91,6 +91,32 @@ class SynchronizationEvidenceTest {
     }
 
     @Test
+    fun deliveredCallbacksMustReconcileWithEveryVideoDisposition() {
+        val evidence = evidence(counts = defaultCounts().copy(deliveredCameraCallbacks = 4))
+
+        assertContains(synchronizationBlockingReasons(evidence), SYNC_BLOCK_CALLBACK_ACCOUNTING)
+    }
+
+    @Test
+    fun callbacksRejectedBeforeTheWriterAreIncludedInDroppedBeforeEncoder() {
+        assertEquals(
+            2,
+            deriveTotalDroppedBeforeEncoder(
+                deliveredCameraCallbacks = 5,
+                acceptedByVideoWriter = 4,
+                writerDroppedBeforeEncoder = 1,
+            ),
+        )
+        assertNull(
+            deriveTotalDroppedBeforeEncoder(
+                deliveredCameraCallbacks = 3,
+                acceptedByVideoWriter = 4,
+                writerDroppedBeforeEncoder = 0,
+            ),
+        )
+    }
+
+    @Test
     fun duplicateSubmittedPtsIsBlocked() {
         val samples = listOf(
             sample(0, 33_333_000L, 33_333L, demuxed = 33_333L),
@@ -154,6 +180,29 @@ class SynchronizationEvidenceTest {
     }
 
     @Test
+    fun renderedEncodedEndpointsUseTheDemuxedContainerDomain() {
+        val samples = listOf(
+            sample(0, 1_000_000_000L, 1_000_000L, demuxed = 0L),
+            sample(1, 1_033_333_000L, 1_033_333L, demuxed = 33_333L),
+        )
+        val json = renderSynchronizationEvidence(
+            evidence(
+                samples = samples,
+                videoPtsUs = samples.map { it.demuxedPtsUs },
+                counts = defaultCounts().copy(
+                    deliveredCameraCallbacks = 2,
+                    encodedVideoFrames = 2,
+                    submittedInferenceFrames = 2,
+                    emittedPoseRecords = 2,
+                ),
+            ),
+        )
+
+        assertContains(json, "\"first_encoded_frame_pts_us\":0")
+        assertContains(json, "\"last_encoded_frame_pts_us\":33333")
+    }
+
+    @Test
     fun blockedEvidenceStillRendersAndReportsItsReasons() {
         val json = renderSynchronizationEvidence(evidence(codec = "c2.android.avc.encoder"))
 
@@ -202,7 +251,7 @@ class SynchronizationEvidenceTest {
             sessionId = "00000000-0000-4000-8000-000000000001",
             manifestSessionId = "00000000-0000-4000-8000-000000000001",
             artifacts = SynchronizationArtifacts(
-                videoRole = "synchronized_video",
+                videoRole = "session_video",
                 videoPathRef = "video.mp4",
                 videoSha256 = "a".repeat(64),
                 videoByteLength = 1024L,

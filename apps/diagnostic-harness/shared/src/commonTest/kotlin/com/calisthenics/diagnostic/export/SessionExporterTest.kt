@@ -363,7 +363,7 @@ class SessionExporterTest {
 
     @Test
     fun synchronizationEvidenceBuilderReceivesTheExactReconciledArtifactsAndSessionBounds() {
-        val storage = FakeStorage()
+        val storage = FaultInjectingStoragePort(FakeStorage())
         var received: SynchronizationEvidenceBuildContext? = null
         val exporter = SessionExporter(
             storage = storage,
@@ -400,6 +400,11 @@ class SessionExporterTest {
             "the exporter must use the released session-video role",
         )
         assertFalse(manifest.mediaReferences.any { it.role == "synchronized_video" })
+        val firstVideoRead = storage.operations.indexOf("reconcileArtifact:VIDEO")
+        val videoFsync = storage.operations.lastIndexOf("fsyncArtifact:VIDEO")
+        val finalVideoRead = storage.operations.lastIndexOf("reconcileArtifact:VIDEO")
+        assertTrue(firstVideoRead < videoFsync, "video presence must be detected before fsync")
+        assertTrue(videoFsync < finalVideoRead, "the manifest digest must be read after fsync")
     }
 
     @Test

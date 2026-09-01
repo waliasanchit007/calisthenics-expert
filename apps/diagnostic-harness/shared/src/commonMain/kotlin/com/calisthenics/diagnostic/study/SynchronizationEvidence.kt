@@ -20,6 +20,7 @@ const val SYNC_BLOCK_PTS_DERIVATION = "submitted_pts_not_derived_from_rebased_ca
 const val SYNC_BLOCK_VIDEO_PTS_MISMATCH = "video_pts_not_equal_to_demuxed_pts"
 const val SYNC_BLOCK_DUPLICATE_PTS = "submitted_pts_not_unique"
 const val SYNC_BLOCK_COUNT_MISMATCH = "encoded_video_frames_not_equal_to_sample_count"
+const val SYNC_BLOCK_CALLBACK_ACCOUNTING = "video_callback_accounting_mismatch"
 const val SYNC_BLOCK_PROBE_CODEC_MISMATCH = "probe_codec_mismatch"
 const val SYNC_BLOCK_PROBE_CONTAINER_MISMATCH = "probe_container_mismatch"
 
@@ -95,6 +96,17 @@ fun deriveSynchronizationOffsetNs(samples: List<SynchronizationSample>): Long? {
     return offsetUs * 1_000L
 }
 
+/** Include callbacks rejected before video-writer admission in the released drop identity. */
+fun deriveTotalDroppedBeforeEncoder(
+    deliveredCameraCallbacks: Int,
+    acceptedByVideoWriter: Int,
+    writerDroppedBeforeEncoder: Int,
+): Int? {
+    val rejectedBeforeWriter = deliveredCameraCallbacks - acceptedByVideoWriter
+    if (rejectedBeforeWriter < 0) return null
+    return writerDroppedBeforeEncoder + rejectedBeforeWriter
+}
+
 /**
  * Reasons this run must not be admitted as synchronized evidence.
  *
@@ -121,6 +133,13 @@ fun synchronizationBlockingReasons(evidence: SynchronizationEvidence): List<Stri
         if (evidence.counts.encodedVideoFrames != samples.size) {
             add(SYNC_BLOCK_COUNT_MISMATCH)
         }
+    }
+    if (evidence.counts.deliveredCameraCallbacks !=
+        evidence.counts.encodedVideoFrames +
+        evidence.counts.droppedBeforeEncoder +
+        evidence.counts.encoderFailures
+    ) {
+        add(SYNC_BLOCK_CALLBACK_ACCOUNTING)
     }
     // Provenance: the admitted probe measured one specific codec in one specific container.
     // Inheriting its transform-class conclusion under a different encoder is not supported.
@@ -163,8 +182,8 @@ fun renderSynchronizationEvidence(evidence: SynchronizationEvidence): String {
         }
         put("first_camera_frame_timestamp_ns", evidence.firstCameraFrameTimestampNs)
         put("last_camera_frame_timestamp_ns", evidence.lastCameraFrameTimestampNs)
-        put("first_encoded_frame_pts_us", evidence.samples.firstOrNull()?.submittedPtsUs)
-        put("last_encoded_frame_pts_us", evidence.samples.lastOrNull()?.submittedPtsUs)
+        put("first_encoded_frame_pts_us", evidence.videoPtsUs.firstOrNull())
+        put("last_encoded_frame_pts_us", evidence.videoPtsUs.lastOrNull())
         put("first_pose_capture_timestamp_ns", evidence.firstPoseCaptureTimestampNs)
         put("last_pose_capture_timestamp_ns", evidence.lastPoseCaptureTimestampNs)
         putJsonObject("counts") {

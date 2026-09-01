@@ -87,6 +87,7 @@ import com.calisthenics.diagnostic.study.SynchronizationCounts
 import com.calisthenics.diagnostic.study.SynchronizationEvidence
 import com.calisthenics.diagnostic.study.SynchronizationSample
 import com.calisthenics.diagnostic.study.deriveSynchronizationOffsetNs
+import com.calisthenics.diagnostic.study.deriveTotalDroppedBeforeEncoder
 import com.calisthenics.diagnostic.study.renderSynchronizationEvidence
 import com.calisthenics.diagnostic.study.synchronizationBlockingReasons
 import com.calisthenics.diagnostic.video.DemuxedVideoEvidence
@@ -1804,6 +1805,16 @@ class LiveCameraComposition internal constructor(
                                             demuxedPtsUs = observed.metadataPtsUs[index],
                                         )
                                     }
+                                    val deliveredCameraCallbacks =
+                                        build.snapshot.counts.cameraFramesReceived.toInt()
+                                    val droppedBeforeEncoder = deriveTotalDroppedBeforeEncoder(
+                                        deliveredCameraCallbacks = deliveredCameraCallbacks,
+                                        acceptedByVideoWriter = writerResult.accounting.accepted,
+                                        writerDroppedBeforeEncoder =
+                                            writerResult.accounting.droppedBeforeEncoder,
+                                    ) ?: throw DurableReconciliationException(
+                                        "video writer accepted more callbacks than the session delivered",
+                                    )
                                     val evidence = SynchronizationEvidence(
                                         sessionId = template.sessionId.value,
                                         manifestSessionId = template.sessionId.value,
@@ -1822,11 +1833,11 @@ class LiveCameraComposition internal constructor(
                                         samples = samples,
                                         videoPtsUs = observed.videoPtsUs,
                                         counts = SynchronizationCounts(
-                                            deliveredCameraCallbacks = build.snapshot.counts.cameraFramesReceived.toInt(),
+                                            deliveredCameraCallbacks = deliveredCameraCallbacks,
                                             encodedVideoFrames = observed.videoPtsUs.size,
                                             submittedInferenceFrames = build.snapshot.counts.inferenceFramesSubmitted.toInt(),
                                             emittedPoseRecords = build.snapshot.counts.inferenceRecordsEmitted.toInt(),
-                                            droppedBeforeEncoder = writerResult.accounting.droppedBeforeEncoder,
+                                            droppedBeforeEncoder = droppedBeforeEncoder,
                                             encoderFailures = writerResult.accounting.encoderFailures,
                                             inferenceSkippedFrames = build.snapshot.counts.framesSkippedBeforeInference.toInt(),
                                             inferenceFailures = build.snapshot.counts.inferenceFailures.toInt(),

@@ -198,7 +198,16 @@ class DefaultDurableSessionWriter(
             // muxed into this attempt it is here, and a pose-only run reconciles an empty artifact.
             // The muxer is finalized before the pre-seal fence continues, so nothing can still be
             // writing when this reads it.
-            val video = storage.reconcileArtifact(currentAttempt, DurableArtifact.VIDEO)
+            val observedVideo = storage.reconcileArtifact(currentAttempt, DurableArtifact.VIDEO)
+            val video = if (observedVideo.byteLength > 0L) {
+                // MediaMuxer writes through its own descriptor, outside appendArtifact's channel.
+                // Force those finalized bytes, then re-read the identity that the manifest will
+                // bind. The pre-fsync read is presence detection only and is never published.
+                storage.fsyncArtifact(currentAttempt, DurableArtifact.VIDEO)
+                storage.reconcileArtifact(currentAttempt, DurableArtifact.VIDEO)
+            } else {
+                observedVideo
+            }
             if (video.byteLength > 0L && synchronizationEvidence == null && !synchronizationWritten) {
                 throw DurableReconciliationException(
                     "a finalized video requires synchronization evidence in the same attempt",

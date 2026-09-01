@@ -176,7 +176,7 @@ class SessionExporter(
         return manifest.copy(
             mediaRequired = true,
             mediaReferences = manifest.mediaReferences + MediaReference(
-                    role = SESSION_VIDEO_ROLE,
+                role = SESSION_VIDEO_ROLE,
                 pathRef = VIDEO_PATH_REF,
                 sha256 = Sha256(video.reconciliation.sha256),
                 // The released contract requires offset and drift together or not at all.
