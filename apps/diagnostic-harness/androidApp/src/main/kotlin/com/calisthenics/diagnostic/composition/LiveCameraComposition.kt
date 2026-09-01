@@ -290,6 +290,13 @@ class LiveCameraComposition internal constructor(
         },
         val beforeRunnerReady: ((OwnedYuvFrame) -> Unit) -> Unit = {},
         val encoderFinalizationSlot: LiveEncoderFinalizationSlot = LiveEncoderFinalizationSlot {},
+        /**
+         * Per-run video writer factory, or null when the run records no video.
+         *
+         * Video is enabled only for short synchronization and purge runs; sustained
+         * characterization records `video_enabled=false`, so null is the normal case there.
+         */
+        val videoWriterFactory: (() -> com.calisthenics.diagnostic.video.LiveVideoWriter)? = null,
         val sessionFinalizerFactory: LiveSessionFinalizerFactory,
         val sessionIdProvider: () -> Uuid = M05SessionIdGenerator::next,
         val manifestMetadata: LiveManifestMetadata = LiveManifestMetadata(),
@@ -728,10 +735,18 @@ class LiveCameraComposition internal constructor(
         val frame: OwnedYuvFrame,
     )
 
+    private data class PendingVideoFrame(
+        val index: Long,
+        val rebasedCaptureNs: Long,
+        val frame: OwnedYuvFrame,
+    )
+
     internal fun handleFrame(
         frame: OwnedYuvFrame,
         onProgress: (SessionRunnerSnapshot) -> Unit = {},
     ) {
+        // Per-callback, never a field: concurrent camera callbacks must not share this slot.
+        var pendingVideoFrame: PendingVideoFrame? = null
         val reservation = synchronized(monitor) {
             val index = beginDeliveredCallbackLocked()
             val currentRunner = runner
@@ -791,6 +806,12 @@ class LiveCameraComposition internal constructor(
                 )
             }
             observedSourceGeometry = geometry
+            // Video fans out from every geometry-valid delivered frame, independently of the
+            // inference cadence decision below. The camera runs at 30 FPS while inference is
+            // decimated to 10/15/30, which is exactly why the evidence counts distinguish
+            // delivered_camera_callbacks, encoded_video_frames, and submitted_inference_frames.
+            // Encoding a frame is recorded here but performed outside this monitor.
+            pendingVideoFrame = PendingVideoFrame(index, rebasedCaptureNs, frame)
             manifest = manifest?.copy(
                 camera = manifest!!.camera.copy(
                     captureWidth = geometry.width,
@@ -813,6 +834,9 @@ class LiveCameraComposition internal constructor(
                 )
             }
         }
+
+        // Outside the monitor: encoding a frame must never hold the session lock.
+        pendingVideoFrame?.let { encodeVideoFrame(it) }
 
         if (reservation == null) return
 
@@ -983,6 +1007,41 @@ class LiveCameraComposition internal constructor(
     internal fun callbackAccounting(): DeliveredCallbackAccounting = synchronized(monitor) {
         deliveredCallbacks.snapshot()
     }
+
+    /** Lazily constructed per run, and only when this run records video. */
+    private var videoWriter: com.calisthenics.diagnostic.video.LiveVideoWriter? = null
+    private var videoWriterFinished = false
+    private val videoDispositions =
+        mutableListOf<Pair<Long, com.calisthenics.diagnostic.video.VideoDisposition>>()
+
+    private fun encodeVideoFrame(pending: PendingVideoFrame) {
+        val factory = dependencies.videoWriterFactory ?: return
+        val writer = synchronized(monitor) {
+            if (videoWriterFinished) return
+            videoWriter ?: factory().also { videoWriter = it }
+        }
+        val disposition = writer.accept(pending.index, pending.rebasedCaptureNs, pending.frame)
+        synchronized(monitor) { videoDispositions += pending.index to disposition }
+    }
+
+    /**
+     * Finish the video writer before the pre-seal fence continues.
+     *
+     * Ordering matters: the encoder and muxer must be finalized before telemetry is joined and the
+     * session sealed, so no sample can arrive after the manifest describes the run.
+     */
+    private fun finalizeVideoWriter() {
+        val writer = synchronized(monitor) {
+            if (videoWriterFinished) return
+            videoWriterFinished = true
+            videoWriter
+        } ?: return
+        writer.finish()
+    }
+
+    /** Per-run video accounting, or null when this run recorded no video. */
+    internal fun videoAccounting(): com.calisthenics.diagnostic.video.VideoAccounting? =
+        synchronized(monitor) { videoWriter?.accounting() }
 
     private fun canonicalize(frame: OwnedYuvFrame): ByteArray {
         val upright = yuv420ToUprightRgb24(
@@ -1311,6 +1370,7 @@ class LiveCameraComposition internal constructor(
         synchronized(monitor) {
             if (finalizationFenceCompleted) return
         }
+        finalizeVideoWriter()
         dependencies.encoderFinalizationSlot.finalizeEncoder()
         val controller = synchronized(monitor) { telemetryController.takeIf { telemetryStarted } }
         try {

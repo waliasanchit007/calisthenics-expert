@@ -56,6 +56,99 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.system.measureTimeMillis
 
 class LiveCameraCompositionTest {
+
+    // --- Task 4: synchronized video fan-out ---------------------------------------------------
+
+    @Test
+    fun everyDeliveredCameraFrameReachesTheVideoWriter() {
+        var now = 1_000_000_000L
+        val writer = RecordingVideoWriter()
+        val harness = Harness(
+            recordingVideoWriter = writer,
+            clockOverride = LiveCameraComposition.AndroidLiveClock { now },
+        )
+        try {
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            now = 1_000_100_000L
+            harness.composition.handleFrame(frame(timestampNs = 1_000_002_000L))
+            harness.composition.handleFrame(frame(timestampNs = 1_000_035_000L))
+            harness.composition.handleFrame(frame(timestampNs = 1_000_068_000L))
+
+            // The camera runs at 30 FPS while inference is decimated to the configured cadence,
+            // so video must see every delivered frame, not only frames selected for inference.
+            assertEquals(3, writer.accepted.size, "video writer did not see every delivered frame")
+            assertEquals(listOf(0L, 1L, 2L), writer.accepted.map { it.first })
+            assertTrue(
+                harness.inference.submissionCount < writer.accepted.size,
+                "test setup: inference must be decimated relative to delivered frames",
+            )
+        } finally {
+            harness.composition.abandon()
+        }
+    }
+
+    @Test
+    fun theVideoWriterIsOpenedOnceForTheRun() {
+        var now = 1_000_000_000L
+        val writer = RecordingVideoWriter()
+        val harness = Harness(
+            recordingVideoWriter = writer,
+            clockOverride = LiveCameraComposition.AndroidLiveClock { now },
+        )
+        try {
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            now = 1_000_100_000L
+            harness.composition.handleFrame(frame(timestampNs = 1_000_002_000L))
+            harness.composition.handleFrame(frame(timestampNs = 1_000_035_000L))
+
+            assertEquals(1, harness.events.count { it == "video.writer.open" })
+        } finally {
+            harness.composition.abandon()
+        }
+    }
+
+    @Test
+    fun theVideoWriterIsFinishedBeforeTheRestOfThePreSealFence() {
+        val writer = RecordingVideoWriter()
+        withHarness(Harness(recordingVideoWriter = writer)) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            harness.source.emit(frame(timestampNs = 1_000_002_000L))
+            harness.inference.completeSuccess()
+
+            harness.composition.stop()
+
+            assertEquals(1, writer.finishCount, "video writer must be finished exactly once")
+            val finishIndex = harness.events.indexOf("video.writer.finish")
+            val slotIndex = harness.events.indexOf("encoder.finalize")
+            assertTrue(finishIndex >= 0, "video writer was never finished")
+            assertTrue(slotIndex >= 0, "pre-seal fence never ran")
+            assertTrue(
+                finishIndex < slotIndex,
+                "video finalization must precede the rest of the pre-seal fence",
+            )
+        }
+    }
+
+    @Test
+    fun noVideoWriterIsConstructedWhenTheRunRecordsNoVideo() {
+        var now = 1_000_000_000L
+        val harness = Harness(
+            recordingVideoWriter = null,
+            clockOverride = LiveCameraComposition.AndroidLiveClock { now },
+        )
+        try {
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            now = 1_000_100_000L
+            harness.composition.handleFrame(frame(timestampNs = 1_000_002_000L))
+
+            // Sustained characterization records video_enabled=false; no encoder may be built.
+            assertEquals(0, harness.events.count { it == "video.writer.open" })
+            assertNull(harness.composition.videoAccounting())
+        } finally {
+            harness.composition.abandon()
+        }
+    }
+
     @Test
     fun explicitRecordingModesKeepFullStageEventsShortAndUseBoundedCountersForSustainedRuns() {
         withHarness(Harness()) { short ->
@@ -1391,6 +1484,39 @@ class LiveCameraCompositionTest {
         )
     }
 
+    /** Records what the composition fans out to video, for the Task 4 fan-out tests. */
+    internal class RecordingVideoWriter(
+        private val onFinish: () -> Unit = {},
+    ) : com.calisthenics.diagnostic.video.LiveVideoWriter {
+        val accepted = mutableListOf<Pair<Long, Long>>()
+        var finishCount = 0
+
+        override fun accept(
+            frameIndex: Long,
+            rebasedCaptureNs: Long,
+            ownedFrame: com.calisthenics.diagnostic.camera.OwnedYuvFrame,
+        ): com.calisthenics.diagnostic.video.VideoDisposition {
+            accepted += frameIndex to rebasedCaptureNs
+            return com.calisthenics.diagnostic.video.VideoDisposition.Encoded(rebasedCaptureNs / 1_000L)
+        }
+
+        override fun accounting(): com.calisthenics.diagnostic.video.VideoAccounting =
+            com.calisthenics.diagnostic.video.VideoAccounting(
+                accepted = accepted.size,
+                encoded = accepted.size,
+            )
+
+        override fun finish(): com.calisthenics.diagnostic.video.VideoWriterResult {
+            finishCount += 1
+            onFinish()
+            return com.calisthenics.diagnostic.video.VideoWriterResult(
+                accounting = accounting(),
+                submittedPtsUs = accepted.map { it.second / 1_000L },
+                muxedPtsUs = accepted.map { it.second / 1_000L },
+            )
+        }
+    }
+
     private class Harness(
         capability: CameraCapabilityObservation = admittedCapability,
         permissionGranted: Boolean = true,
@@ -1419,6 +1545,7 @@ class LiveCameraCompositionTest {
         blockDurableStageAppend: Boolean = false,
         durableStageAppendEntered: CountDownLatch = CountDownLatch(0),
         releaseDurableStageAppend: CountDownLatch = CountDownLatch(0),
+        val recordingVideoWriter: RecordingVideoWriter? = null,
     ) {
         val events = mutableListOf<String>()
         val inference = FakeInference(events)
@@ -1490,6 +1617,19 @@ class LiveCameraCompositionTest {
                     if (callbackBeforeRunnerReady) deliver(frame(timestampNs = 1_000_002_000L))
                 },
                 encoderFinalizationSlot = { events += "encoder.finalize" },
+                videoWriterFactory = recordingVideoWriter?.let { writer ->
+                    {
+                        events += "video.writer.open"
+                        // Delegate so the harness can observe finalization ordering against the
+                        // rest of the pre-seal fence.
+                        object : com.calisthenics.diagnostic.video.LiveVideoWriter by writer {
+                            override fun finish(): com.calisthenics.diagnostic.video.VideoWriterResult {
+                                events += "video.writer.finish"
+                                return writer.finish()
+                            }
+                        }
+                    }
+                },
                 sessionFinalizerFactory = { template, manifestAtFinalization, monotonicNowNs ->
                     finalizerFailure?.let { throw it }
                     finalizerCreated = true
