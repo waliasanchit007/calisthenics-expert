@@ -3,6 +3,7 @@ package com.calisthenics.diagnostic.study
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -41,7 +42,7 @@ class SynchronizationEvidenceTest {
     }
 
     @Test
-    fun aMidSequenceDriftIsBlockedEvenThoughTheEndpointsAgree() {
+    fun legacyExactProfileBlocksAnyMidSequenceVariationEvenThoughTheEndpointsAgree() {
         // The drift is strictly interior: the first and last samples both carry offset 0, so an
         // endpoint-only derivation would report a constant transform and admit this run. Only a
         // derivation over every sample can see it. A mutation to endpoint-only comparison must
@@ -65,6 +66,55 @@ class SynchronizationEvidenceTest {
         )
         assertNull(deriveSynchronizationOffsetNs(samples))
         assertContains(synchronizationBlockingReasons(evidence), SYNC_BLOCK_NON_CONSTANT_OFFSET)
+    }
+
+    @Test
+    fun boundedProfileAcceptsASubTickInteriorVariationDerivedFromItsTimebase() {
+        val timebase = SynchronizationTimebases(90_000L, 90_000L)
+        val subTickUs = (1_000_000L / timebase.videoTicksPerSecond) - 1L
+        val samples = listOf(
+            sample(0, 0L, 0L, demuxed = 0L),
+            sample(1, 33_333_000L, 33_333L, demuxed = 33_333L - subTickUs),
+            sample(2, 66_666_000L, 66_666L, demuxed = 66_666L),
+        )
+        val evidence = evidence(
+            samples = samples,
+            videoPtsUs = samples.map { it.demuxedPtsUs },
+            profile = SynchronizationProfile.BOUNDED_QUANTIZATION,
+            timebases = timebase,
+        )
+
+        assertEquals(emptyList(), synchronizationBlockingReasons(evidence))
+    }
+
+    @Test
+    fun boundedProfileBlocksTheFirstIntegralMicrosecondVariationAboveItsDerivedBound() {
+        val timebase = SynchronizationTimebases(90_000L, 90_000L)
+        val boundNs = assertNotNull(deriveQuantizationSpanBoundNs(timebase))
+        val overBoundUs = (boundNs / 1_000L) + 1L
+        val samples = listOf(
+            sample(0, 0L, 0L, demuxed = 0L),
+            sample(1, 33_333_000L, 33_333L, demuxed = 33_333L - overBoundUs),
+            sample(2, 66_666_000L, 66_666L, demuxed = 66_666L),
+        )
+        val evidence = evidence(
+            samples = samples,
+            videoPtsUs = samples.map { it.demuxedPtsUs },
+            profile = SynchronizationProfile.BOUNDED_QUANTIZATION,
+            timebases = timebase,
+        )
+
+        assertContains(synchronizationBlockingReasons(evidence), SYNC_BLOCK_NON_CONSTANT_OFFSET)
+    }
+
+    @Test
+    fun boundedProfileFailsClosedWithoutOnePositiveCommonTimebase() {
+        val evidence = evidence(
+            profile = SynchronizationProfile.BOUNDED_QUANTIZATION,
+            timebases = SynchronizationTimebases(90_000L, 1_000L),
+        )
+
+        assertContains(synchronizationBlockingReasons(evidence), SYNC_BLOCK_TIMEBASE_INVALID)
     }
 
     @Test
@@ -169,6 +219,33 @@ class SynchronizationEvidenceTest {
     }
 
     @Test
+    fun renderedBoundedEvidenceCarriesTheDerivedProfileTimebasesIntervalAndRepresentative() {
+        val samples = listOf(
+            sample(0, 1_000_000_000L, 1_000_000L, demuxed = 0L),
+            sample(1, 1_033_333_000L, 1_033_333L, demuxed = 33_332L),
+            sample(2, 1_066_666_000L, 1_066_666L, demuxed = 66_657L),
+        )
+        val json = renderSynchronizationEvidence(
+            evidence(
+                samples = samples,
+                videoPtsUs = samples.map { it.demuxedPtsUs },
+                profile = SynchronizationProfile.BOUNDED_QUANTIZATION,
+                timebases = SynchronizationTimebases(90_000L, 90_000L),
+            ),
+        )
+
+        assertContains(json, "\"synchronization_evidence_schema_version\":\"1.1.0\"")
+        assertContains(json, "\"sync_profile\":\"bounded_quantization\"")
+        assertContains(json, "\"mapping_method\":\"camera_capture_to_container_pts_bounded_quantization_v1\"")
+        assertContains(json, "\"video_ticks_per_second\":90000")
+        assertContains(json, "\"metadata_ticks_per_second\":90000")
+        assertContains(json, "\"minimum\":1000000000")
+        assertContains(json, "\"maximum\":1000009000")
+        assertContains(json, "\"container_offset_ns\":1000001000")
+        assertContains(json, "\"container_quantization_span_bound_ns\":24223")
+    }
+
+    @Test
     fun renderedEvidenceCarriesEverySampleNotJustTheEndpoints() {
         val json = renderSynchronizationEvidence(evidence())
 
@@ -247,6 +324,8 @@ class SynchronizationEvidenceTest {
             counts: SynchronizationCounts = defaultCounts(),
             codec: String = PROBE_CODEC,
             container: String = PROBE_CONTAINER,
+            profile: SynchronizationProfile = SynchronizationProfile.EXACT,
+            timebases: SynchronizationTimebases? = null,
         ) = SynchronizationEvidence(
             sessionId = "00000000-0000-4000-8000-000000000001",
             manifestSessionId = "00000000-0000-4000-8000-000000000001",
@@ -275,6 +354,8 @@ class SynchronizationEvidenceTest {
             deviceAbi = "arm64-v8a",
             probeContainer = PROBE_CONTAINER,
             probeCodec = PROBE_CODEC,
+            profile = profile,
+            timebases = timebases,
         )
     }
 }

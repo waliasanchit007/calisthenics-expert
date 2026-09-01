@@ -87,12 +87,12 @@
 - Produces: `TrackTimescales(videoTicksPerSecond, metadataTicksPerSecond)` from finalized MP4 `mdhd` boxes and bounded evidence derived from those values.
 - Consumes: finalized video descriptor/bytes and full demuxed sample pairs.
 
-- [ ] Add RED parser tests for version-0/version-1 `mdhd`, two equal tracks, truncation, missing track, zero, and inconsistent timescales.
-- [ ] Implement a bounded ISO BMFF box reader; it must not scan beyond declared file/box lengths.
-- [ ] Replace the literal 1 us mid-sequence drift test with derived sub-tick acceptance and derived over-bound rejection.
-- [ ] Add Kotlin bounded-profile derivation/rendering and keep legacy exact helpers available for v1.0 tests.
-- [ ] Wire finalized track timescales into the Task 4 evidence builder; fail before publication when unavailable or inconsistent.
-- [ ] Run focused JVM/Android tests and named mutations; commit.
+- [x] Add RED parser tests for version-0/version-1 `mdhd`, two equal tracks, truncation, missing track, zero, and inconsistent timescales.
+- [x] Implement a bounded ISO BMFF box reader; it must not scan beyond declared file/box lengths.
+- [x] Replace the literal 1 us mid-sequence drift test with derived sub-tick acceptance and derived over-bound rejection.
+- [x] Add Kotlin bounded-profile derivation/rendering and keep legacy exact helpers available for v1.0 tests.
+- [x] Wire finalized track timescales into the Task 4 evidence builder; fail before publication when unavailable or inconsistent.
+- [x] Run focused JVM/Android tests and named mutations; commit.
 
 ### Task 5: Add controlled S25 on-grid/off-grid probe
 

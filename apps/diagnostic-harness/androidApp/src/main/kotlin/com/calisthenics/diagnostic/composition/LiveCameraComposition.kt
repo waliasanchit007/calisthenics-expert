@@ -2,6 +2,7 @@ package com.calisthenics.diagnostic.composition
 
 import android.content.Context
 import android.os.Build
+import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import androidx.lifecycle.LifecycleOwner
 import com.calisthenics.diagnostic.android.BuildConfig
@@ -85,14 +86,18 @@ import com.calisthenics.diagnostic.study.M05InputClass
 import com.calisthenics.diagnostic.study.SynchronizationArtifacts
 import com.calisthenics.diagnostic.study.SynchronizationCounts
 import com.calisthenics.diagnostic.study.SynchronizationEvidence
+import com.calisthenics.diagnostic.study.SynchronizationProfile
 import com.calisthenics.diagnostic.study.SynchronizationSample
-import com.calisthenics.diagnostic.study.deriveSynchronizationOffsetNs
+import com.calisthenics.diagnostic.study.SynchronizationTimebases
+import com.calisthenics.diagnostic.study.deriveSynchronizationRepresentativeOffsetNs
 import com.calisthenics.diagnostic.study.deriveTotalDroppedBeforeEncoder
 import com.calisthenics.diagnostic.study.renderSynchronizationEvidence
 import com.calisthenics.diagnostic.study.synchronizationBlockingReasons
 import com.calisthenics.diagnostic.video.DemuxedVideoEvidence
 import com.calisthenics.diagnostic.video.LiveVideoWriter
 import com.calisthenics.diagnostic.video.MuxerDiagnostics
+import com.calisthenics.diagnostic.video.Mp4TrackTimescaleReader
+import com.calisthenics.diagnostic.video.TrackTimescales
 import com.calisthenics.diagnostic.video.VideoDemuxVerifier
 import com.calisthenics.diagnostic.video.VideoWriterResult
 import kotlinx.serialization.json.JsonElement
@@ -1685,6 +1690,7 @@ class LiveCameraComposition internal constructor(
             var demuxedVideo: DemuxedVideoEvidence? = null
             var finalizedVideoResult: VideoWriterResult? = null
             var finalizedEncoderName: String? = null
+            var finalizedTrackTimescales: TrackTimescales? = null
             var builtSynchronizationEvidence: SynchronizationEvidence? = null
             val clock = AndroidLiveClock()
             val thermalProbe = AndroidLiveThermalProbe.from(context)
@@ -1731,6 +1737,15 @@ class LiveCameraComposition internal constructor(
                                     sha256 = identity.sha256,
                                 )
                             }
+                            val timescales = storagePort.openVideoReadDescriptor(attempt).let { descriptor ->
+                                ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { input ->
+                                    val bytes = input.readBytes()
+                                    check(bytes.size.toLong() == identity.byteLength) {
+                                        "finalized container length changed while reading track timebases"
+                                    }
+                                    Mp4TrackTimescaleReader.read(bytes)
+                                }
+                            }
                             check(observed.videoPtsUs.size == observed.metadataPtsUs.size) {
                                 "video and metadata sample counts disagree"
                             }
@@ -1739,6 +1754,7 @@ class LiveCameraComposition internal constructor(
                             }
                             demuxedVideo = observed
                             finalizedVideoResult = result
+                            finalizedTrackTimescales = timescales
                             finalizedEncoderName = (writer as? MuxerDiagnostics)?.encoderName()
                                 ?: error("finalized writer does not report its encoder component")
                         }
@@ -1767,13 +1783,14 @@ class LiveCameraComposition internal constructor(
                             manifestAtFinalization = atFinalization,
                             observedVideoSynchronization = {
                                 builtSynchronizationEvidence?.let { evidence ->
-                                    val offset = deriveSynchronizationOffsetNs(evidence.samples)
+                                    val offset = deriveSynchronizationRepresentativeOffsetNs(evidence)
                                         ?: throw DurableReconciliationException(
-                                            "container timestamp transform is not one constant offset",
+                                            "container timestamp transform has no admitted representative offset",
                                         )
                                     ObservedVideoSynchronization(offsetNs = offset, driftNsPerS = 0.0)
                                 }
                             },
+                            synchronizationEvidenceSchemaVersion = SemanticVersion("1.1.0"),
                             synchronizationEvidenceBuilder = if (!recordVideo) {
                                 null
                             } else {
@@ -1789,6 +1806,10 @@ class LiveCameraComposition internal constructor(
                                     val encoderName = finalizedEncoderName
                                         ?: throw DurableReconciliationException(
                                             "encoder component identity is missing before seal",
+                                        )
+                                    val trackTimescales = finalizedTrackTimescales
+                                        ?: throw DurableReconciliationException(
+                                            "container track timescales are missing before seal",
                                         )
                                     if (observed.sha256 != build.video.sha256 ||
                                         observed.byteLength != build.video.byteLength
@@ -1855,6 +1876,11 @@ class LiveCameraComposition internal constructor(
                                         deviceAbi = Build.SUPPORTED_ABIS.firstOrNull().orEmpty(),
                                         probeContainer = TASK3_PROBE_CONTAINER,
                                         probeCodec = TASK3_PROBE_CODEC,
+                                        profile = SynchronizationProfile.BOUNDED_QUANTIZATION,
+                                        timebases = SynchronizationTimebases(
+                                            videoTicksPerSecond = trackTimescales.videoTicksPerSecond,
+                                            metadataTicksPerSecond = trackTimescales.metadataTicksPerSecond,
+                                        ),
                                     )
                                     val blocking = synchronizationBlockingReasons(evidence)
                                     if (blocking.isNotEmpty()) {

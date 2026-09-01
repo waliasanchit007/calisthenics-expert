@@ -4,6 +4,7 @@ import com.calisthenics.diagnostic.contract.ArtifactReference
 import com.calisthenics.diagnostic.contract.MediaReference
 import com.calisthenics.diagnostic.contract.Sha256
 import com.calisthenics.diagnostic.contract.SessionManifest
+import com.calisthenics.diagnostic.contract.SemanticVersion
 import com.calisthenics.diagnostic.contract.encodeManifest
 import com.calisthenics.diagnostic.purge.PurgeSessionId
 import com.calisthenics.diagnostic.purge.SessionAdmissionDecision
@@ -62,6 +63,7 @@ class SessionExporter(
     private val monotonicNowNs: () -> Long,
     private val manifestAtFinalization: (SessionManifest, SealedSessionSnapshot) -> SessionManifest = { manifest, _ -> manifest },
     private val observedVideoSynchronization: () -> ObservedVideoSynchronization? = { null },
+    private val synchronizationEvidenceSchemaVersion: SemanticVersion = manifestTemplate.schemaVersion,
     private val synchronizationEvidenceBuilder: ((SynchronizationEvidenceBuildContext) -> ByteArray)? = null,
     private val writer: DurableSessionWriter = DefaultDurableSessionWriter(
         storage = storage,
@@ -192,7 +194,7 @@ class SessionExporter(
                 ArtifactReference(
                     pathRef = SYNCHRONIZATION_EVIDENCE_PATH_REF,
                     sha256 = Sha256(it.reconciliation.sha256),
-                    schemaVersion = manifest.schemaVersion,
+                    schemaVersion = synchronizationEvidenceSchemaVersion,
                 )
             },
         )

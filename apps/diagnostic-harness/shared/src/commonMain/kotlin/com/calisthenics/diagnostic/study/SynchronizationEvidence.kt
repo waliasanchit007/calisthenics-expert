@@ -7,12 +7,16 @@ import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 
 const val SYNCHRONIZATION_EVIDENCE_SCHEMA_VERSION = "1.0.0"
+const val BOUNDED_SYNCHRONIZATION_EVIDENCE_SCHEMA_VERSION = "1.1.0"
 
 /**
- * The only admitted camera-capture-to-container mapping. Pinned by the released
- * `synchronization_evidence.v1` schema; the Python validator rejects anything else.
+ * The legacy exact camera-capture-to-container mapping. It remains immutable while the additive
+ * bounded profile covers finite-timescale container quantization.
  */
 const val SYNCHRONIZATION_MAPPING_METHOD = "camera_capture_to_container_pts_constant_offset_v1"
+const val BOUNDED_SYNCHRONIZATION_MAPPING_METHOD =
+    "camera_capture_to_container_pts_bounded_quantization_v1"
+const val BOUNDED_SYNCHRONIZATION_PROFILE = "bounded_quantization"
 
 const val SYNC_BLOCK_NO_SAMPLES = "synchronization_samples_empty"
 const val SYNC_BLOCK_NON_CONSTANT_OFFSET = "container_timestamp_transform_non_constant"
@@ -23,6 +27,24 @@ const val SYNC_BLOCK_COUNT_MISMATCH = "encoded_video_frames_not_equal_to_sample_
 const val SYNC_BLOCK_CALLBACK_ACCOUNTING = "video_callback_accounting_mismatch"
 const val SYNC_BLOCK_PROBE_CODEC_MISMATCH = "probe_codec_mismatch"
 const val SYNC_BLOCK_PROBE_CONTAINER_MISMATCH = "probe_container_mismatch"
+const val SYNC_BLOCK_TIMEBASE_INVALID = "container_track_timebase_invalid"
+
+enum class SynchronizationProfile {
+    EXACT,
+    BOUNDED_QUANTIZATION,
+}
+
+data class SynchronizationTimebases(
+    val videoTicksPerSecond: Long,
+    val metadataTicksPerSecond: Long,
+)
+
+data class BoundedSynchronizationOffset(
+    val representativeNs: Long,
+    val minimumNs: Long,
+    val maximumNs: Long,
+    val spanBoundNs: Long,
+)
 
 /** One (submitted, demuxed) pair for a single encoded frame. */
 data class SynchronizationSample(
@@ -76,6 +98,8 @@ data class SynchronizationEvidence(
     /** Container and codec recorded by the admitted Task 3 probe this run inherits. */
     val probeContainer: String,
     val probeCodec: String,
+    val profile: SynchronizationProfile = SynchronizationProfile.EXACT,
+    val timebases: SynchronizationTimebases? = null,
 )
 
 /**
@@ -95,6 +119,44 @@ fun deriveSynchronizationOffsetNs(samples: List<SynchronizationSample>): Long? {
     ) ?: return null
     return offsetUs * 1_000L
 }
+
+fun deriveQuantizationSpanBoundNs(timebases: SynchronizationTimebases): Long? {
+    val ticksPerSecond = timebases.videoTicksPerSecond
+    if (
+        ticksPerSecond <= 0L ||
+        timebases.metadataTicksPerSecond <= 0L ||
+        ticksPerSecond != timebases.metadataTicksPerSecond
+    ) {
+        return null
+    }
+    val numerator = 2_000_000_000L
+    val ceilTickPairNs = numerator / ticksPerSecond +
+        if (numerator % ticksPerSecond == 0L) 0L else 1L
+    return ceilTickPairNs + 2_000L
+}
+
+fun deriveBoundedSynchronizationOffset(
+    samples: List<SynchronizationSample>,
+    timebases: SynchronizationTimebases,
+): BoundedSynchronizationOffset? {
+    if (samples.isEmpty()) return null
+    val spanBoundNs = deriveQuantizationSpanBoundNs(timebases) ?: return null
+    val offsets = samples.map { (it.submittedPtsUs - it.demuxedPtsUs) * 1_000L }.sorted()
+    return BoundedSynchronizationOffset(
+        representativeNs = offsets[(offsets.size - 1) / 2],
+        minimumNs = offsets.first(),
+        maximumNs = offsets.last(),
+        spanBoundNs = spanBoundNs,
+    )
+}
+
+fun deriveSynchronizationRepresentativeOffsetNs(evidence: SynchronizationEvidence): Long? =
+    when (evidence.profile) {
+        SynchronizationProfile.EXACT -> deriveSynchronizationOffsetNs(evidence.samples)
+        SynchronizationProfile.BOUNDED_QUANTIZATION -> evidence.timebases?.let { timebases ->
+            deriveBoundedSynchronizationOffset(evidence.samples, timebases)?.representativeNs
+        }
+    }
 
 /** Include callbacks rejected before video-writer admission in the released drop identity. */
 fun deriveTotalDroppedBeforeEncoder(
@@ -124,8 +186,23 @@ fun synchronizationBlockingReasons(evidence: SynchronizationEvidence): List<Stri
         if (samples.map { it.submittedPtsUs }.distinct().size != samples.size) {
             add(SYNC_BLOCK_DUPLICATE_PTS)
         }
-        if (deriveSynchronizationOffsetNs(samples) == null) {
-            add(SYNC_BLOCK_NON_CONSTANT_OFFSET)
+        when (evidence.profile) {
+            SynchronizationProfile.EXACT -> {
+                if (deriveSynchronizationOffsetNs(samples) == null) {
+                    add(SYNC_BLOCK_NON_CONSTANT_OFFSET)
+                }
+            }
+
+            SynchronizationProfile.BOUNDED_QUANTIZATION -> {
+                val bounded = evidence.timebases?.let { timebases ->
+                    deriveBoundedSynchronizationOffset(samples, timebases)
+                }
+                if (bounded == null) {
+                    add(SYNC_BLOCK_TIMEBASE_INVALID)
+                } else if (bounded.maximumNs - bounded.minimumNs > bounded.spanBoundNs) {
+                    add(SYNC_BLOCK_NON_CONSTANT_OFFSET)
+                }
+            }
         }
         if (evidence.videoPtsUs != samples.map { it.demuxedPtsUs }) {
             add(SYNC_BLOCK_VIDEO_PTS_MISMATCH)
@@ -149,9 +226,21 @@ fun synchronizationBlockingReasons(evidence: SynchronizationEvidence): List<Stri
 
 fun renderSynchronizationEvidence(evidence: SynchronizationEvidence): String {
     val reasons = synchronizationBlockingReasons(evidence)
-    val offsetNs = deriveSynchronizationOffsetNs(evidence.samples)
+    val offsetNs = deriveSynchronizationRepresentativeOffsetNs(evidence)
+    val bounded = if (evidence.profile == SynchronizationProfile.BOUNDED_QUANTIZATION) {
+        evidence.timebases?.let { deriveBoundedSynchronizationOffset(evidence.samples, it) }
+    } else {
+        null
+    }
     return buildJsonObject {
-        put("synchronization_evidence_schema_version", SYNCHRONIZATION_EVIDENCE_SCHEMA_VERSION)
+        put(
+            "synchronization_evidence_schema_version",
+            when (evidence.profile) {
+                SynchronizationProfile.EXACT -> SYNCHRONIZATION_EVIDENCE_SCHEMA_VERSION
+                SynchronizationProfile.BOUNDED_QUANTIZATION ->
+                    BOUNDED_SYNCHRONIZATION_EVIDENCE_SCHEMA_VERSION
+            },
+        )
         put("session_id", evidence.sessionId)
         put("manifest_session_id", evidence.manifestSessionId)
         put("video_role", evidence.artifacts.videoRole)
@@ -164,9 +253,30 @@ fun renderSynchronizationEvidence(evidence: SynchronizationEvidence): String {
         put("codec", evidence.codec)
         put("camera_timestamp_domain", evidence.cameraTimestampDomain)
         put("encoder_timestamp_domain", evidence.encoderTimestampDomain)
-        put("mapping_method", SYNCHRONIZATION_MAPPING_METHOD)
+        if (evidence.profile == SynchronizationProfile.BOUNDED_QUANTIZATION) {
+            put("sync_profile", BOUNDED_SYNCHRONIZATION_PROFILE)
+        }
+        put(
+            "mapping_method",
+            when (evidence.profile) {
+                SynchronizationProfile.EXACT -> SYNCHRONIZATION_MAPPING_METHOD
+                SynchronizationProfile.BOUNDED_QUANTIZATION ->
+                    BOUNDED_SYNCHRONIZATION_MAPPING_METHOD
+            },
+        )
         put("container_offset_ns", offsetNs)
         put("container_drift_ns_per_s", 0)
+        if (bounded != null && evidence.timebases != null) {
+            putJsonObject("container_timebases") {
+                put("video_ticks_per_second", evidence.timebases.videoTicksPerSecond)
+                put("metadata_ticks_per_second", evidence.timebases.metadataTicksPerSecond)
+            }
+            putJsonObject("container_offset_interval_ns") {
+                put("minimum", bounded.minimumNs)
+                put("maximum", bounded.maximumNs)
+            }
+            put("container_quantization_span_bound_ns", bounded.spanBoundNs)
+        }
         putJsonArray("video_pts_us") { evidence.videoPtsUs.forEach { add(it) } }
         putJsonArray("samples") {
             evidence.samples.forEach { sample ->

@@ -370,6 +370,7 @@ class SessionExporterTest {
             manifestTemplate = manifest(),
             monotonicNowNs = { 0L },
             observedVideoSynchronization = { ObservedVideoSynchronization(offsetNs = 0L, driftNsPerS = 0.0) },
+            synchronizationEvidenceSchemaVersion = SemanticVersion("1.1.0"),
             synchronizationEvidenceBuilder = { context ->
                 received = context
                 "{}".encodeToByteArray()
@@ -400,6 +401,7 @@ class SessionExporterTest {
             "the exporter must use the released session-video role",
         )
         assertFalse(manifest.mediaReferences.any { it.role == "synchronized_video" })
+        assertEquals(SemanticVersion("1.1.0"), manifest.synchronizationEvidence?.schemaVersion)
         val firstVideoRead = storage.operations.indexOf("reconcileArtifact:VIDEO")
         val videoFsync = storage.operations.lastIndexOf("fsyncArtifact:VIDEO")
         val finalVideoRead = storage.operations.lastIndexOf("reconcileArtifact:VIDEO")
