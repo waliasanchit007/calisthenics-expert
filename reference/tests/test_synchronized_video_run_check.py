@@ -97,13 +97,16 @@ def test_a_container_other_than_the_probe_container_is_blocked(tmp_path: Path) -
     assert "probe_container_mismatch" in checker.check_record(record, probe, probe_path)
 
 
-def test_a_record_bound_to_a_different_probe_digest_is_blocked(tmp_path: Path) -> None:
+def test_the_host_binds_the_probe_digest_rather_than_trusting_the_device(tmp_path: Path) -> None:
     probe_path = _write_probe(tmp_path)
     probe = checker.load_probe(probe_path)
     record = _record(probe_path)
+    # The device cannot know the digest of a repository file, so a device-reported value is never
+    # the binding. A wrong one must not be able to block or to pass.
     record["provenance"]["probe_sha256"] = "c" * 64
 
-    assert "probe_digest_mismatch" in checker.check_record(record, probe, probe_path)
+    assert checker.check_record(record, probe, probe_path) == []
+    assert checker.probe_digest(probe_path) != "c" * 64
 
 
 def test_an_unauthorized_device_is_blocked(tmp_path: Path) -> None:
