@@ -111,7 +111,7 @@ def test_schema_is_registered_and_valid_record_is_admitted() -> None:
     assert sustained.validate_sustained_record(record) == []
 
 
-def test_sustained_semantic_codes_await_task3_4_registry_integration() -> None:
+def test_sustained_semantic_codes_await_task8_registry_stabilization() -> None:
     registry = json.loads(
         (ROOT / "contracts/tooling/validator_error_codes.v1.json").read_text(encoding="utf-8")
     )
@@ -153,8 +153,12 @@ def test_sustained_semantic_codes_await_task3_4_registry_integration() -> None:
         "BLOCKING_CODES.MISMATCH",
     }
     # Task 3 completed its coordinated 1.3.0 contract/error-code release after its
-    # physical precondition. Task 4 has not released yet, so Task 8 must still not
-    # preempt the remaining registry integration from WIP.
+    # physical precondition. Task 8 owns the sustained-code release and performs it
+    # at its registry stabilization checkpoint (plan Task 8 Step 4), not Task 4.
+    # Until then these codes stay draft. When they are released, replace this
+    # disjointness guard with the complete subset requirement
+    # draft_task8_codes <= released -- never 'not ...isdisjoint(...)', which passes
+    # when only one of the 34 codes is released.
     assert registry["registry_version"] == "1.3.0"
     assert draft_task8_codes.isdisjoint(released)
 

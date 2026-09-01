@@ -2,7 +2,8 @@
 
 This module deliberately validates only the draft sustained record. It does not
 manufacture or accept a SessionManifest, and its semantic codes remain draft
-until Task 3/4 performs the coordinated contract/error-code release.
+until Task 8's registry stabilization checkpoint performs the coordinated
+contract/error-code release. Task 8 owns sustained semantics; Task 4 does not.
 """
 
 from __future__ import annotations

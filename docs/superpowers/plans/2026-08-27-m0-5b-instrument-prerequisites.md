@@ -273,6 +273,11 @@ git commit -m "feat: release synchronized session contracts"
 
 ### Task 4: Android in-app video and atomic multi-artifact publication
 
+**Registry ownership:** Task 4 does not release sustained error codes and does not advance the
+validator error-code registry. SessionManifest remains 1.2.0, and the synchronized `SESSION.*` failures
+already released in registry 1.3.0 remain authoritative. Task 8 owns sustained semantics and their
+release; see Task 8 Step 4.
+
 **Files:**
 - Create: `apps/diagnostic-harness/androidApp/src/main/kotlin/com/calisthenics/diagnostic/video/LiveVideoWriter.kt`
 - Create: `apps/diagnostic-harness/androidApp/src/main/kotlin/com/calisthenics/diagnostic/video/MediaCodecVideoWriter.kt`
@@ -440,16 +445,40 @@ ledger are required before any sustained device run.
   derivation, fixed latency histogram protocol, and telemetry gap/end coverage.**
 - [ ] **Step 2: Implement the sustained controller and typed evidence renderer**
 - [ ] **Step 3: Mutation-check 1,500 seconds, one-second overshoot, video false, camera 30, envelope/order identity, and all stage equations**
-- [ ] **Step 4: After the Task 6 short attribution gate and Task 7 envelope/order are recorded on the
+- [ ] **Step 4: Registry stabilization checkpoint — stabilize the emitted-code contract before any
+  physical run.** Task 8 owns sustained semantics and owns this release; Task 4 does not. Run this only
+  after Steps 1-3 are complete, so that no code name is frozen while its semantics can still change
+  (`errors.py`: released codes are never renamed or reused for a different condition). Required:
+  - classify every currently unregistered dotted code emitted from `reference/src/observation_contracts`
+    by reachability. Roughly 110 such codes exist today; the audit covers all of them, not only the 34
+    associated with Task 8;
+  - a code reachable from an admitted validator must be registered and covered by a negative fixture or
+    an equivalent behavioral oracle;
+  - a code reachable only from guarded WIP remains explicitly draft and unreleased;
+  - declare explicit stable and draft emitted-code sets used by validator issue construction, fully
+    enumerating any dynamically generated code;
+  - add an emission-side coverage check so validator output cannot silently drift from the registry.
+    Negative fixtures are currently the only enforcement, which is precisely how this gap opened; a
+    fixture-side check alone will let it reopen;
+  - add a repository test asserting that every stable emitted code is present in the released registry
+    and that every guarded draft set remains unreleased;
+  - release the finalized sustained set as registry `1.4.0` with changelog, compatibility evidence,
+    mutation evidence, and the review requirements in `contracts/schema-release-process.md`;
+  - replace the temporary disjointness guard in `reference/tests/test_m05b_sustained.py` with the
+    complete subset requirement `draft_task8_codes <= released_codes`. Never weaken it to
+    `not draft_task8_codes.isdisjoint(released_codes)`, which passes when only one of the 34 codes is
+    released.
+
+- [ ] **Step 5: After the Task 6 short attribution gate and Task 7 envelope/order are recorded on the
   exact final app build, execute exactly one 25-minute run per 10/15/30 cadence in pre-registered
   order on the authorized unplugged S25 over Wi-Fi ADB. Do not rebuild between those physical gates
   and the sustained runs.**
-- [ ] **Step 5: Record every result honestly; a blocked observation remains blocking and is never
+- [ ] **Step 6: Record every result honestly; a blocked observation remains blocking and is never
   overwritten by a rerun. Never run `pm clear` between runs. Recover and rehash each committed durable
   session artifact before the next cadence; the durable artifact is authoritative over the transcript.
   A transport-lost but durably committed session awaits recovery and cannot be rerun. Only a proven
   `ABORTED` or `FAILED` attempt permits another same-cadence attempt, as a new hash-chained entry.**
-- [ ] **Step 6: Run validators and commit `feat: record S25 sustained instrument evidence`**
+- [ ] **Step 7: Run validators and commit `feat: record S25 sustained instrument evidence`**
 
 ---
 
