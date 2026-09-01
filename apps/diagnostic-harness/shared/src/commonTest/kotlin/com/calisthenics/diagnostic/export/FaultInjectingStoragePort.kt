@@ -48,6 +48,9 @@ class FaultInjectingStoragePort(
         return delegate.reconcile(attempt)
     }
 
+    /** The manifest written through this port, for assertions about what the export claims. */
+    fun writtenManifest(): String = (delegate as FakeStorage).writtenManifest()
+
     override fun writeManifest(attempt: StagingAttempt, encodedManifest: String) {
         before("writeManifest")
         delegate.writeManifest(attempt, encodedManifest)

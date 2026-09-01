@@ -216,6 +216,10 @@ class AndroidStoragePort(override val roots: StorageRoots) : StoragePort {
         if (artifact == DurableArtifact.RUN_ADMISSION) {
             return Files.newInputStream(path).use { reconcileRunAdmissionBytes(it.readBytes()) }
         }
+        if (artifact == DurableArtifact.SYNCHRONIZATION_EVIDENCE) {
+            // One JSON document, not a line-delimited stream.
+            return reconcileOpaqueBytes(path)
+        }
         if (artifact == DurableArtifact.VIDEO) {
             // A container is opaque bytes written by the platform muxer. Reading it as NDJSON, as
             // the append-only streams below are read, would either fail or silently mis-count.
@@ -331,6 +335,7 @@ class AndroidStoragePort(override val roots: StorageRoots) : StoragePort {
             DurableArtifact.TELEMETRY -> TELEMETRY_FILE_NAME
             DurableArtifact.RUN_ADMISSION -> RUN_ADMISSION_FILE_NAME
             DurableArtifact.VIDEO -> VIDEO_FILE_NAME
+            DurableArtifact.SYNCHRONIZATION_EVIDENCE -> SYNCHRONIZATION_EVIDENCE_FILE_NAME
         })
 
     private fun checkpointPath(attempt: StagingAttempt): Path = Paths.get(attempt.path, CHECKPOINT_FILE_NAME)
@@ -378,6 +383,7 @@ class AndroidStoragePort(override val roots: StorageRoots) : StoragePort {
         const val FRAMES_FILE_NAME = "frames.ndjson"
         const val TELEMETRY_FILE_NAME = "telemetry.ndjson"
         const val VIDEO_FILE_NAME = "video.mp4"
+        const val SYNCHRONIZATION_EVIDENCE_FILE_NAME = "synchronization-evidence.json"
         const val RUN_ADMISSION_FILE_NAME = "run-admission.json"
         const val CHECKPOINT_FILE_NAME = "checkpoint"
         const val MANIFEST_FILE_NAME = "manifest.json"

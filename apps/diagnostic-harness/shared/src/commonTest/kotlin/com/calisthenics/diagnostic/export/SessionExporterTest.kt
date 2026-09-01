@@ -320,6 +320,25 @@ class SessionExporterTest {
     }
 
     @Test
+    fun aPoseOnlyRunClaimsNoMediaAndNoSynchronization() {
+        val storage = FaultInjectingStoragePort(FakeStorage())
+
+        assertIs<FinalizationResult.Published>(
+            export(storage, snapshot(listOf(frame(posePresent = true))), listOf(frame(posePresent = true))),
+        )
+
+        // A session that recorded no video must not describe media it does not have beside it.
+        val manifest = decodeManifest(storage.writtenManifest())
+        assertEquals(
+            emptyList(),
+            manifest.mediaReferences.filter { it.role == "synchronized_video" },
+            "a pose-only run must not describe a video it does not have beside it",
+        )
+        assertEquals(null, manifest.synchronizationEvidence)
+        assertEquals(null, manifest.mediaRequired)
+    }
+
+    @Test
     fun fixedCommitOrderIsObservable() {
         val storage = FaultInjectingStoragePort(FakeStorage())
 

@@ -348,6 +348,8 @@ private class FileStorage(
         // The synthetic export is pose-only and deterministic; it records no video. The path is
         // still named so the artifact set stays total rather than relying on an else branch.
         DurableArtifact.VIDEO -> fileAttempt(attempt).framesPath.resolveSibling("video.mp4")
+        DurableArtifact.SYNCHRONIZATION_EVIDENCE ->
+            fileAttempt(attempt).framesPath.resolveSibling("synchronization-evidence.json")
     }
 }
 

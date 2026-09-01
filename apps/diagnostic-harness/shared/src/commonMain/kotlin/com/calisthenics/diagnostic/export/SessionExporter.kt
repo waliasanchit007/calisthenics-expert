@@ -1,5 +1,8 @@
 package com.calisthenics.diagnostic.export
 
+import com.calisthenics.diagnostic.contract.ArtifactReference
+import com.calisthenics.diagnostic.contract.MediaReference
+import com.calisthenics.diagnostic.contract.Sha256
 import com.calisthenics.diagnostic.contract.SessionManifest
 import com.calisthenics.diagnostic.contract.encodeManifest
 import com.calisthenics.diagnostic.purge.PurgeSessionId
@@ -26,11 +29,29 @@ fun interface DeferredSessionAbort {
 }
 
 /** Publishes one sealed session using the fixed crash-consistent commit sequence. */
+/**
+ * The container transform this session observed, measured after the muxer finalized.
+ *
+ * The digest of the container is known to the exporter at seal; the offset and drift are known
+ * only by reading the finished container back. Both halves have to meet before the manifest can
+ * describe the media, which is why this is supplied rather than derived here.
+ */
+data class ObservedVideoSynchronization(
+    val offsetNs: Long,
+    val driftNsPerS: Double,
+)
+
+private const val SYNCHRONIZED_VIDEO_ROLE = "synchronized_video"
+private const val VIDEO_PATH_REF = "video.mp4"
+private const val POSE_STREAM_PATH_REF = "frames.ndjson"
+private const val SYNCHRONIZATION_EVIDENCE_PATH_REF = "synchronization-evidence.json"
+
 class SessionExporter(
     private val storage: StoragePort,
     private val manifestTemplate: SessionManifest,
     private val monotonicNowNs: () -> Long,
     private val manifestAtFinalization: (SessionManifest, SealedSessionSnapshot) -> SessionManifest = { manifest, _ -> manifest },
+    private val observedVideoSynchronization: () -> ObservedVideoSynchronization? = { null },
     private val writer: DurableSessionWriter = DefaultDurableSessionWriter(
         storage = storage,
         sessionId = manifestTemplate.sessionId,
@@ -57,6 +78,11 @@ class SessionExporter(
     /** The staging attempt this session is writing into, for platform sinks that own a file. */
     val openStagingAttempt: StagingAttempt?
         get() = writer.openStagingAttempt
+
+    /** Write this session's synchronization evidence into its own attempt. */
+    fun appendSynchronizationEvidence(exactBytes: ByteArray) {
+        writer.appendSynchronizationEvidence(exactBytes)
+    }
 
     override fun appendPose(record: com.calisthenics.diagnostic.contract.RawPoseFrame) {
         writer.appendPose(record)
@@ -115,6 +141,48 @@ class SessionExporter(
         }
     }
 
+    /**
+     * Describe the artifacts that actually sealed, by the digests reconciliation produced.
+     *
+     * The manifest can only claim media that is in the attempt beside it: every reference here is
+     * built from a sealed artifact, never from an intention. A session that recorded no video
+     * keeps an empty media list and states nothing about synchronization.
+     */
+    private fun bindSealedArtifacts(
+        manifest: SessionManifest,
+        sealed: SealedArtifacts,
+    ): SessionManifest {
+        val video = sealed.artifacts.firstOrNull { it.artifact == DurableArtifact.VIDEO } ?: return manifest
+        val evidence = sealed.artifacts.firstOrNull {
+            it.artifact == DurableArtifact.SYNCHRONIZATION_EVIDENCE
+        }
+        val synchronization = observedVideoSynchronization()
+        val pose = sealed.artifacts.single { it.artifact == DurableArtifact.POSE_STREAM }
+        return manifest.copy(
+            mediaRequired = true,
+            mediaReferences = manifest.mediaReferences + MediaReference(
+                role = SYNCHRONIZED_VIDEO_ROLE,
+                pathRef = VIDEO_PATH_REF,
+                sha256 = Sha256(video.reconciliation.sha256),
+                // The released contract requires offset and drift together or not at all.
+                syncOffsetNs = synchronization?.offsetNs,
+                syncDriftNsPerS = synchronization?.driftNsPerS,
+            ),
+            rawPoseStream = ArtifactReference(
+                pathRef = POSE_STREAM_PATH_REF,
+                sha256 = Sha256(pose.reconciliation.sha256),
+                schemaVersion = manifest.schemaVersion,
+            ),
+            synchronizationEvidence = evidence?.let {
+                ArtifactReference(
+                    pathRef = SYNCHRONIZATION_EVIDENCE_PATH_REF,
+                    sha256 = Sha256(it.reconciliation.sha256),
+                    schemaVersion = manifest.schemaVersion,
+                )
+            },
+        )
+    }
+
     override fun finalize(snapshot: SealedSessionSnapshot): FinalizationResult {
         finalizationResult?.let { return it }
         startRefusalCode?.let { code ->
@@ -144,12 +212,15 @@ class SessionExporter(
                 throw StreamReconciliationMismatch
             }
 
-            val manifest = manifestAtFinalization(
-                manifestTemplate.copy(
-                    counts = snapshot.counts,
-                    machineInferenceFailures = snapshot.failures,
+            val manifest = bindSealedArtifacts(
+                manifestAtFinalization(
+                    manifestTemplate.copy(
+                        counts = snapshot.counts,
+                        machineInferenceFailures = snapshot.failures,
+                    ),
+                    snapshot,
                 ),
-                snapshot,
+                sealedArtifacts,
             )
             storage.writeManifest(attempt, encodeManifest(manifest))
             storage.fsyncFile(attempt, StorageFile.MANIFEST)

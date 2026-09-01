@@ -84,6 +84,14 @@ enum class DurableArtifact {
     RUN_ADMISSION,
 
     /**
+     * The synchronization evidence binding this session's video to its pose stream.
+     *
+     * It is written into the attempt and commits with the session, so a published export can never
+     * describe a synchronization that is not beside it.
+     */
+    SYNCHRONIZATION_EVIDENCE,
+
+    /**
      * The synchronized video container for this session.
      *
      * Unlike the append-only streams, the platform muxer owns this file and writes it itself, so

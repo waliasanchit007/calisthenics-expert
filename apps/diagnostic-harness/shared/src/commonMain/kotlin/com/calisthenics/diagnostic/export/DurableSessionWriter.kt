@@ -32,6 +32,9 @@ interface DurableSessionWriter {
     fun appendPose(record: RawPoseFrame)
     fun appendTelemetry(encodedRecord: String)
     fun appendAdmissionArtifact(exactBytes: ByteArray)
+
+    /** Write this session's synchronization evidence into the attempt, exactly once. */
+    fun appendSynchronizationEvidence(exactBytes: ByteArray)
     fun seal(finalAggregates: FinalSessionAggregates): SealedArtifacts
     fun abort(reason: String, counts: Counts)
 }
@@ -67,6 +70,7 @@ class DefaultDurableSessionWriter(
     private var durableTelemetryCount = 0L
     private var lastDurableTelemetrySequence = -1L
     private var admissionWritten = false
+    private var synchronizationWritten = false
 
     override fun open() = serialized {
         requireState(DurableWriterState.NEW)
@@ -126,6 +130,22 @@ class DefaultDurableSessionWriter(
         }
     }
 
+    override fun appendSynchronizationEvidence(exactBytes: ByteArray) = serialized {
+        requireState(DurableWriterState.OPEN)
+        check(!synchronizationWritten) { "synchronization evidence was already written for this attempt" }
+        require(exactBytes.isNotEmpty()) { "synchronization evidence bytes must not be empty" }
+        val currentAttempt = requireNotNull(attempt)
+        try {
+            storage.appendArtifact(currentAttempt, DurableArtifact.SYNCHRONIZATION_EVIDENCE, exactBytes)
+            storage.flushArtifact(currentAttempt, DurableArtifact.SYNCHRONIZATION_EVIDENCE)
+            storage.fsyncArtifact(currentAttempt, DurableArtifact.SYNCHRONIZATION_EVIDENCE)
+            synchronizationWritten = true
+        } catch (error: Throwable) {
+            mutableState = DurableWriterState.FAILED
+            throw storageFailure("appendSynchronizationEvidence", error)
+        }
+    }
+
     override fun appendAdmissionArtifact(exactBytes: ByteArray) = serialized {
         requireState(DurableWriterState.OPEN)
         check(!admissionWritten) { "run admission was already written for this attempt" }
@@ -169,6 +189,14 @@ class DefaultDurableSessionWriter(
                 // muxed into this attempt it is here, and if the run recorded no video the
                 // reconciliation is an empty artifact. The muxer is finalized before the pre-seal
                 // fence continues, so nothing can still be writing when this reads it.
+                if (synchronizationWritten) {
+                    add(
+                        SealedArtifact(
+                            DurableArtifact.SYNCHRONIZATION_EVIDENCE,
+                            storage.reconcileArtifact(currentAttempt, DurableArtifact.SYNCHRONIZATION_EVIDENCE),
+                        ),
+                    )
+                }
                 val video = storage.reconcileArtifact(currentAttempt, DurableArtifact.VIDEO)
                 if (video.byteLength > 0L) add(SealedArtifact(DurableArtifact.VIDEO, video))
             }

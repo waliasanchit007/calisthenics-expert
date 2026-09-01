@@ -115,6 +115,15 @@ class FakeStorage(
     override fun reconcileArtifact(attempt: StagingAttempt, artifact: DurableArtifact): ArtifactReconciliation {
         val bytes = fakeAttempt(attempt).artifactBytes[artifact] ?: ByteArray(0)
         if (artifact == DurableArtifact.RUN_ADMISSION) return reconcileRunAdmissionBytes(bytes)
+        if (artifact == DurableArtifact.SYNCHRONIZATION_EVIDENCE) {
+            // One JSON document, not a line-delimited stream.
+            return ArtifactReconciliation(
+                byteLength = bytes.size.toLong(),
+                sha256 = Sha256Digest.hex(bytes),
+                recordCount = 0L,
+                posePresentCount = null,
+            )
+        }
         if (artifact == DurableArtifact.VIDEO) {
             // A container is opaque bytes; its sample count comes from the synchronization
             // evidence, never from parsing the payload as lines.
@@ -134,6 +143,8 @@ class FakeStorage(
                 DurableArtifact.TELEMETRY -> reconcileTelemetry(bytes)
                 DurableArtifact.RUN_ADMISSION -> error("run admission reconciliation returned above")
                 DurableArtifact.VIDEO -> error("video reconciliation returned above")
+                DurableArtifact.SYNCHRONIZATION_EVIDENCE ->
+                    error("synchronization evidence reconciliation returned above")
             },
             posePresentCount = if (artifact == DurableArtifact.POSE_STREAM) {
                 lines.count { decodeFrame("$it\n").posePresent }.toLong()
@@ -142,6 +153,9 @@ class FakeStorage(
             },
         )
     }
+
+    /** The manifest this session wrote, for assertions about what the export claims. */
+    fun writtenManifest(): String = attempts.mapNotNull { it.manifest }.single()
 
     private fun fakeAttempt(attempt: StagingAttempt): FakeStagingAttempt = attempts.single { it.path == attempt.path }
 
