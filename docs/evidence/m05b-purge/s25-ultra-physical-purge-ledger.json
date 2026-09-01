@@ -1,0 +1,7 @@
+{
+  "evidence_file": null,
+  "evidence_sha256": null,
+  "reason": "physical_purge_rehearsal_not_recorded",
+  "required_device": "samsung_galaxy_s25_ultra",
+  "status": "pending"
+}

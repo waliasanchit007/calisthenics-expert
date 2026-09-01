@@ -8,7 +8,7 @@ CLI := $(VENV_PYTHON) -m observation_contracts
 M05B_CANDIDATE_IDENTITY_FILE ?= .m05b-envelope-candidate.env
 M05B_ATTRIBUTION_IDENTITY_FILE ?= .m05b-attribution-candidate.json
 
-.PHONY: bootstrap verify verify-study-readiness verify-harness-jvm verify-harness-ios verify-harness-foundation verify-kotlin-export verify-harness-android-export-parity verify-harness-detection-replay verify-harness-s25-process-kill verify-harness-replay-export verify-harness-s25-five-run-replay verify-harness-s25-camera-probe verify-harness-s25-container-timestamp-probe verify-harness-s25-synchronized-video verify-harness-s25-storage-exclusion prepare-harness-s25-m05b-envelope-candidate verify-harness-s25-m05b-envelope verify-harness-s25-m05b-attribution verify-harness-s25-live-capture fetch-model-asset prepare-harness-gradle-dependencies
+.PHONY: bootstrap verify verify-study-readiness verify-harness-jvm verify-harness-ios verify-harness-foundation verify-kotlin-export verify-harness-android-export-parity verify-harness-detection-replay verify-harness-s25-process-kill verify-harness-replay-export verify-harness-s25-five-run-replay verify-harness-s25-camera-probe verify-harness-s25-container-timestamp-probe verify-harness-s25-synchronized-video verify-harness-s25-storage-exclusion prepare-harness-s25-m05b-envelope-candidate verify-harness-s25-m05b-envelope verify-harness-s25-m05b-attribution verify-harness-s25-m05b-physical-purge verify-harness-s25-live-capture fetch-model-asset prepare-harness-gradle-dependencies
 
 bootstrap:
 	@command -v "$(PYTHON)" >/dev/null 2>&1 || { echo "error: Python interpreter '$(PYTHON)' was not found" >&2; exit 1; }
@@ -674,6 +674,53 @@ verify-harness-s25-synchronized-video:
 	fi; \
 	$(VENV_PYTHON) tools/check_synchronized_video_run.py "$$transcript" \
 		--probe docs/evidence/device-probes/s25-ultra-SM-S938B-api36-container-timestamp-controlled.json --pull
+# Task 5b's complete video-enabled synthetic purge rehearsal. The device performs only the
+# registry-bound transaction. A separate host checker independently scans every purge root and
+# validates the durable tombstone; this target never edits the evidence ledger.
+verify-harness-s25-m05b-physical-purge:
+	@set -eu; \
+	device_count=$$(adb devices -l | tail -n +2 | awk '$$2=="device"' | wc -l | tr -d ' '); \
+	if [ "$$device_count" -ne 1 ]; then echo "error: verify-harness-s25-m05b-physical-purge requires exactly one authorized attached device, found $$device_count" >&2; exit 1; fi; \
+	serial=$$(adb devices -l | tail -n +2 | awk '$$2=="device" {print $$1}'); \
+	case "$$serial" in emulator-*) echo "error: attached target '$$serial' is an emulator" >&2; exit 1 ;; esac; \
+	manufacturer=$$(adb -s "$$serial" shell getprop ro.product.manufacturer | tr -d '\r'); \
+	manufacturer_lower=$$(printf '%s' "$$manufacturer" | tr '[:upper:]' '[:lower:]'); \
+	marketing_name=$$(adb -s "$$serial" shell getprop ro.config.marketing_name | tr -d '\r'); \
+	model=$$(adb -s "$$serial" shell getprop ro.product.model | tr -d '\r'); \
+	model_upper=$$(printf '%s' "$$model" | tr '[:lower:]' '[:upper:]'); \
+	if [ "$$manufacturer_lower" != "samsung" ]; then echo "error: attached target is not Samsung" >&2; exit 1; fi; \
+	authorized=0; case "$$model_upper" in SM-S938*) authorized=1 ;; esac; case "$$marketing_name" in *"S25 Ultra"*) authorized=1 ;; esac; \
+	if [ "$$authorized" -ne 1 ]; then echo "error: attached target is not the authorized S25 Ultra" >&2; exit 1; fi; \
+	if [ -n "$$(git status --porcelain --untracked-files=normal)" ]; then echo "error: source must be clean before preparing the physical-purge candidate" >&2; exit 1; fi; \
+	if [ ! -f apps/diagnostic-harness/local.properties ]; then echo "error: checkout-local apps/diagnostic-harness/local.properties is required" >&2; exit 1; fi; \
+	$(MAKE) fetch-model-asset; \
+	(cd apps/diagnostic-harness && ./gradlew --no-daemon :androidApp:assembleDebug :androidApp:assembleDebugAndroidTest); \
+	app_apk=apps/diagnostic-harness/androidApp/build/outputs/apk/debug/androidApp-debug.apk; \
+	test_apk=apps/diagnostic-harness/androidApp/build/outputs/apk/androidTest/debug/androidApp-debug-androidTest.apk; \
+	expected_app_sha256=$$(shasum -a 256 "$$app_apk" | awk '{print $$1}'); \
+	expected_test_sha256=$$(shasum -a 256 "$$test_apk" | awk '{print $$1}'); \
+	adb -s "$$serial" install -r "$$app_apk"; adb -s "$$serial" install -r "$$test_apk"; \
+	app_remote_apk=$$(adb -s "$$serial" shell pm path com.calisthenics.diagnostic.android | tr -d '\r' | sed -n 's/^package://p' | head -n 1); \
+	test_remote_apk=$$(adb -s "$$serial" shell pm path com.calisthenics.diagnostic.android.test | tr -d '\r' | sed -n 's/^package://p' | head -n 1); \
+	if [ -z "$$app_remote_apk" ] || [ -z "$$test_remote_apk" ]; then echo "error: exact physical-purge candidate is not installed" >&2; exit 1; fi; \
+	candidate_tmp=$$(mktemp -d); transcript=$$(mktemp); \
+	trap 'rm -f "$$candidate_tmp/app.apk" "$$candidate_tmp/test.apk" "$$transcript"; rmdir "$$candidate_tmp" 2>/dev/null || true' EXIT INT TERM; \
+	adb -s "$$serial" exec-out cat "$$app_remote_apk" > "$$candidate_tmp/app.apk"; \
+	adb -s "$$serial" exec-out cat "$$test_remote_apk" > "$$candidate_tmp/test.apk"; \
+	actual_app_sha256=$$(shasum -a 256 "$$candidate_tmp/app.apk" | awk '{print $$1}'); \
+	actual_test_sha256=$$(shasum -a 256 "$$candidate_tmp/test.apk" | awk '{print $$1}'); \
+	if [ "$$actual_app_sha256" != "$$expected_app_sha256" ]; then echo "error: installed app APK differs from built candidate" >&2; exit 1; fi; \
+	if [ "$$actual_test_sha256" != "$$expected_test_sha256" ]; then echo "error: installed test APK differs from built candidate" >&2; exit 1; fi; \
+	printf 'physical purge candidate: git_sha=%s app_sha256=%s test_sha256=%s\n' "$$(git rev-parse HEAD)" "$$expected_app_sha256" "$$expected_test_sha256"; \
+	set +e; adb -s "$$serial" shell am instrument -w -r \
+		-e app_apk_sha256 "$$expected_app_sha256" -e test_apk_sha256 "$$expected_test_sha256" \
+		-e class com.calisthenics.diagnostic.purge.PhysicalPurgeDeviceGateTest \
+		com.calisthenics.diagnostic.android.test/androidx.test.runner.AndroidJUnitRunner >"$$transcript" 2>&1; instrument_status=$$?; set -e; \
+	cat "$$transcript"; \
+	$(VENV_PYTHON) tools/check_m05b_physical_purge.py --serial "$$serial" \
+		--package com.calisthenics.diagnostic.android --transcript "$$transcript" \
+		--subprocess-exit-code "$$instrument_status" --app-apk-sha256 "$$expected_app_sha256" \
+		--test-apk-sha256 "$$expected_test_sha256"
 
 # Task 5's bounded physical live-capture evidence gate. The device test emits one typed record;
 # the host checker pulls and validates the exact export before deriving the final verdict. This

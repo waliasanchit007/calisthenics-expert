@@ -274,6 +274,49 @@ def verify_instrumented_run(
     return record, sorted(set(reasons))
 
 
+def verify_recorded_ledger(root: Path, ledger: Mapping[str, Any]) -> list[str]:
+    """Reopen and admit the exact immutable host evidence named by a recorded ledger."""
+    reasons: list[str] = []
+    if ledger.get("status") != "recorded":
+        return ["physical_purge_ledger_not_recorded"]
+    if ledger.get("required_device") != "samsung_galaxy_s25_ultra":
+        reasons.append("physical_purge_device_scope_mismatch")
+    relative = ledger.get("evidence_file")
+    if not isinstance(relative, str) or not relative.startswith(
+        "docs/evidence/m05b-purge/"
+    ):
+        return sorted(set(reasons + ["physical_purge_evidence_path_invalid"]))
+    candidate = Path(relative)
+    root_resolved = root.resolve()
+    evidence_path = (root / candidate).resolve()
+    if candidate.is_absolute() or root_resolved not in evidence_path.parents:
+        return sorted(set(reasons + ["physical_purge_evidence_path_invalid"]))
+    try:
+        serialized = evidence_path.read_bytes()
+        evidence = json.loads(serialized)
+    except (OSError, json.JSONDecodeError):
+        return sorted(set(reasons + ["physical_purge_evidence_unreadable"]))
+    if hashlib.sha256(serialized).hexdigest() != ledger.get("evidence_sha256"):
+        reasons.append("physical_purge_evidence_digest_mismatch")
+    if not isinstance(evidence, dict):
+        reasons.append("physical_purge_evidence_invalid")
+        return sorted(set(reasons))
+    if evidence.get("record_kind") != "m05b_physical_purge_host_evidence":
+        reasons.append("physical_purge_evidence_invalid")
+    if (
+        evidence.get("sanitized") is not True
+        or evidence.get("non_participant_observation") is not True
+    ):
+        reasons.append("physical_purge_evidence_invalid")
+    if evidence.get("independent_host_post_scan_empty") is not True:
+        reasons.append("physical_purge_host_post_scan_not_empty")
+    if evidence.get("tombstone_independently_validated") is not True:
+        reasons.append("physical_purge_tombstone_not_validated")
+    if evidence.get("blocking_reasons") != [] or evidence.get("admitted") is not True:
+        reasons.append("physical_purge_evidence_blocking")
+    return sorted(set(reasons))
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--serial", required=True)

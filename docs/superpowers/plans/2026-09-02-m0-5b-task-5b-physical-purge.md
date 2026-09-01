@@ -128,7 +128,7 @@
 
   Remove `recordVideo = true` and require the structure test to fail. Remove creation of each non-export residue in turn and require the matching non-vacuity assertion to fail. Move purge before the complete-session checks and require the ordering assertion to fail. Remove the tombstone-backed re-admission check and require the fence assertion to fail.
 
-- [ ] **Step 9: Commit the device increment**
+- [x] **Step 9: Commit the device increment**
 
   Commit message: `feat: rehearse complete synthetic purge on android`.
 
@@ -147,25 +147,25 @@
 - Consumes: `PhysicalPurgeDeviceGateTest`, `tools/check_m05b_physical_purge.py`, exact app/test APK hashes, one S25 serial, ignored human recording step.
 - Produces: `make verify-harness-s25-m05b-physical-purge`; pending/recorded ledger whose recorded branch opens and validates its referenced evidence file.
 
-- [ ] **Step 1: Write RED Make/build-contract tests**
+- [x] **Step 1: Write RED Make/build-contract tests**
 
   Require the new phony target to: use `set -eu`; count exactly one `adb devices` entry whose second column is `device`; reject emulator serials; authorize Samsung `SM-S938*`; require a clean source tree; call `fetch-model-asset`; assemble both APKs; install both; pull installed APKs with `exec-out cat`; compare both installed hashes against local candidates; run only `PhysicalPurgeDeviceGateTest`; capture the real instrumentation exit status; invoke the host checker with serial/package/transcript/app SHA/test SHA; and contain no ledger-writing command, success grep, broad `rm`, wildcard, or `shell=True` equivalent.
 
-- [ ] **Step 2: Run the focused build-contract test and verify RED**
+- [x] **Step 2: Run the focused build-contract test and verify RED**
 
   Run `./.venv/bin/pytest -q reference/tests/test_m05b_physical_purge_build_contract.py`.
 
   Expected: target-not-found failure.
 
-- [ ] **Step 3: Implement the exact-candidate target**
+- [x] **Step 3: Implement the exact-candidate target**
 
   Follow the synchronized-video gate's candidate-identity preamble. Create temporary host files with `mktemp`; trap cleanup of host temporary files only. Run instrumentation, print its transcript, and pass the numeric exit status to the checker. The target must never remove device data itself; only the typed device purge transaction may delete owned synthetic entries.
 
-- [ ] **Step 4: Add the pending ledger and validator**
+- [x] **Step 4: Add the pending ledger and validator**
 
   Initial ledger fields: `status: pending`, `reason: physical_purge_rehearsal_not_recorded`, `required_device: samsung_galaxy_s25_ultra`, and `evidence_file: null`. Extend `test_device_evidence_ledger.py` so `recorded` requires a repo-relative JSON file under `docs/evidence/m05b-purge/`, opens it, recomputes its SHA, validates the host-checker schema and non-blocking result, and rejects missing, unrelated, absolute, traversing, or digest-mismatched references.
 
-- [ ] **Step 5: Prove Make/ledger mutations**
+- [x] **Step 5: Prove Make/ledger mutations**
 
   Remove the installed test-APK hash comparison and require the build-contract test to fail. Replace the checker exit with a grep and require failure. Point a recorded ledger at an unrelated JSON file and require the ledger test to fail. Restore byte-exactly.
 

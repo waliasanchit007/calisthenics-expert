@@ -11,6 +11,7 @@ ROOT = Path(__file__).parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 
 import check_five_run_replay
+import check_m05b_physical_purge
 import check_synchronized_video_run
 import record_process_kill_evidence
 from check_camera_capability_probe import (
@@ -27,6 +28,7 @@ CAMERA_LEDGER = "docs/evidence/device-probes/s25-ultra-camera-capability-ledger.
 CONTAINER_TIMESTAMP_LEDGER = "docs/evidence/device-probes/s25-ultra-container-timestamp-ledger.json"
 LIVE_CAPTURE_LEDGER = "docs/evidence/live-capture/s25-ultra-live-capture-ledger.json"
 M05B_ATTRIBUTION_LEDGER = "docs/evidence/m05b-attribution/s25-short-attribution-ledger.json"
+M05B_PHYSICAL_PURGE_LEDGER = "docs/evidence/m05b-purge/s25-ultra-physical-purge-ledger.json"
 SYNCHRONIZED_VIDEO_LEDGER = (
     "docs/evidence/synchronized-video/s25-ultra-synchronized-video-ledger.json"
 )
@@ -367,6 +369,17 @@ def test_s25_m05b_attribution_ledger_reports_pending_or_verifies_recorded_conten
 
     verified = check_m05b_attribution.verify_recorded_ledger(ROOT, M05B_ATTRIBUTION_LEDGER)
     assert verified["status"] == "pending" or verified["satisfies_s25_attribution_gate"] is True
+
+
+def test_s25_m05b_physical_purge_ledger_is_pending_or_reopens_recorded_evidence() -> None:
+    ledger = json.loads((ROOT / M05B_PHYSICAL_PURGE_LEDGER).read_text(encoding="utf-8"))
+    assert ledger["status"] in {"pending", "recorded"}
+    if ledger["status"] == "pending":
+        assert ledger["reason"] == "physical_purge_rehearsal_not_recorded"
+        assert ledger["evidence_file"] is None
+        return
+
+    assert check_m05b_physical_purge.verify_recorded_ledger(ROOT, ledger) == []
 
 
 def test_the_committed_camera_ledger_passes_the_shared_recorded_ledger_check() -> None:
