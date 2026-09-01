@@ -52,6 +52,7 @@ class SessionExporter(
     private val monotonicNowNs: () -> Long,
     private val manifestAtFinalization: (SessionManifest, SealedSessionSnapshot) -> SessionManifest = { manifest, _ -> manifest },
     private val observedVideoSynchronization: () -> ObservedVideoSynchronization? = { null },
+    private val synchronizationEvidenceBuilder: ((videoSha256: String, poseSha256: String) -> ByteArray)? = null,
     private val writer: DurableSessionWriter = DefaultDurableSessionWriter(
         storage = storage,
         sessionId = manifestTemplate.sessionId,
@@ -190,7 +191,7 @@ class SessionExporter(
         }
 
         val sealedArtifacts = try {
-            writer.seal(FinalSessionAggregates(snapshot.counts))
+            writer.seal(FinalSessionAggregates(snapshot.counts), synchronizationEvidenceBuilder)
         } catch (_: DurableReconciliationException) {
             abortWriter(snapshot, sanitizedDetail("abandoned export attempt"))
             return failed(snapshot, "stream_reconciliation_failed").also { finalizationResult = it }

@@ -35,7 +35,20 @@ interface DurableSessionWriter {
 
     /** Write this session's synchronization evidence into the attempt, exactly once. */
     fun appendSynchronizationEvidence(exactBytes: ByteArray)
-    fun seal(finalAggregates: FinalSessionAggregates): SealedArtifacts
+    /**
+     * Seal the attempt.
+     *
+     * [synchronizationEvidence], when given, is invoked after the streams are flushed and before
+     * reconciliation, with the digests of the video and pose stream as they now stand on disk. It
+     * has to run here: the released evidence schema names both digests, the pose digest is only
+     * final once seal has flushed it, and the evidence must itself be reconciled to commit with
+     * the session. Writing it earlier would reference an unflushed stream; later would be too late
+     * to seal it.
+     */
+    fun seal(
+        finalAggregates: FinalSessionAggregates,
+        synchronizationEvidence: ((videoSha256: String, poseSha256: String) -> ByteArray)? = null,
+    ): SealedArtifacts
     fun abort(reason: String, counts: Counts)
 }
 
@@ -162,7 +175,10 @@ class DefaultDurableSessionWriter(
         }
     }
 
-    override fun seal(finalAggregates: FinalSessionAggregates): SealedArtifacts = serialized {
+    override fun seal(
+        finalAggregates: FinalSessionAggregates,
+        synchronizationEvidence: ((videoSha256: String, poseSha256: String) -> ByteArray)?,
+    ): SealedArtifacts = serialized {
         requireState(DurableWriterState.OPEN)
         mutableState = DurableWriterState.SEALING
         val currentAttempt = requireNotNull(attempt)
@@ -177,18 +193,28 @@ class DefaultDurableSessionWriter(
             }
             val finalCheckpoint = checkpoint(finalAggregates.counts)
             storage.replaceCheckpoint(currentAttempt, encodeCheckpoint(finalCheckpoint))
+            val pose = storage.reconcileArtifact(currentAttempt, DurableArtifact.POSE_STREAM)
+            // Video presence is read from the attempt rather than signalled: if a container was
+            // muxed into this attempt it is here, and a pose-only run reconciles an empty artifact.
+            // The muxer is finalized before the pre-seal fence continues, so nothing can still be
+            // writing when this reads it.
+            val video = storage.reconcileArtifact(currentAttempt, DurableArtifact.VIDEO)
+            if (video.byteLength > 0L && synchronizationEvidence != null && !synchronizationWritten) {
+                val bytes = synchronizationEvidence(video.sha256, pose.sha256)
+                require(bytes.isNotEmpty()) { "synchronization evidence bytes must not be empty" }
+                storage.appendArtifact(currentAttempt, DurableArtifact.SYNCHRONIZATION_EVIDENCE, bytes)
+                storage.flushArtifact(currentAttempt, DurableArtifact.SYNCHRONIZATION_EVIDENCE)
+                storage.fsyncArtifact(currentAttempt, DurableArtifact.SYNCHRONIZATION_EVIDENCE)
+                synchronizationWritten = true
+            }
             val reconciled = buildList {
                 if (admissionWritten) {
                     add(SealedArtifact(DurableArtifact.RUN_ADMISSION, storage.reconcileArtifact(currentAttempt, DurableArtifact.RUN_ADMISSION)))
                 }
-                add(SealedArtifact(DurableArtifact.POSE_STREAM, storage.reconcileArtifact(currentAttempt, DurableArtifact.POSE_STREAM)))
+                add(SealedArtifact(DurableArtifact.POSE_STREAM, pose))
                 if (telemetryCount > 0) {
                     add(SealedArtifact(DurableArtifact.TELEMETRY, storage.reconcileArtifact(currentAttempt, DurableArtifact.TELEMETRY)))
                 }
-                // Video presence is read from the attempt rather than signalled: if a container was
-                // muxed into this attempt it is here, and if the run recorded no video the
-                // reconciliation is an empty artifact. The muxer is finalized before the pre-seal
-                // fence continues, so nothing can still be writing when this reads it.
                 if (synchronizationWritten) {
                     add(
                         SealedArtifact(
@@ -197,7 +223,6 @@ class DefaultDurableSessionWriter(
                         ),
                     )
                 }
-                val video = storage.reconcileArtifact(currentAttempt, DurableArtifact.VIDEO)
                 if (video.byteLength > 0L) add(SealedArtifact(DurableArtifact.VIDEO, video))
             }
             val poseReconciliation = reconciled.single {
