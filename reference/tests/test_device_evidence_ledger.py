@@ -11,6 +11,7 @@ ROOT = Path(__file__).parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 
 import check_five_run_replay
+import check_synchronized_video_run
 import record_process_kill_evidence
 from check_camera_capability_probe import (
     CameraProbeCheckError,
@@ -26,6 +27,9 @@ CAMERA_LEDGER = "docs/evidence/device-probes/s25-ultra-camera-capability-ledger.
 CONTAINER_TIMESTAMP_LEDGER = "docs/evidence/device-probes/s25-ultra-container-timestamp-ledger.json"
 LIVE_CAPTURE_LEDGER = "docs/evidence/live-capture/s25-ultra-live-capture-ledger.json"
 M05B_ATTRIBUTION_LEDGER = "docs/evidence/m05b-attribution/s25-short-attribution-ledger.json"
+SYNCHRONIZED_VIDEO_LEDGER = (
+    "docs/evidence/synchronized-video/s25-ultra-synchronized-video-ledger.json"
+)
 
 
 def _copy_recorded_ledger(root: Path, ledger_relative: str, destination: Path) -> str:
@@ -324,6 +328,26 @@ def test_s25_container_timestamp_ledger_reports_pending_or_verifies_recorded_con
     assert ledger["android_release"]
     assert ledger["timestamp_admission"] in {"admitted", "blocked"}
     assert verified["timestamp_admission"] == ledger["timestamp_admission"]
+
+
+def test_s25_synchronized_video_ledger_verifies_the_recorded_host_result() -> None:
+    verified = check_synchronized_video_run.verify_recorded_ledger(
+        ROOT,
+        SYNCHRONIZED_VIDEO_LEDGER,
+    )
+
+    assert verified["status"] == "recorded"
+    assert verified["synchronized_video_admission"] == "admitted"
+
+
+def test_synchronized_video_ledger_rejects_mutated_evidence_digest(tmp_path: Path) -> None:
+    ledger_relative = _copy_recorded_ledger(ROOT, SYNCHRONIZED_VIDEO_LEDGER, tmp_path)
+    ledger = json.loads((tmp_path / ledger_relative).read_text(encoding="utf-8"))
+    evidence_path = tmp_path / ledger["evidence_file"]
+    evidence_path.write_bytes(evidence_path.read_bytes() + b" \n")
+
+    with pytest.raises(check_synchronized_video_run.SynchronizedVideoCheckError, match="sha256"):
+        check_synchronized_video_run.verify_recorded_ledger(tmp_path, ledger_relative)
 
 
 def test_s25_live_capture_ledger_reports_pending_or_verifies_recorded_content() -> None:

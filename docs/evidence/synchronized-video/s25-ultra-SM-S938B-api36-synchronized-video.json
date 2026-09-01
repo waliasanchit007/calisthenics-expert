@@ -1,0 +1,108 @@
+{
+  "blocking_reasons": [],
+  "inherited_probe": {
+    "codec": "c2.qti.avc.encoder",
+    "container": "video/mp4",
+    "path_ref": "docs/evidence/device-probes/s25-ultra-SM-S938B-api36-container-timestamp-controlled.json",
+    "sha256": "1fd2bd9375fd0783742db5b05da49374eaec13d05485a34b2cb371ef5f869292"
+  },
+  "record": {
+    "artifact_schema_version": "1.0.0",
+    "artifacts": {
+      "manifest_byte_length": 4528,
+      "manifest_path_ref": "exports/00000000-0000-4000-8000-c76e9b5ced7c/manifest.json",
+      "manifest_sha256": "1e482e7ac2ac4b5c4edba359e25deab7f331469999cc4de705221e2312692d01",
+      "pose_stream_byte_length": 788,
+      "pose_stream_path_ref": "exports/00000000-0000-4000-8000-c76e9b5ced7c/frames.ndjson",
+      "pose_stream_sha256": "763219a63dbbf9db8b3f5d5603f5c32be0262b5747cc5b9542e2f32342545bd5",
+      "synchronization_evidence_byte_length": 2287,
+      "synchronization_evidence_path_ref": "exports/00000000-0000-4000-8000-c76e9b5ced7c/synchronization-evidence.json",
+      "synchronization_evidence_sha256": "2fdb50552e81155610515e270307c25917b7604bd77ca4fbe319366a2f33b846",
+      "video_byte_length": 10504,
+      "video_path_ref": "exports/00000000-0000-4000-8000-c76e9b5ced7c/video.mp4",
+      "video_sha256": "dba2cbc1ba842240c02fd09d58923d3c9931e81acf2de690d1ab0d935c8a941e"
+    },
+    "blocking_reasons": [],
+    "blocking_result": false,
+    "contains_landmark_coordinates": false,
+    "counts": {
+      "accepted_frames": 5,
+      "demuxed_metadata_samples": 5,
+      "demuxed_video_samples": 5,
+      "dropped_before_encoder": 0,
+      "encoded_video_frames": 5,
+      "encoder_failures": 0,
+      "muxed_samples": 5,
+      "muxer_format_changes": 1,
+      "muxer_key_frames": 1,
+      "muxer_metadata_track": 0,
+      "muxer_started": 1,
+      "muxer_video_samples": 5,
+      "muxer_video_track": 1,
+      "writer_finalized": true
+    },
+    "environment": {
+      "abi": "arm64-v8a",
+      "android_release": "16",
+      "api_level": 36,
+      "device_class": "physical_device",
+      "device_fingerprint": "samsung/pa3qxins/pa3q:16/BP4A.251205.006/S938BXXSBCZG3_OXMBCZG3:user/release-keys",
+      "device_identity": "samsung/SM-S938B/pa3q/pa3qxins",
+      "manufacturer": "samsung",
+      "marketing_name": "",
+      "model": "SM-S938B"
+    },
+    "non_participant_observation": true,
+    "observation_subject": "device_synchronized_video_publication",
+    "provenance": {
+      "camera_id": "0",
+      "camera_timestamp_source": "REALTIME",
+      "codec": "c2.qti.avc.encoder",
+      "container": "video/mp4",
+      "demuxed_track_mime": "video/avc",
+      "harness_git_sha": "19f5cc37079d4d29ab859b20fdcb5334fe37cf68"
+    },
+    "record_kind": "synchronized_video_device_gate_observation",
+    "samples": [
+      {
+        "demuxed_pts_us": 0,
+        "frame_index": 0,
+        "rebased_capture_timestamp_ns": 1101979809,
+        "submitted_pts_us": 1101979
+      },
+      {
+        "demuxed_pts_us": 66633,
+        "frame_index": 1,
+        "rebased_capture_timestamp_ns": 1168617934,
+        "submitted_pts_us": 1168617
+      },
+      {
+        "demuxed_pts_us": 966255,
+        "frame_index": 2,
+        "rebased_capture_timestamp_ns": 2068234392,
+        "submitted_pts_us": 2068234
+      },
+      {
+        "demuxed_pts_us": 999577,
+        "frame_index": 3,
+        "rebased_capture_timestamp_ns": 2101553559,
+        "submitted_pts_us": 2101553
+      },
+      {
+        "demuxed_pts_us": 1366088,
+        "frame_index": 4,
+        "rebased_capture_timestamp_ns": 2468063976,
+        "submitted_pts_us": 2468063
+      }
+    ],
+    "sanitized": true,
+    "session_id": "00000000-0000-4000-8000-c76e9b5ced7c",
+    "video_pts_us": [
+      0,
+      66633,
+      966255,
+      999577,
+      1366088
+    ]
+  }
+}

@@ -29,6 +29,7 @@ _RECORD_PATTERN = re.compile(
     r"^INSTRUMENTATION_STATUS: SynchronizedVideoEvidence=(?P<json>\{.*\})$", re.MULTILINE
 )
 _EXPECTED_RECORD_KIND = "synchronized_video_device_gate_observation"
+LEDGER_PATH = "docs/evidence/synchronized-video/s25-ultra-synchronized-video-ledger.json"
 
 _S25_MODEL_PREFIX = "SM-S938"
 _S25_MARKER = "S25 Ultra"
@@ -118,6 +119,29 @@ def load_probe(probe_path: Path) -> dict:
 
 def probe_digest(probe_path: Path) -> str:
     return hashlib.sha256(probe_path.read_bytes()).hexdigest()
+
+
+def _read_json(path: Path) -> dict:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise SynchronizedVideoCheckError(f"cannot read JSON from {path}: {error}") from error
+    if not isinstance(value, dict):
+        raise SynchronizedVideoCheckError(f"JSON root is not an object: {path}")
+    return value
+
+
+def _repository_path(root: Path, relative: object, field: str) -> Path:
+    if not isinstance(relative, str) or not relative:
+        raise SynchronizedVideoCheckError(f"recorded ledger must name {field}")
+    path = Path(relative)
+    if path.is_absolute():
+        raise SynchronizedVideoCheckError(f"recorded {field} must be relative")
+    root_resolved = root.resolve()
+    candidate = (root / path).resolve()
+    if candidate != root_resolved and root_resolved not in candidate.parents:
+        raise SynchronizedVideoCheckError(f"recorded {field} escapes the repository root")
+    return candidate
 
 
 _RUN_AS_ERROR = re.compile(rb"^(?:run-as|cat):\s")
@@ -320,6 +344,65 @@ def pull_and_verify_committed_export(
     if not validate_export(local_paths["manifest"], local_paths["pose_stream"]):
         reasons.append("session_contract_validation_failed")
     return sorted(set(reasons))
+
+
+def verify_recorded_ledger(root: Path, ledger_relative: str = LEDGER_PATH) -> dict:
+    """Verify the immutable host result named by the synchronized-video ledger.
+
+    The live gate already pulled and rehashed all four app-private artifacts. The durable record
+    pins that successful host result byte-for-byte, then replays every check that does not require
+    a connected device or the ephemeral pulled payloads.
+    """
+    ledger = _read_json(root / ledger_relative)
+    if ledger.get("status") not in {"pending", "recorded"}:
+        raise SynchronizedVideoCheckError("ledger status must be pending or recorded")
+    if ledger.get("status") == "pending":
+        if not ledger.get("missing_precondition"):
+            raise SynchronizedVideoCheckError("pending ledger must name its missing precondition")
+        return ledger
+
+    evidence_path = _repository_path(root, ledger.get("evidence_file"), "evidence_file")
+    if not evidence_path.is_file():
+        raise SynchronizedVideoCheckError("recorded synchronized-video evidence is missing")
+    payload = evidence_path.read_bytes()
+    actual_digest = hashlib.sha256(payload).hexdigest()
+    if ledger.get("evidence_sha256") != actual_digest:
+        raise SynchronizedVideoCheckError("recorded evidence_sha256 does not match evidence")
+
+    result = _read_json(evidence_path)
+    record = result.get("record")
+    inherited_probe = result.get("inherited_probe")
+    if not isinstance(record, dict) or not isinstance(inherited_probe, dict):
+        raise SynchronizedVideoCheckError("recorded evidence has no host result objects")
+    assert_sanitized(record)
+
+    probe_path = _repository_path(root, inherited_probe.get("path_ref"), "probe path_ref")
+    probe = load_probe(probe_path)
+    if inherited_probe.get("sha256") != probe_digest(probe_path):
+        raise SynchronizedVideoCheckError("recorded inherited probe sha256 disagrees")
+    probe_provenance = probe.get("provenance") or {}
+    if inherited_probe.get("codec") != probe_provenance.get("codec"):
+        raise SynchronizedVideoCheckError("recorded inherited probe codec disagrees")
+    if inherited_probe.get("container") != probe_provenance.get("container"):
+        raise SynchronizedVideoCheckError("recorded inherited probe container disagrees")
+
+    reasons = check_record(record, probe, probe_path)
+    if result.get("blocking_reasons") != reasons:
+        raise SynchronizedVideoCheckError("recorded host blocking reasons disagree")
+    artifacts = record.get("artifacts")
+    if not isinstance(artifacts, dict):
+        raise SynchronizedVideoCheckError("recorded evidence has no artifacts object")
+    for artifact_name in _COMMITTED_ARTIFACTS:
+        _required_artifact_measurement(artifacts, artifact_name)
+
+    environment = record.get("environment") or {}
+    for field in ("device_identity", "api_level", "android_release"):
+        if ledger.get(field) != environment.get(field):
+            raise SynchronizedVideoCheckError(f"ledger {field} disagrees with evidence")
+    admission = "admitted" if not reasons else "blocked"
+    if ledger.get("synchronized_video_admission") != admission:
+        raise SynchronizedVideoCheckError("ledger admission disagrees with host result")
+    return ledger
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -301,27 +301,27 @@ release; see Task 8 Step 4.
 - Metadata samples carry frame index, rebased capture ns, and submitted PTS us at the same muxer PTS as the video sample.
 - `VideoDemuxVerifier.verify(path): DemuxedVideoEvidence` returns video/metadata PTS sequences, metadata payloads, codec/container, byte count, and SHA-256.
 
-- [ ] **Step 1: Write RED fan-out, lifecycle, and pairing tests**
+- [x] **Step 1: Write RED fan-out, lifecycle, and pairing tests**
 
 Prove one owned frame feeds preprocessing and encoder without use-after-close, writer construction is per run, encoder/muxer cannot outlive source teardown, PTS is `floor(rebasedCaptureNs / 1_000)`, and video/metadata samples pair exactly.
 
-- [ ] **Step 2: Implement the writer and owned fan-out**
+- [x] **Step 2: Implement the writer and owned fan-out**
 
 Use MediaCodec/MediaMuxer, not CameraX Recorder. Write directly into Task 2's staging attempt. Close every owned frame exactly once.
 
-- [ ] **Step 3: Extend atomic publication**
+- [x] **Step 3: Extend atomic publication**
 
 Finalize video before sealing; stop/join telemetry; reconcile pose/video/pairing/telemetry; create and fsync synchronization evidence; hash it; re-read all payloads; write manifest last; rename once.
 
-- [ ] **Step 4: Add binary-safe host transfer and short S25 gate**
+- [x] **Step 4: Add binary-safe host transfer and short S25 gate**
 
 Use `adb exec-out` into a temporary host file, verify manifest byte count/SHA-256, then rename. Add `make verify-harness-s25-synchronized-video`; it prints a typed record and never edits its ledger.
 
-- [ ] **Step 5: Run mutations**
+- [x] **Step 5: Run mutations**
 
 Swap BT601 handling, perturb one PTS, omit metadata, change one endpoint/count/digest, close the source before encoder quiescence, use text-mode transfer, and remove one final fsync/re-read. Each behavioral gate must fail.
 
-- [ ] **Step 6: Verify and commit**
+- [x] **Step 6: Verify and commit**
 
 Run JVM, Android unit/instrumentation, short S25 gate, host rehash validator, `make verify`, and commit:
 
@@ -355,10 +355,14 @@ git commit -m "feat: publish synchronized Android video sessions"
 - [x] **Step 5: Mutate ordering/crash, traversal/absolute/prefix/symlink/unknown-root/type-change, non-vacuity/post-scan, fence, registry digest, reserved-ID/random-source, sanitization/bounds, and recursive-delete guard conjuncts; each must turn its focused test red**
 - [x] **Step 6: Run focused Python/JVM/Android compilation, Ruff/mypy, iOS common compilation, full `make verify` when feasible, repository guard, and exact diff inspection. Do not commit in this task.**
 
-### Task 5b: Complete short video-enabled physical purge rehearsal (blocked)
+### Task 5b: Complete short video-enabled physical purge rehearsal
 
 **Dependency:** Task 4 contract release, Android synchronized publication, and an authorized physical
 S25. This is not authorized by Task 5a.
+
+**2026-09-02 status:** Unblocked by the admitted controlled timestamp probe and synchronized-video
+publication evidence. Rehearse against the complete video-enabled session shape; do not substitute
+the historical pose-only software rehearsal.
 
 - [ ] Create and rehearse one complete short video-enabled synthetic session; a pose-only run is invalid.
 - [ ] Independently inspect the app-private post-scan through host `run-as`, then add the host checker,

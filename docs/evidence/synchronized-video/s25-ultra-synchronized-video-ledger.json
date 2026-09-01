@@ -1,0 +1,13 @@
+{
+  "android_release": "16",
+  "api_level": 36,
+  "candidate_app_sha256": "6d74f4a2c62b64b51b901d12a6b6c8f3d7efd95c7bf60829c823937debe6e2b8",
+  "candidate_test_sha256": "a41970b34ec5ff27348684db4ae09d5794b719db6a737b64b81f7b73eb054c5a",
+  "device_identity": "samsung/SM-S938B/pa3q/pa3qxins",
+  "evidence_file": "docs/evidence/synchronized-video/s25-ultra-SM-S938B-api36-synchronized-video.json",
+  "evidence_sha256": "6c85191081fe2b8b48d0313f1fe808bcc8f5543b0b7f7b918d2199e88d2810ad",
+  "record_kind": "synchronized_video_device_gate_observation",
+  "recorded_on_utc_date": "2026-09-02",
+  "status": "recorded",
+  "synchronized_video_admission": "admitted"
+}

@@ -120,9 +120,9 @@
 - Consumes: admitted controlled probe and exact candidate application/test APKs.
 - Produces: one published four-artifact synchronized session accepted by the host validator.
 
-- [ ] Run the complete mutation matrix; each intended semantic mutation must fail through the named semantic assertion.
-- [ ] Run `make verify`, `make verify-harness-jvm`, Android instrumentation assembly, and `make verify-harness-ios`.
-- [ ] Inspect the exact diff and verify clean local/remote checkpoint identity.
-- [ ] Run `make verify-harness-s25-synchronized-video` on exactly one authorized physical S25.
-- [ ] Require successful binary-safe transfer, four artifact digest/length matches, probe binding, and released session validation.
-- [ ] Record typed physical evidence and only then mark Task 4 complete and begin Task 5b.
+- [x] Run the complete mutation matrix; each intended semantic mutation must fail through the named semantic assertion.
+- [x] Run `make verify`, `make verify-harness-jvm`, Android instrumentation assembly, and `make verify-harness-ios`.
+- [x] Inspect the exact diff and verify clean local/remote checkpoint identity.
+- [x] Run `make verify-harness-s25-synchronized-video` on exactly one authorized physical S25.
+- [x] Require successful binary-safe transfer, four artifact digest/length matches, probe binding, and released session validation.
+- [x] Record typed physical evidence and only then mark Task 4 complete and begin Task 5b.
