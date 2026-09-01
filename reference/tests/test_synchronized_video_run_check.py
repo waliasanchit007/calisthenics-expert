@@ -193,6 +193,22 @@ def test_a_transcript_with_two_records_is_refused() -> None:
         checker.extract_record(transcript)
 
 
+def test_a_run_as_error_is_never_accepted_as_a_payload() -> None:
+    source = (ROOT / "tools" / "check_synchronized_video_run.py").read_text(encoding="utf-8")
+
+    # run-as writes its diagnostics to stdout and can still exit zero. Observed on the device:
+    # "run-as: unknown package: ..." was written out as a 53-byte MP4 and then hashed and compared
+    # as if it were the payload. Only the digest check caught it.
+    assert "_RUN_AS_ERROR" in source
+    assert "returned a tool error" in source
+
+
+def test_the_checker_targets_the_real_application_id() -> None:
+    source = (ROOT / "tools" / "check_synchronized_video_run.py").read_text(encoding="utf-8")
+
+    assert 'default="com.calisthenics.diagnostic.android"' in source
+
+
 def test_the_binary_pull_never_uses_text_mode_adb_shell() -> None:
     source = (ROOT / "tools" / "check_synchronized_video_run.py").read_text(encoding="utf-8")
 

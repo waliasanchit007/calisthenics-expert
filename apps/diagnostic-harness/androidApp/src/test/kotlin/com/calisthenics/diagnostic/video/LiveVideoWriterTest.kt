@@ -247,6 +247,19 @@ class LiveVideoWriterTest {
         )
     }
 
+    @Test
+    fun theCodecSampleFlagsReachTheMuxer() {
+        // An AVC track whose samples never carry BUFFER_FLAG_KEY_FRAME has an empty sync-sample
+        // table. That track is not seekable and MediaExtractor can decline to expose it at all,
+        // which is exactly how a container ends up holding only its metadata track.
+        val muxer = RecordingMuxer()
+        val writer = SeamedVideoWriter(encoder = FlaggedEncoder(flags = 1), muxer = muxer)
+
+        writer.accept(0, 0L, frame())
+
+        assertEquals(listOf(1), muxer.videoFlags, "codec sample flags were dropped")
+    }
+
     // --- seams -------------------------------------------------------------------------------
 
     private fun newWriter(
@@ -256,13 +269,15 @@ class LiveVideoWriterTest {
 
     private class RecordingMuxer : VideoMuxerPort {
         val videoPtsUs = mutableListOf<Long>()
+        val videoFlags = mutableListOf<Int>()
         val metadataPtsUs = mutableListOf<Long>()
         val metadataPayloads = mutableListOf<MetadataPayload>()
         var stopCount = 0
         var releaseCount = 0
 
-        override fun writeVideoSample(ptsUs: Long, bytes: ByteArray) {
+        override fun writeVideoSample(ptsUs: Long, bytes: ByteArray, flags: Int) {
             videoPtsUs += ptsUs
+            videoFlags += flags
         }
 
         override fun writeMetadataSample(ptsUs: Long, payload: MetadataPayload) {
@@ -386,11 +401,30 @@ class LiveVideoWriterTest {
     }
 
 
+    private class FlaggedEncoder(private val flags: Int) : VideoEncoderPort {
+        private val ready = ArrayDeque<EncodedUnit>()
+
+        override fun submit(frame: OwnedYuvFrame, ptsUs: Long): SubmitOutcome {
+            ready.addLast(EncodedUnit(ptsUs, ByteArray(1), flags))
+            return SubmitOutcome.Accepted
+        }
+
+        override fun drain(): List<EncodedUnit> {
+            val units = ready.toList()
+            ready.clear()
+            return units
+        }
+
+        override fun signalEndOfStream() = Unit
+
+        override fun release() = Unit
+    }
+
     private class SynchronizedRecordingMuxer : VideoMuxerPort {
         private val guard = Any()
         val videoPtsUs = mutableListOf<Long>()
 
-        override fun writeVideoSample(ptsUs: Long, bytes: ByteArray) {
+        override fun writeVideoSample(ptsUs: Long, bytes: ByteArray, flags: Int) {
             synchronized(guard) { videoPtsUs += ptsUs }
         }
 

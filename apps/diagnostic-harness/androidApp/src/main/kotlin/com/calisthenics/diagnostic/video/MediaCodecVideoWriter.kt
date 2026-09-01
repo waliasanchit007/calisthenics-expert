@@ -35,8 +35,32 @@ object MediaCodecVideoWriter {
             bitRate = bitRate,
             trackSink = sink,
         )
-        return SeamedVideoWriter(encoder = encoder, muxer = sink)
+        val writer = SeamedVideoWriter(encoder = encoder, muxer = sink)
+        return object : LiveVideoWriter by writer, MuxerDiagnostics {
+            override fun muxerDiagnostics(): Map<String, Long> = sink.diagnostics()
+
+            override fun encoderName(): String = encoder.codecName
+        }
     }
+}
+
+/**
+ * What the real muxer did during a run.
+ *
+ * Implemented by the device wiring only. The gate queries it so an unreadable container is
+ * reported as evidence -- which track indices existed, whether the muxer started, how many samples
+ * and key frames were written -- rather than leaving the cause to be guessed at.
+ */
+interface MuxerDiagnostics {
+    fun muxerDiagnostics(): Map<String, Long>
+
+    /**
+     * The encoder component name, e.g. `c2.qti.avc.encoder`.
+     *
+     * This is what the admitted Task 3 probe recorded, and it is NOT the track MIME. Reporting
+     * `video/avc` here compares two different identifiers and the provenance gate rightly refuses.
+     */
+    fun encoderName(): String
 }
 
 /** Lets the encoder hand the muxer the real output format before any sample is written. */
@@ -74,9 +98,14 @@ internal class MediaCodecVideoEncoder(
     private var endOfStreamSignalled = false
     private var released = false
 
-    /** The codec name is provenance: the admitted container-timestamp probe is codec-specific. */
-    val codecName: String
-        get() = codec.name
+    /**
+     * The codec name is provenance: the admitted container-timestamp probe is codec-specific.
+     *
+     * Captured eagerly. MediaCodec.getName() throws "codec is released already" once the codec is
+     * released, and provenance is read when the evidence record is built, which is after
+     * finalization.
+     */
+    val codecName: String = codec.name
 
     init {
         val format = MediaFormat.createVideoFormat(MediaCodecVideoWriter.VIDEO_MIME, width, height).apply {
@@ -137,7 +166,11 @@ internal class MediaCodecVideoEncoder(
                     val buffer = codec.getOutputBuffer(index)
                     val isCodecConfig = bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0
                     if (buffer != null && !isCodecConfig && bufferInfo.size > 0) {
-                        units += EncodedUnit(bufferInfo.presentationTimeUs, buffer.copyOfRange(bufferInfo))
+                        units += EncodedUnit(
+                            ptsUs = bufferInfo.presentationTimeUs,
+                            bytes = buffer.copyOfRange(bufferInfo),
+                            flags = bufferInfo.flags,
+                        )
                     }
                     codec.releaseOutputBuffer(index, false)
                     if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) return units
@@ -240,6 +273,9 @@ internal class MediaMuxerVideoSink(outputPath: String) : VideoMuxerPort, VideoTr
     private var started = false
     private var stopped = false
     private var released = false
+    private var videoSamples = 0
+    private var keyFrames = 0
+    private var formatChanges = 0
     private val sampleInfo = MediaCodec.BufferInfo()
 
     init {
@@ -250,27 +286,40 @@ internal class MediaMuxerVideoSink(outputPath: String) : VideoMuxerPort, VideoTr
     }
 
     override fun onVideoFormat(format: MediaFormat) {
+        formatChanges += 1
         check(!started) { "video format arrived after the muxer started" }
         videoTrack = muxer.addTrack(format)
         muxer.start()
         started = true
     }
 
-    override fun writeVideoSample(ptsUs: Long, bytes: ByteArray) {
+    override fun writeVideoSample(ptsUs: Long, bytes: ByteArray, flags: Int) {
         check(started) { "muxer received a video sample before the encoder reported its format" }
-        writeSample(videoTrack, ptsUs, bytes)
+        if (flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0) keyFrames += 1
+        videoSamples += 1
+        writeSample(videoTrack, ptsUs, bytes, flags)
     }
 
     override fun writeMetadataSample(ptsUs: Long, payload: MetadataPayload) {
         check(started) { "muxer received a metadata sample before the encoder reported its format" }
-        writeSample(metadataTrack, ptsUs, encodeMetadata(payload))
+        writeSample(metadataTrack, ptsUs, encodeMetadata(payload), 0)
     }
 
-    private fun writeSample(track: Int, ptsUs: Long, bytes: ByteArray) {
+    private fun writeSample(track: Int, ptsUs: Long, bytes: ByteArray, flags: Int) {
         val buffer = ByteBuffer.wrap(bytes)
-        sampleInfo.set(0, bytes.size, ptsUs, 0)
+        sampleInfo.set(0, bytes.size, ptsUs, flags)
         muxer.writeSampleData(track, buffer, sampleInfo)
     }
+
+    /** What the muxer actually did, so an unreadable container is evidence rather than a guess. */
+    fun diagnostics(): Map<String, Long> = mapOf(
+        "muxer_video_track" to videoTrack.toLong(),
+        "muxer_metadata_track" to metadataTrack.toLong(),
+        "muxer_started" to if (started) 1L else 0L,
+        "muxer_video_samples" to videoSamples.toLong(),
+        "muxer_key_frames" to keyFrames.toLong(),
+        "muxer_format_changes" to formatChanges.toLong(),
+    )
 
     override fun stop() {
         if (stopped || !started) return

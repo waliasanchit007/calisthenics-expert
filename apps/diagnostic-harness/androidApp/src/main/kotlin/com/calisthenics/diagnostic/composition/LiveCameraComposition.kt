@@ -1070,6 +1070,17 @@ class LiveCameraComposition internal constructor(
     internal fun videoWriterResult(): com.calisthenics.diagnostic.video.VideoWriterResult? =
         synchronized(monitor) { videoWriterResult }
 
+    /** What the real muxer did this run, empty when this run recorded no video. */
+    internal fun videoMuxerDiagnostics(): Map<String, Long> = synchronized(monitor) {
+        (videoWriter as? com.calisthenics.diagnostic.video.MuxerDiagnostics)?.muxerDiagnostics()
+            ?: emptyMap()
+    }
+
+    /** The encoder component name for this run, or null when this run recorded no video. */
+    internal fun videoEncoderName(): String? = synchronized(monitor) {
+        (videoWriter as? com.calisthenics.diagnostic.video.MuxerDiagnostics)?.encoderName()
+    }
+
     private fun canonicalize(frame: OwnedYuvFrame): ByteArray {
         val upright = yuv420ToUprightRgb24(
             Yuv420Frame(

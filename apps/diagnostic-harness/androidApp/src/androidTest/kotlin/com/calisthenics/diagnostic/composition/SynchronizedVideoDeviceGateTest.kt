@@ -133,9 +133,12 @@ class SynchronizedVideoDeviceGateTest {
             videoFile = videoFile,
             accounting = composition?.videoAccounting(),
             writerResult = composition?.videoWriterResult(),
+            muxerDiagnostics = composition?.videoMuxerDiagnostics().orEmpty(),
+            encoderName = composition?.videoEncoderName(),
             blocking = blocking.distinct().sorted(),
         )
-        videoFile.delete()
+        // Deliberately left in place: the host pulls and verifies it byte-exactly, which is
+        // stronger than the device asserting its own digest. The next run deletes it first.
 
         instrumentation.sendStatus(STATUS_CODE, Bundle().apply { putString(STATUS_TAG, record) })
     }
@@ -162,6 +165,8 @@ class SynchronizedVideoDeviceGateTest {
         videoFile: File,
         accounting: com.calisthenics.diagnostic.video.VideoAccounting?,
         writerResult: com.calisthenics.diagnostic.video.VideoWriterResult?,
+        muxerDiagnostics: Map<String, Long>,
+        encoderName: String?,
         blocking: List<String>,
     ): String = buildJsonObject {
         put("artifact_schema_version", "1.0.0")
@@ -185,7 +190,10 @@ class SynchronizedVideoDeviceGateTest {
         putJsonObject("provenance") {
             // Observed, not asserted. The host compares these against the admitted probe.
             put("harness_git_sha", BuildConfig.PROBE_GIT_SHA)
-            put("codec", demuxed?.codec)
+            // The encoder component name, matching what the Task 3 probe recorded. The demuxed
+            // track MIME is reported separately; they are different identifiers.
+            put("codec", encoderName)
+            put("demuxed_track_mime", demuxed?.codec)
             put("container", demuxed?.container)
             put("camera_id", observation.cameraId)
             put("camera_timestamp_source", observation.timestampSource)
@@ -206,6 +214,7 @@ class SynchronizedVideoDeviceGateTest {
             // Whether finalization actually ran, so an empty container is never unexplained.
             put("writer_finalized", writerResult != null)
             put("muxed_samples", writerResult?.muxedPtsUs?.size)
+            muxerDiagnostics.forEach { (key, value) -> put(key, value) }
         }
         putJsonArray("video_pts_us") { demuxed?.videoPtsUs?.forEach { add(it) } }
         putJsonArray("samples") {

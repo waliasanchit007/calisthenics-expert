@@ -76,14 +76,21 @@ data class MetadataPayload(
     val submittedPtsUs: Long,
 )
 
-/** One encoded unit drained from the encoder, identified by the PTS it was submitted with. */
-class EncodedUnit(val ptsUs: Long, val bytes: ByteArray) {
+/**
+ * One encoded unit drained from the encoder, identified by the PTS it was submitted with.
+ *
+ * [flags] carries the codec's own sample flags through to the muxer. Dropping them writes an AVC
+ * track whose sync-sample table is empty, which is not seekable and which MediaExtractor can
+ * decline to expose at all.
+ */
+class EncodedUnit(val ptsUs: Long, val bytes: ByteArray, val flags: Int = 0) {
     override fun equals(other: Any?): Boolean =
-        this === other || (other is EncodedUnit && ptsUs == other.ptsUs && bytes.contentEquals(other.bytes))
+        this === other ||
+            (other is EncodedUnit && ptsUs == other.ptsUs && flags == other.flags && bytes.contentEquals(other.bytes))
 
-    override fun hashCode(): Int = 31 * ptsUs.hashCode() + bytes.contentHashCode()
+    override fun hashCode(): Int = 31 * (31 * ptsUs.hashCode() + flags) + bytes.contentHashCode()
 
-    override fun toString(): String = "EncodedUnit(ptsUs=$ptsUs, bytes=${bytes.size})"
+    override fun toString(): String = "EncodedUnit(ptsUs=$ptsUs, bytes=${bytes.size}, flags=$flags)"
 }
 
 /** How one submission was classified by the encoder. */
@@ -111,7 +118,7 @@ interface VideoEncoderPort {
 
 /** The muxer seam. The device build supplies MediaMuxer; unit tests supply a recorder. */
 interface VideoMuxerPort {
-    fun writeVideoSample(ptsUs: Long, bytes: ByteArray)
+    fun writeVideoSample(ptsUs: Long, bytes: ByteArray, flags: Int)
 
     fun writeMetadataSample(ptsUs: Long, payload: MetadataPayload)
 
@@ -203,7 +210,7 @@ class SeamedVideoWriter(
         for (unit in encoder.drain()) {
             val payload = pendingMetadata.remove(unit.ptsUs)
                 ?: error("encoder produced PTS ${unit.ptsUs} with no submitted metadata")
-            muxer.writeVideoSample(unit.ptsUs, unit.bytes)
+            muxer.writeVideoSample(unit.ptsUs, unit.bytes, unit.flags)
             muxer.writeMetadataSample(unit.ptsUs, payload)
             muxedPtsUs += unit.ptsUs
         }

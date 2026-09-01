@@ -104,8 +104,17 @@ def probe_digest(probe_path: Path) -> str:
     return hashlib.sha256(probe_path.read_bytes()).hexdigest()
 
 
+_RUN_AS_ERROR = re.compile(rb"^(?:run-as|cat):\s")
+
+
 def pull_binary(serial: str, package: str, remote: str, destination: Path) -> None:
-    """Pull one payload byte-exactly, verifying before it takes its final name."""
+    """Pull one payload byte-exactly, verifying before it takes its final name.
+
+    `run-as` writes its own diagnostics to stdout and can still exit zero, so a failed pull
+    otherwise arrives as a small, plausible file that is then hashed and compared as if it were
+    the payload. Observed: "run-as: unknown package: ..." landed as a 53-byte MP4. Reject anything
+    that starts like a tool error rather than a container.
+    """
     result = subprocess.run(
         ["adb", "-s", serial, "exec-out", "run-as", package, "cat", remote],
         capture_output=True,
@@ -114,6 +123,9 @@ def pull_binary(serial: str, package: str, remote: str, destination: Path) -> No
     if result.returncode != 0 or not result.stdout:
         detail = result.stderr.decode(errors="replace").strip()
         raise SynchronizedVideoCheckError(f"failed to pull {remote}: {detail}")
+    if _RUN_AS_ERROR.match(result.stdout):
+        detail = result.stdout[:200].decode(errors="replace").strip()
+        raise SynchronizedVideoCheckError(f"pull of {remote} returned a tool error: {detail}")
     temporary = destination.with_suffix(destination.suffix + ".partial")
     with open(temporary, "wb") as handle:
         handle.write(result.stdout)
@@ -200,7 +212,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("transcript", type=Path, help="instrumentation transcript")
     parser.add_argument("--probe", type=Path, required=True, help="admitted Task 3 probe record")
-    parser.add_argument("--package", default="com.calisthenics.diagnostic")
+    parser.add_argument("--package", default="com.calisthenics.diagnostic.android")
     parser.add_argument("--pull", action="store_true", help="also pull and verify the payloads")
     try:
         args = parser.parse_args(argv)
@@ -217,11 +229,15 @@ def main(argv: list[str] | None = None) -> int:
         if args.pull:
             serial = require_exactly_one_authorized_device()
             artifacts = record.get("artifacts") or {}
-            session_id = record.get("session_id")
-            remote_root = f"/data/user/0/{args.package}/files/diagnostic-harness/exports/{session_id}"
+            # The gate writes its container app-private, outside every registered export root:
+            # it observes the encoder rather than publishing a study artifact.
+            path_ref = artifacts.get("video_path_ref")
+            if not path_ref or "/" in path_ref:
+                raise SynchronizedVideoCheckError("record has no usable video_path_ref")
+            remote = f"/data/user/0/{args.package}/files/{path_ref}"
             with tempfile.TemporaryDirectory() as staging:
                 video = Path(staging) / "video.mp4"
-                pull_binary(serial, args.package, f"{remote_root}/video.mp4", video)
+                pull_binary(serial, args.package, remote, video)
                 reasons.extend(
                     verify_payload(
                         video,
