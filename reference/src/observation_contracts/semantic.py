@@ -50,9 +50,13 @@ _MEDIA_REQUIREMENT_CONTRADICTED_CODE = "SESSION.MEDIA_REQUIREMENT_CONTRADICTED"
 _MEDIA_DIGEST_MISMATCH_CODE = "SESSION.MEDIA_DIGEST_MISMATCH"
 _SYNC_EVIDENCE_MISSING_CODE = "SESSION.SYNC_EVIDENCE_MISSING"
 _SYNC_CLOCK_MAPPING_CODE = "SESSION.SYNC_CLOCK_MAPPING"
+_SYNC_PROFILE_UNSUPPORTED_CODE = "SESSION.SYNC_PROFILE_UNSUPPORTED"
+_SYNC_TIMEBASE_INVALID_CODE = "SESSION.SYNC_TIMEBASE_INVALID"
 _SYNC_ENDPOINT_MISMATCH_CODE = "SESSION.SYNC_ENDPOINT_MISMATCH"
 _VIDEO_COUNT_MISMATCH_CODE = "SESSION.VIDEO_COUNT_MISMATCH"
-_SYNC_MAPPING_METHOD = "camera_capture_to_container_pts_constant_offset_v1"
+_SYNC_EXACT_MAPPING_METHOD = "camera_capture_to_container_pts_constant_offset_v1"
+_SYNC_BOUNDED_MAPPING_METHOD = "camera_capture_to_container_pts_bounded_quantization_v1"
+_SYNC_BOUNDED_PROFILE = "bounded_quantization"
 _FAILURE_CLASSIFICATIONS = frozenset({"backend_call_failed", "session_teardown_timeout"})
 
 
@@ -721,16 +725,35 @@ def _synchronization_endpoint_issue(
 def _synchronization_mapping_issue(
     path: str, evidence: Mapping[str, Any]
 ) -> ValidationIssue | None:
+    mapping_method = evidence.get("mapping_method")
+    if mapping_method not in {_SYNC_EXACT_MAPPING_METHOD, _SYNC_BOUNDED_MAPPING_METHOD}:
+        return _session_issue(
+            path,
+            "synchronization evidence does not use an admitted mapping method",
+            pointer="/mapping_method",
+            expected=[_SYNC_EXACT_MAPPING_METHOD, _SYNC_BOUNDED_MAPPING_METHOD],
+            actual=mapping_method,
+            code=_SYNC_CLOCK_MAPPING_CODE,
+        )
     if (
-        evidence.get("mapping_method") != _SYNC_MAPPING_METHOD
-        or evidence.get("container_drift_ns_per_s") != 0
+        mapping_method == _SYNC_BOUNDED_MAPPING_METHOD
+        and evidence.get("sync_profile") != _SYNC_BOUNDED_PROFILE
     ):
         return _session_issue(
             path,
-            "synchronization evidence does not use the admitted constant-offset mapping",
-            pointer="/mapping_method",
-            expected=_SYNC_MAPPING_METHOD,
-            actual=evidence.get("mapping_method"),
+            "bounded synchronization evidence does not declare its admitted profile",
+            pointer="/sync_profile",
+            expected=_SYNC_BOUNDED_PROFILE,
+            actual=evidence.get("sync_profile"),
+            code=_SYNC_PROFILE_UNSUPPORTED_CODE,
+        )
+    if evidence.get("container_drift_ns_per_s") != 0:
+        return _session_issue(
+            path,
+            "synchronization evidence does not carry the admitted zero point estimate",
+            pointer="/container_drift_ns_per_s",
+            expected=0,
+            actual=evidence.get("container_drift_ns_per_s"),
             code=_SYNC_CLOCK_MAPPING_CODE,
         )
     samples = evidence.get("samples")
@@ -767,7 +790,9 @@ def _synchronization_mapping_issue(
                 code=_SYNC_CLOCK_MAPPING_CODE,
             )
         offsets.append((submitted - demuxed) * 1_000)
-    if len(set(offsets)) != 1 or evidence.get("container_offset_ns") != offsets[0]:
+    if mapping_method == _SYNC_EXACT_MAPPING_METHOD and (
+        len(set(offsets)) != 1 or evidence.get("container_offset_ns") != offsets[0]
+    ):
         return _session_issue(
             path,
             "container offset is not one constant value derived from every sample",
@@ -776,6 +801,55 @@ def _synchronization_mapping_issue(
             actual=evidence.get("container_offset_ns"),
             code=_SYNC_CLOCK_MAPPING_CODE,
         )
+    if mapping_method == _SYNC_BOUNDED_MAPPING_METHOD:
+        timebases = _mapping_or_none(evidence.get("container_timebases"))
+        video_timebase = _integer(timebases or {}, "video_ticks_per_second")
+        metadata_timebase = _integer(timebases or {}, "metadata_ticks_per_second")
+        if (
+            video_timebase is None
+            or metadata_timebase is None
+            or video_timebase <= 0
+            or metadata_timebase <= 0
+            or video_timebase != metadata_timebase
+        ):
+            return _session_issue(
+                path,
+                "bounded synchronization evidence has no one positive common track timebase",
+                pointer="/container_timebases",
+                expected="equal positive video and metadata ticks per second",
+                actual=timebases,
+                code=_SYNC_TIMEBASE_INVALID_CODE,
+            )
+        ordered_offsets = sorted(offsets)
+        interval = _mapping_or_none(evidence.get("container_offset_interval_ns"))
+        derived_bound = _ceil_div(2_000_000_000, video_timebase) + 2_000
+        representative = ordered_offsets[(len(ordered_offsets) - 1) // 2]
+        actual_interval = {
+            "minimum": ordered_offsets[0],
+            "maximum": ordered_offsets[-1],
+        }
+        if (
+            interval != actual_interval
+            or evidence.get("container_quantization_span_bound_ns") != derived_bound
+            or evidence.get("container_offset_ns") != representative
+            or ordered_offsets[-1] - ordered_offsets[0] > derived_bound
+        ):
+            return _session_issue(
+                path,
+                "bounded container offset interval is not derived from the common track timebase",
+                pointer="/container_offset_interval_ns",
+                expected={
+                    "interval": actual_interval,
+                    "representative": representative,
+                    "span_bound_ns": derived_bound,
+                },
+                actual={
+                    "interval": interval,
+                    "representative": evidence.get("container_offset_ns"),
+                    "span_bound_ns": evidence.get("container_quantization_span_bound_ns"),
+                },
+                code=_SYNC_CLOCK_MAPPING_CODE,
+            )
     video_pts = evidence.get("video_pts_us")
     demuxed_pts = [
         sample.get("demuxed_pts_us") for sample in samples if isinstance(sample, Mapping)
@@ -790,6 +864,11 @@ def _synchronization_mapping_issue(
             code=_SYNC_CLOCK_MAPPING_CODE,
         )
     return None
+
+
+def _ceil_div(numerator: int, denominator: int) -> int:
+    """Return the mathematical ceiling for one positive integer ratio."""
+    return (numerator + denominator - 1) // denominator
 
 
 def _published_video_bytes(path: str, references: Sequence[object]) -> bool:

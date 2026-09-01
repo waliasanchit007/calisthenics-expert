@@ -1,0 +1,27 @@
+{
+  "fixture_metadata_schema_version": "1.0.0",
+  "fixture_id": "1d6a1f71-9f5a-4f89-82a4-e6538765aa31",
+  "synthetic": true,
+  "preprocessing_contract_version": "1.0.0",
+  "frame_width": 2,
+  "frame_height": 1,
+  "pixel_format": "rgb24",
+  "color_space": "srgb",
+  "color_range": "full",
+  "channel_order": "rgb",
+  "orientation": "upright",
+  "frames": [
+    {
+      "frame_index": 0,
+      "timestamp_ns": 0,
+      "path": "decoded/frame_000000.rgb24",
+      "byte_length": 6,
+      "sha256": "f33ae3bc9a22cd7564990a794789954409977013966fb1a8f43c35776b833a95"
+    }
+  ],
+  "generation": {
+    "generator_name": "bounded_synchronization_contract_fixture",
+    "generator_version": "1.0.0",
+    "description": "synthetic 90 kHz bounded-quantization admission marker with an off-grid 9000 ns offset interval"
+  }
+}

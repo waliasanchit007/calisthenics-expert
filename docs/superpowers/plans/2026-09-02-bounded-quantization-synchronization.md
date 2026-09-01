@@ -48,12 +48,12 @@
 - Consumes: `validate_document` and `_synchronization_issues` through public session validation.
 - Produces: executable examples of exact legacy and bounded v1.1 behavior.
 
-- [ ] Add a valid 90 kHz off-grid fixture with a 9,000 ns interval and a 24,223 ns derived bound.
-- [ ] Preserve and assert the existing exact v1.0 fixture unchanged.
-- [ ] Add a sub-tick middle-sample perturbation derived from `1_000_000 / f` that remains valid.
-- [ ] Add the first integral-microsecond perturbation above the formula-derived bound and assert `SESSION.SYNC_CLOCK_MAPPING`.
-- [ ] Add missing/zero/inconsistent-timebase and unknown-profile tests with new stable codes.
-- [ ] Run focused tests and observe failures caused by absent bounded-profile support.
+- [x] Add a valid 90 kHz off-grid fixture with a 9,000 ns interval and a 24,223 ns derived bound.
+- [x] Preserve and assert the existing exact v1.0 fixture unchanged.
+- [x] Add a sub-tick middle-sample perturbation derived from `1_000_000 / f` that remains valid.
+- [x] Add the first integral-microsecond perturbation above the formula-derived bound and assert `SESSION.SYNC_CLOCK_MAPPING`.
+- [x] Add missing/zero/inconsistent-timebase and unknown-profile tests with new stable codes.
+- [x] Run focused tests and observe failures caused by absent bounded-profile support.
 
 ### Task 3: Release synchronization evidence v1.1.0
 
@@ -67,11 +67,11 @@
 - Consumes: exact or bounded synchronization evidence.
 - Produces: profile-dispatched structural and semantic admission while retaining exact v1.0 behavior.
 
-- [ ] Add `sync_profile`, track timebases, offset interval, and derived span bound to the v1 schema using profile-specific conditional requirements.
-- [ ] Register `SESSION.SYNC_PROFILE_UNSUPPORTED` and `SESSION.SYNC_TIMEBASE_INVALID`; retain `SESSION.SYNC_CLOCK_MAPPING` for a mathematically invalid mapping.
-- [ ] Implement `ceil_div`, lower-median offset, and the integer derived-bound formula.
-- [ ] Dispatch exact evidence through the unchanged equality rule and bounded evidence through the new interval/bound rule.
-- [ ] Run focused structural/semantic tests, committed fixtures, registry guards, Ruff, and strict mypy; commit.
+- [x] Add `sync_profile`, track timebases, offset interval, and derived span bound to the v1 schema using profile-specific conditional requirements.
+- [x] Register `SESSION.SYNC_PROFILE_UNSUPPORTED` and `SESSION.SYNC_TIMEBASE_INVALID`; retain `SESSION.SYNC_CLOCK_MAPPING` for a mathematically invalid mapping.
+- [x] Implement `ceil_div`, lower-median offset, and the integer derived-bound formula.
+- [x] Dispatch exact evidence through the unchanged equality rule and bounded evidence through the new interval/bound rule.
+- [x] Run focused structural/semantic tests, committed fixtures, registry guards, Ruff, and strict mypy; commit.
 
 ### Task 4: Add Android MP4 timescale observation and bounded evidence
 

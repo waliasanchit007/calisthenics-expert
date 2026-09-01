@@ -4,6 +4,23 @@ This changelog records releases of the observation schemas and their supporting
 tooling contracts. Application, harness, model, and analysis-package versions
 are independent of these contracts.
 
+## [1.4.0] - 2026-09-02
+
+Backward-compatible synchronization-reader extension following physical S25 evidence.
+
+- `synchronization_evidence v1.1.0` retains the released exact constant-offset profile and adds
+  `bounded_quantization` for finite container timebases.
+- Bounded evidence records equal positive video/metadata track timebases, the complete observed
+  offset interval, and a span bound derived with integer arithmetic from that timebase. Absolute
+  offset magnitude remains unbounded.
+- The first finalized S25 synchronized-video candidate observed a 90 kHz timebase and a 9 us
+  offset span, below one 11.111... us tick, before publication correctly failed closed under the
+  exact profile. The earlier exact three-frame probe remains historical evidence; a controlled
+  on-grid/off-grid probe is required before the physical publication gate is admitted.
+- Added stable failures `SESSION.SYNC_PROFILE_UNSUPPORTED` and
+  `SESSION.SYNC_TIMEBASE_INVALID`. Existing mapping violations retain
+  `SESSION.SYNC_CLOCK_MAPPING`.
+
 ## [1.3.0] - 2026-08-29
 
 Backward-compatible minor release of the synchronized non-participant session contract.

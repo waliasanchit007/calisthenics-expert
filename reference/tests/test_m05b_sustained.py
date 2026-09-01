@@ -159,7 +159,7 @@ def test_sustained_semantic_codes_await_task8_registry_stabilization() -> None:
     # disjointness guard with the complete subset requirement
     # draft_task8_codes <= released -- never 'not ...isdisjoint(...)', which passes
     # when only one of the 34 codes is released.
-    assert registry["registry_version"] == "1.3.0"
+    assert registry["registry_version"] == "1.4.0"
     assert draft_task8_codes.isdisjoint(released)
 
 

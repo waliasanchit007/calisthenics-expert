@@ -24,8 +24,14 @@ NEW_CODES = {
     "SESSION.VIDEO_COUNT_MISMATCH",
 }
 
+BOUNDED_PROFILE_CODES = {
+    "SESSION.SYNC_PROFILE_UNSUPPORTED",
+    "SESSION.SYNC_TIMEBASE_INVALID",
+}
+
 SESSION_ID = "3f1c2a90-7b45-4c8e-9d21-6a0e5b4c3d27"
 VIDEO_BYTES = b"synthetic mp4 payload"
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def _synchronization_evidence(*, video_sha256: str | None = None) -> dict[str, Any]:
@@ -90,14 +96,47 @@ def _synchronization_evidence(*, video_sha256: str | None = None) -> dict[str, A
     }
 
 
-def synchronized_manifest(tmp_path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def _bounded_synchronization_evidence(*, video_sha256: str | None = None) -> dict[str, Any]:
+    evidence = _synchronization_evidence(video_sha256=video_sha256)
+    demuxed = [0, 33_332, 66_657]
+    evidence.update(
+        {
+            "synchronization_evidence_schema_version": "1.1.0",
+            "sync_profile": "bounded_quantization",
+            "mapping_method": "camera_capture_to_container_pts_bounded_quantization_v1",
+            "container_offset_ns": 1_000_001_000,
+            "container_offset_interval_ns": {
+                "minimum": 1_000_000_000,
+                "maximum": 1_000_009_000,
+            },
+            "container_quantization_span_bound_ns": 24_223,
+            "container_timebases": {
+                "video_ticks_per_second": 90_000,
+                "metadata_ticks_per_second": 90_000,
+            },
+            "video_pts_us": demuxed,
+            "first_encoded_frame_pts_us": demuxed[0],
+            "last_encoded_frame_pts_us": demuxed[-1],
+        }
+    )
+    for sample, demuxed_pts_us in zip(evidence["samples"], demuxed, strict=True):
+        sample["demuxed_pts_us"] = demuxed_pts_us
+    return evidence
+
+
+def synchronized_manifest(
+    tmp_path: Path,
+    *,
+    evidence: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     video_path = tmp_path / "media" / "session.mp4"
     video_path.parent.mkdir(parents=True)
     video_path.write_bytes(VIDEO_BYTES)
     pose_path = tmp_path / "frames.ndjson"
     pose_path.write_bytes(b"pose-stream")
     evidence_path = tmp_path / "sync.json"
-    evidence_path.write_text(json.dumps(_synchronization_evidence()), encoding="utf-8")
+    evidence_document = evidence or _synchronization_evidence()
+    evidence_path.write_text(json.dumps(evidence_document), encoding="utf-8")
 
     manifest = minimal_manifest(
         schema_version="1.2.0",
@@ -120,7 +159,7 @@ def synchronized_manifest(tmp_path: Path) -> tuple[dict[str, Any], list[dict[str
             "raw_pose_stream": {
                 "path_ref": "frames.ndjson",
                 "sha256": hashlib.sha256(b"pose-stream").hexdigest(),
-                "schema_version": "1.0.0",
+                "schema_version": evidence_document["synchronization_evidence_schema_version"],
             },
             "synchronization_evidence": {
                 "path_ref": "sync.json",
@@ -272,3 +311,166 @@ def test_synchronization_evidence_schema_is_structurally_admitted(tmp_path: Path
     assert (
         validate_document(evidence, "synchronization_evidence", str(tmp_path / "sync.json")) == []
     )
+
+
+def test_bounded_quantization_evidence_is_structurally_and_semantically_admitted(
+    tmp_path: Path,
+) -> None:
+    evidence = _bounded_synchronization_evidence()
+    manifest, frames = synchronized_manifest(tmp_path, evidence=evidence)
+
+    assert (
+        validate_document(
+            evidence,
+            "synchronization_evidence",
+            str(tmp_path / "sync.json"),
+        )
+        == []
+    )
+    assert (
+        _codes(
+            validate_session_manifest_semantics(
+                manifest,
+                frames,
+                str(tmp_path / "manifest.json"),
+            )
+        )
+        == []
+    )
+
+
+def test_bounded_profile_accepts_a_derived_sub_tick_middle_sample_perturbation(
+    tmp_path: Path,
+) -> None:
+    evidence = _bounded_synchronization_evidence()
+    ticks_per_second = evidence["container_timebases"]["video_ticks_per_second"]
+    sub_tick_us = (1_000_000 // ticks_per_second) - 1
+    evidence["samples"][1]["demuxed_pts_us"] -= sub_tick_us
+    evidence["video_pts_us"][1] -= sub_tick_us
+    offsets_ns = sorted(
+        (sample["submitted_pts_us"] - sample["demuxed_pts_us"]) * 1_000
+        for sample in evidence["samples"]
+    )
+    evidence["container_offset_ns"] = offsets_ns[(len(offsets_ns) - 1) // 2]
+    evidence["container_offset_interval_ns"] = {
+        "minimum": offsets_ns[0],
+        "maximum": offsets_ns[-1],
+    }
+    manifest, frames = synchronized_manifest(tmp_path, evidence=evidence)
+
+    assert (
+        _codes(
+            validate_session_manifest_semantics(
+                manifest,
+                frames,
+                str(tmp_path / "manifest.json"),
+            )
+        )
+        == []
+    )
+
+
+def test_bounded_profile_blocks_the_first_integral_microsecond_span_above_the_derived_bound(
+    tmp_path: Path,
+) -> None:
+    evidence = _bounded_synchronization_evidence()
+    ticks_per_second = evidence["container_timebases"]["video_ticks_per_second"]
+    derived_bound_ns = ((2_000_000_000 + ticks_per_second - 1) // ticks_per_second) + 2_000
+    over_bound_us = (derived_bound_ns // 1_000) + 1
+    evidence["samples"][1]["demuxed_pts_us"] -= over_bound_us
+    evidence["video_pts_us"][1] -= over_bound_us
+    offsets_ns = sorted(
+        (sample["submitted_pts_us"] - sample["demuxed_pts_us"]) * 1_000
+        for sample in evidence["samples"]
+    )
+    evidence["container_offset_ns"] = offsets_ns[(len(offsets_ns) - 1) // 2]
+    evidence["container_offset_interval_ns"] = {
+        "minimum": offsets_ns[0],
+        "maximum": offsets_ns[-1],
+    }
+    manifest, frames = synchronized_manifest(tmp_path, evidence=evidence)
+
+    assert _codes(
+        validate_session_manifest_semantics(
+            manifest,
+            frames,
+            str(tmp_path / "manifest.json"),
+        )
+    ) == ["SESSION.SYNC_CLOCK_MAPPING"]
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("container_offset_interval_ns", {"minimum": 0, "maximum": 9_000}),
+        ("container_quantization_span_bound_ns", 24_222),
+        ("container_offset_ns", 1_000_000_000),
+    ],
+)
+def test_bounded_profile_rejects_claimed_values_not_derived_from_samples_and_timebase(
+    tmp_path: Path,
+    field: str,
+    replacement: object,
+) -> None:
+    evidence = _bounded_synchronization_evidence()
+    evidence[field] = replacement
+    manifest, frames = synchronized_manifest(tmp_path, evidence=evidence)
+
+    assert _codes(
+        validate_session_manifest_semantics(
+            manifest,
+            frames,
+            str(tmp_path / "manifest.json"),
+        )
+    ) == ["SESSION.SYNC_CLOCK_MAPPING"]
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["missing", "zero", "inconsistent"],
+)
+def test_bounded_profile_fails_closed_on_invalid_track_timebases(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    evidence = _bounded_synchronization_evidence()
+    if mutation == "missing":
+        evidence.pop("container_timebases")
+    elif mutation == "zero":
+        evidence["container_timebases"]["video_ticks_per_second"] = 0
+    else:
+        evidence["container_timebases"]["metadata_ticks_per_second"] = 1_000
+    manifest, frames = synchronized_manifest(tmp_path, evidence=evidence)
+
+    assert _codes(
+        validate_session_manifest_semantics(
+            manifest,
+            frames,
+            str(tmp_path / "manifest.json"),
+        )
+    ) == ["SESSION.SYNC_TIMEBASE_INVALID"]
+
+
+def test_unknown_synchronization_profile_fails_closed_with_its_stable_code(
+    tmp_path: Path,
+) -> None:
+    evidence = _bounded_synchronization_evidence()
+    evidence["sync_profile"] = "future_profile"
+    manifest, frames = synchronized_manifest(tmp_path, evidence=evidence)
+
+    assert _codes(
+        validate_session_manifest_semantics(
+            manifest,
+            frames,
+            str(tmp_path / "manifest.json"),
+        )
+    ) == ["SESSION.SYNC_PROFILE_UNSUPPORTED"]
+
+
+def test_bounded_profile_codes_are_additive_registry_entries() -> None:
+    registry = json.loads(
+        (ROOT / "contracts/tooling/validator_error_codes.v1.json").read_text(encoding="utf-8")
+    )
+
+    assert registry["registry_version"] == "1.4.0"
+    assert BOUNDED_PROFILE_CODES <= set(registry["codes"])

@@ -48,6 +48,7 @@ def test_every_negative_fixture_fails_with_declared_code() -> None:
         "media_digest_mismatch",
         "sync_evidence_missing",
         "sync_clock_mapping",
+        "sync_bounded_span",
         "sync_endpoint_mismatch",
         "video_count_mismatch",
     }
@@ -216,6 +217,37 @@ def test_committed_synchronization_group_is_fully_valid_and_pins_s25_offset() ->
     ]
 
 
+def test_committed_bounded_synchronization_group_is_fully_valid_and_off_grid() -> None:
+    synchronization = repository_root() / "fixtures/synthetic/valid/synchronization_bounded"
+    manifest_path = synchronization / "manifest.json"
+    frames_path = synchronization / "frames.ndjson"
+    evidence_path = synchronization / "sync.json"
+    manifest = _json(manifest_path)
+    evidence = _json(evidence_path)
+
+    issues = validate_document(manifest, "session_manifest", str(manifest_path))
+    frames, frame_issues = validate_ndjson(frames_path)
+    issues.extend(frame_issues)
+    issues.extend(validate_frame_stream(manifest, frames, str(manifest_path), str(frames_path)))
+    issues.extend(validate_session_manifest_semantics(manifest, frames, str(manifest_path)))
+    issues.extend(validate_document(evidence, "synchronization_evidence", str(evidence_path)))
+
+    offsets_ns = [
+        (sample["submitted_pts_us"] - sample["demuxed_pts_us"]) * 1_000
+        for sample in evidence["samples"]
+    ]
+    assert issues == []
+    assert evidence["synchronization_evidence_schema_version"] == "1.1.0"
+    assert evidence["sync_profile"] == "bounded_quantization"
+    assert evidence["container_timebases"] == {
+        "video_ticks_per_second": 90_000,
+        "metadata_ticks_per_second": 90_000,
+    }
+    assert max(offsets_ns) - min(offsets_ns) == 9_000
+    assert evidence["container_quantization_span_bound_ns"] == 24_223
+    assert len(set(offsets_ns)) > 1
+
+
 def test_committed_fixture_replay_sequence_matches_raw_stream_and_accounting() -> None:
     replay = repository_root() / "fixtures/synthetic/valid/fixture_replay"
     manifest = _json(replay / "manifest.json")
@@ -261,6 +293,7 @@ def test_every_committed_fixture_directory_is_enumerated() -> None:
     assert "session" in discovered
     assert "fixture_replay" in discovered
     assert "fixture_detection" in discovered
+    assert "synchronization_bounded" in discovered
 
 
 def test_every_committed_fixture_metadata_is_schema_valid_and_hash_exact() -> None:
