@@ -267,10 +267,28 @@ def test_committed_artifact_paths_reject_traversal_and_non_leaf_names(name: str)
         checker.remote_artifact_path("00000000-0000-4000-8000-000000000001", name)
 
 
-def test_an_absolute_path_makes_a_record_unsanitized(tmp_path: Path) -> None:
+def test_session_relative_artifact_paths_are_sanitized(tmp_path: Path) -> None:
+    probe_path = _write_probe(tmp_path)
+
+    checker.assert_sanitized(_record(probe_path))
+
+
+@pytest.mark.parametrize(
+    "absolute_path",
+    [
+        "/data/user/0/com.example/files/video.mp4",
+        "file:///data/user/0/com.example/files/video.mp4",
+        "C:\\data\\video.mp4",
+        "C:/data/video.mp4",
+    ],
+)
+def test_an_absolute_path_makes_a_record_unsanitized(
+    tmp_path: Path,
+    absolute_path: str,
+) -> None:
     probe_path = _write_probe(tmp_path)
     record = _record(probe_path)
-    record["artifacts"]["video_path_ref"] = "/data/user/0/com.example/files/video.mp4"
+    record["artifacts"]["video_path_ref"] = absolute_path
 
     with pytest.raises(checker.SynchronizedVideoCheckError):
         checker.assert_sanitized(record)

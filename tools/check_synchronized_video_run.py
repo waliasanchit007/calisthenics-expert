@@ -38,7 +38,7 @@ _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SESSION_ID = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 )
-_ABSOLUTE_PATH = re.compile(r"(?:file://)?(?:/|[A-Za-z]:[\\/])\S+")
+_ABSOLUTE_PATH = re.compile(r"^(?:file://)?(?:/|[A-Za-z]:[\\/])\S+")
 
 EXIT_OK = 0
 EXIT_BLOCKED = 1
