@@ -108,7 +108,7 @@
 - [x] Add RED host and Kotlin tests requiring both controlled sequences and exact identity binding.
 - [x] Emit on-grid timestamps aligned to the observed track tick grid and deliberately off-grid timestamps.
 - [x] Recompute exact/on-grid and bounded/off-grid verdicts on the host; reject vacuous exact off-grid output.
-- [ ] Run the physical S25 control, validate exit status, manually record the typed result, and verify its ledger.
+- [x] Run the physical S25 control, validate exit status, manually record the typed result, and verify its ledger.
 
 ### Task 6: Recover the synchronized publication gate
 

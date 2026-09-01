@@ -733,9 +733,10 @@ def test_s25_synchronized_video_target_is_isolated_binary_safe_and_checker_owned
     )
     assert "SynchronizedVideoDeviceGateTest" in target
     assert "tools/check_synchronized_video_run.py" in target
-    assert "--probe docs/evidence/device-probes/" in target, (
-        "the gate must consume the admitted Task 3 probe rather than assume its conclusion"
-    )
+    assert (
+        "--probe docs/evidence/device-probes/"
+        "s25-ultra-SM-S938B-api36-container-timestamp-controlled.json" in target
+    ), "the gate must consume the admitted non-vacuous controlled probe"
     assert "found $$device_count" in target
     assert "emulator-*)" in target
     assert "SM-S938*" in target

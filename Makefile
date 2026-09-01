@@ -673,7 +673,7 @@ verify-harness-s25-synchronized-video:
 		exit "$$instrument_status"; \
 	fi; \
 	$(VENV_PYTHON) tools/check_synchronized_video_run.py "$$transcript" \
-		--probe docs/evidence/device-probes/s25-ultra-SM-S938B-api36-container-timestamp.json --pull
+		--probe docs/evidence/device-probes/s25-ultra-SM-S938B-api36-container-timestamp-controlled.json --pull
 
 # Task 5's bounded physical live-capture evidence gate. The device test emits one typed record;
 # the host checker pulls and validates the exact export before deriving the final verdict. This

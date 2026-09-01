@@ -3,10 +3,10 @@
   "api_level": 36,
   "device_class": "physical_device",
   "device_identity": "samsung/SM-S938B/pa3q/pa3qxins",
-  "evidence_file": "docs/evidence/device-probes/s25-ultra-SM-S938B-api36-container-timestamp.json",
-  "evidence_sha256": "c05267c155f2ad48a8931f11c5e064835b608e78c7969c5068f4b39a4c0b5aee",
+  "evidence_file": "docs/evidence/device-probes/s25-ultra-SM-S938B-api36-container-timestamp-controlled.json",
+  "evidence_sha256": "1fd2bd9375fd0783742db5b05da49374eaec13d05485a34b2cb371ef5f869292",
   "record_kind": "container_timestamp_probe_device_gate_observation",
-  "recorded_on_utc_date": "2026-08-29",
+  "recorded_on_utc_date": "2026-09-02",
   "status": "recorded",
   "timestamp_admission": "admitted"
 }

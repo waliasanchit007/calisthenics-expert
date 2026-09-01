@@ -1,0 +1,64 @@
+{
+  "artifact_schema_version": "1.1.0",
+  "blocking_reasons": [],
+  "blocking_result": false,
+  "contains_landmark_coordinates": false,
+  "emitted_by": "com.calisthenics.diagnostic.probe.ContainerTimestampProbeTest",
+  "environment": {
+    "abi": "arm64-v8a",
+    "android_release": "16",
+    "api_level": 36,
+    "device_class": "physical_device",
+    "device_fingerprint": "samsung/pa3qxins/pa3q:16/BP4A.251205.006/S938BXXSBCZG3_OXMBCZG3:user/release-keys",
+    "device_identity": "samsung/SM-S938B/pa3q/pa3qxins",
+    "manufacturer": "samsung",
+    "marketing_name": "",
+    "model": "SM-S938B"
+  },
+  "non_participant_observation": true,
+  "observation": {
+    "container_timebases": {
+      "metadata_ticks_per_second": 90000,
+      "video_ticks_per_second": 90000
+    },
+    "off_grid": {
+      "constant_offset_us": null,
+      "demuxed_pts_us": [
+        0,
+        33300,
+        66600
+      ],
+      "offset_interval_ns": {
+        "maximum": 1000002000,
+        "minimum": 1000000000
+      },
+      "quantization_span_bound_ns": 24223,
+      "submitted_pts_us": [
+        1000000,
+        1033301,
+        1066602
+      ]
+    },
+    "on_grid": {
+      "constant_offset_us": 1000000,
+      "demuxed_pts_us": [
+        0,
+        33300,
+        66600
+      ],
+      "submitted_pts_us": [
+        1000000,
+        1033300,
+        1066600
+      ]
+    }
+  },
+  "observation_subject": "device_container_timestamp_transform",
+  "provenance": {
+    "codec": "c2.qti.avc.encoder",
+    "container": "video/mp4",
+    "harness_git_sha": "91e722e70c52d2df829c2b73849fce205969ef92"
+  },
+  "record_kind": "container_timestamp_probe_device_gate_observation",
+  "sanitized": true
+}
