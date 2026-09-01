@@ -720,7 +720,9 @@ def test_s25_synchronized_video_target_is_isolated_binary_safe_and_checker_owned
     some hosts and would silently corrupt an MP4 while leaving a plausible file behind.
     """
     makefile = (ROOT / "Makefile").read_text()
-    target = makefile.split("verify-harness-s25-synchronized-video:", 1)[1]
+    target = makefile.split("verify-harness-s25-synchronized-video:", 1)[1].split(
+        "\n# Task 5's bounded physical live-capture evidence gate.", 1
+    )[0]
 
     phony_line = makefile.split("\n.PHONY", 1)[1].split("\n", 1)[0]
     assert "verify-harness-s25-synchronized-video" in phony_line, (
@@ -741,6 +743,16 @@ def test_s25_synchronized_video_target_is_isolated_binary_safe_and_checker_owned
     assert "OK (" not in target, (
         "catches the verdict being decided by grepping a success line instead of an exit status"
     )
+    assert "fetch-model-asset" in target
+    assert "git status --porcelain" in target
+    assert target.count("exec-out cat") >= 2, (
+        "the installed app and test APK bytes must be compared with the exact local candidate"
+    )
+    assert "actual_app_sha256" in target and "expected_app_sha256" in target
+    assert "actual_test_sha256" in target and "expected_test_sha256" in target
+    assert '[ "$$actual_app_sha256" != "$$expected_app_sha256" ]' in target
+    assert '[ "$$actual_test_sha256" != "$$expected_test_sha256" ]' in target
+    assert "installed candidate bytes differ from built candidate" in target
 
 
 def test_synchronized_video_checker_never_pulls_binaries_in_text_mode() -> None:

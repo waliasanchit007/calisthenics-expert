@@ -132,6 +132,29 @@ class LiveCameraCompositionTest {
     }
 
     @Test
+    fun theFinalizedContainerIsObservedAfterWriterFinishAndBeforeTheRestOfThePreSealFence() {
+        val writer = RecordingVideoWriter()
+        withHarness(Harness(recordingVideoWriter = writer, observeFinalizedVideo = true)) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            harness.source.emit(frame(timestampNs = 1_000_002_000L))
+            harness.inference.completeSuccess()
+
+            harness.composition.stop()
+
+            assertTrue(
+                harness.events.indexOf("video.writer.finish") <
+                    harness.events.indexOf("video.observe.finalized"),
+                "the muxer must finish before its container is measured",
+            )
+            assertTrue(
+                harness.events.indexOf("video.observe.finalized") <
+                    harness.events.indexOf("encoder.finalize"),
+                "the container observation must complete before the remaining pre-seal fence",
+            )
+        }
+    }
+
+    @Test
     fun abandoningTheSessionStillFinalizesTheVideoWriter() {
         var now = 1_000_000_000L
         val writer = RecordingVideoWriter()
@@ -149,6 +172,26 @@ class LiveCameraCompositionTest {
         // is left unfinalized: on the device that produced a 40-byte stub with every frame
         // encoded and nothing muxed.
         assertEquals(1, writer.finishCount, "abandon must finalize the video writer")
+    }
+
+    @Test
+    fun abandoningFinalizesButNeverAttemptsPublicationEvidence() {
+        val writer = RecordingVideoWriter()
+        val harness = Harness(recordingVideoWriter = writer, observeFinalizedVideo = true)
+        try {
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            harness.source.emit(frame(timestampNs = 1_000_002_000L))
+
+            harness.composition.abandon()
+
+            assertEquals(1, writer.finishCount)
+            assertFalse(
+                harness.events.contains("video.observe.finalized"),
+                "an abandoned attempt is finalized for cleanup, not measured for publication",
+            )
+        } finally {
+            harness.composition.abandon()
+        }
     }
 
     @Test
@@ -1583,6 +1626,7 @@ class LiveCameraCompositionTest {
         durableStageAppendEntered: CountDownLatch = CountDownLatch(0),
         releaseDurableStageAppend: CountDownLatch = CountDownLatch(0),
         val recordingVideoWriter: RecordingVideoWriter? = null,
+        observeFinalizedVideo: Boolean = false,
     ) {
         val events = mutableListOf<String>()
         val inference = FakeInference(events)
@@ -1666,6 +1710,11 @@ class LiveCameraCompositionTest {
                             }
                         }
                     }
+                },
+                finalizedVideoObserver = if (observeFinalizedVideo) {
+                    { _, _ -> events += "video.observe.finalized" }
+                } else {
+                    null
                 },
                 sessionFinalizerFactory = { template, manifestAtFinalization, monotonicNowNs ->
                     finalizerFailure?.let { throw it }

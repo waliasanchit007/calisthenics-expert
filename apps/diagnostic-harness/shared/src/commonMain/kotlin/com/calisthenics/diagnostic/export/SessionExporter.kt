@@ -41,7 +41,17 @@ data class ObservedVideoSynchronization(
     val driftNsPerS: Double,
 )
 
-private const val SYNCHRONIZED_VIDEO_ROLE = "synchronized_video"
+/** Exact sealed identities and session bounds available while synchronization evidence is built. */
+data class SynchronizationEvidenceBuildContext(
+    val video: ArtifactReconciliation,
+    val pose: ArtifactReconciliation,
+    val snapshot: SealedSessionSnapshot,
+    val firstPoseCaptureTimestampNs: Long,
+    val lastPoseCaptureTimestampNs: Long,
+)
+
+/** Released role used by both the manifest and synchronization-evidence schemas. */
+const val SESSION_VIDEO_ROLE = "session_video"
 private const val VIDEO_PATH_REF = "video.mp4"
 private const val POSE_STREAM_PATH_REF = "frames.ndjson"
 private const val SYNCHRONIZATION_EVIDENCE_PATH_REF = "synchronization-evidence.json"
@@ -52,7 +62,7 @@ class SessionExporter(
     private val monotonicNowNs: () -> Long,
     private val manifestAtFinalization: (SessionManifest, SealedSessionSnapshot) -> SessionManifest = { manifest, _ -> manifest },
     private val observedVideoSynchronization: () -> ObservedVideoSynchronization? = { null },
-    private val synchronizationEvidenceBuilder: ((videoSha256: String, poseSha256: String) -> ByteArray)? = null,
+    private val synchronizationEvidenceBuilder: ((SynchronizationEvidenceBuildContext) -> ByteArray)? = null,
     private val writer: DurableSessionWriter = DefaultDurableSessionWriter(
         storage = storage,
         sessionId = manifestTemplate.sessionId,
@@ -65,6 +75,8 @@ class SessionExporter(
     private var pendingAbort: Pair<SealedSessionSnapshot, String>? = null
     private var nextTelemetrySequence = 0L
     private var lastFixedTelemetrySequence: Long? = null
+    private var firstPoseCaptureTimestampNs: Long? = null
+    private var lastPoseCaptureTimestampNs: Long? = null
     private val telemetryMutex = Mutex()
     private val writerOpenAdmission = checkAdmission(SessionAdmissionPhase.WRITER_OPEN)
 
@@ -86,6 +98,8 @@ class SessionExporter(
     }
 
     override fun appendPose(record: com.calisthenics.diagnostic.contract.RawPoseFrame) {
+        if (firstPoseCaptureTimestampNs == null) firstPoseCaptureTimestampNs = record.captureTimestampNs
+        lastPoseCaptureTimestampNs = record.captureTimestampNs
         writer.appendPose(record)
     }
 
@@ -162,7 +176,7 @@ class SessionExporter(
         return manifest.copy(
             mediaRequired = true,
             mediaReferences = manifest.mediaReferences + MediaReference(
-                role = SYNCHRONIZED_VIDEO_ROLE,
+                    role = SESSION_VIDEO_ROLE,
                 pathRef = VIDEO_PATH_REF,
                 sha256 = Sha256(video.reconciliation.sha256),
                 // The released contract requires offset and drift together or not at all.
@@ -190,8 +204,29 @@ class SessionExporter(
             return failed(snapshot, code).also { finalizationResult = it }
         }
 
+        val buildSynchronizationEvidence = synchronizationEvidenceBuilder?.let { builder ->
+            { video: ArtifactReconciliation, pose: ArtifactReconciliation ->
+                val firstPose = firstPoseCaptureTimestampNs
+                    ?: throw DurableReconciliationException(
+                        "synchronized video requires at least one durable pose record",
+                    )
+                val lastPose = lastPoseCaptureTimestampNs
+                    ?: throw DurableReconciliationException(
+                        "synchronized video requires a final durable pose timestamp",
+                    )
+                builder(
+                    SynchronizationEvidenceBuildContext(
+                        video = video,
+                        pose = pose,
+                        snapshot = snapshot,
+                        firstPoseCaptureTimestampNs = firstPose,
+                        lastPoseCaptureTimestampNs = lastPose,
+                    ),
+                )
+            }
+        }
         val sealedArtifacts = try {
-            writer.seal(FinalSessionAggregates(snapshot.counts), synchronizationEvidenceBuilder)
+            writer.seal(FinalSessionAggregates(snapshot.counts), buildSynchronizationEvidence)
         } catch (_: DurableReconciliationException) {
             abortWriter(snapshot, sanitizedDetail("abandoned export attempt"))
             return failed(snapshot, "stream_reconciliation_failed").also { finalizationResult = it }

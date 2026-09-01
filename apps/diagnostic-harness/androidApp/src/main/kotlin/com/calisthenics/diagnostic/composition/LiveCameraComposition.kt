@@ -25,7 +25,11 @@ import com.calisthenics.diagnostic.contract.Uuid
 import com.calisthenics.diagnostic.export.AndroidStoragePort
 import com.calisthenics.diagnostic.export.AndroidStorageRoots
 import com.calisthenics.diagnostic.export.DeferredSessionAbort
+import com.calisthenics.diagnostic.export.DurableArtifact
+import com.calisthenics.diagnostic.export.DurableReconciliationException
+import com.calisthenics.diagnostic.export.ObservedVideoSynchronization
 import com.calisthenics.diagnostic.export.SessionExporter
+import com.calisthenics.diagnostic.export.SESSION_VIDEO_ROLE
 import com.calisthenics.diagnostic.export.StorageRootsResult
 import com.calisthenics.diagnostic.hash.Sha256Digest
 import com.calisthenics.diagnostic.live.LiveFrameAdmission
@@ -78,6 +82,18 @@ import com.calisthenics.diagnostic.study.M05Admission
 import com.calisthenics.diagnostic.study.M05AdmissionEvidence
 import com.calisthenics.diagnostic.study.M05AdmissionResult
 import com.calisthenics.diagnostic.study.M05InputClass
+import com.calisthenics.diagnostic.study.SynchronizationArtifacts
+import com.calisthenics.diagnostic.study.SynchronizationCounts
+import com.calisthenics.diagnostic.study.SynchronizationEvidence
+import com.calisthenics.diagnostic.study.SynchronizationSample
+import com.calisthenics.diagnostic.study.deriveSynchronizationOffsetNs
+import com.calisthenics.diagnostic.study.renderSynchronizationEvidence
+import com.calisthenics.diagnostic.study.synchronizationBlockingReasons
+import com.calisthenics.diagnostic.video.DemuxedVideoEvidence
+import com.calisthenics.diagnostic.video.LiveVideoWriter
+import com.calisthenics.diagnostic.video.MuxerDiagnostics
+import com.calisthenics.diagnostic.video.VideoDemuxVerifier
+import com.calisthenics.diagnostic.video.VideoWriterResult
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
@@ -106,6 +122,8 @@ private const val VIDEO_FRAME_RATE = 30
 
 /** Conservative constant bitrate: short synchronization runs, not archival quality. */
 private const val VIDEO_BIT_RATE = 8_000_000
+private const val TASK3_PROBE_CODEC = "c2.qti.avc.encoder"
+private const val TASK3_PROBE_CONTAINER = "video/mp4"
 private val LIVE_M05_INPUT_CLASS = M05InputClass.EMPTY_SCENE
 
 sealed interface LiveCameraStartResult {
@@ -308,6 +326,11 @@ class LiveCameraComposition internal constructor(
         val videoWriterFactory: (
             (width: Int, height: Int) -> com.calisthenics.diagnostic.video.LiveVideoWriter
         )? = null,
+        /** Measures the finalized staged container before any session artifact is sealed. */
+        val finalizedVideoObserver: ((
+            writer: com.calisthenics.diagnostic.video.LiveVideoWriter,
+            result: com.calisthenics.diagnostic.video.VideoWriterResult,
+        ) -> Unit)? = null,
         val sessionFinalizerFactory: LiveSessionFinalizerFactory,
         val sessionIdProvider: () -> Uuid = M05SessionIdGenerator::next,
         val manifestMetadata: LiveManifestMetadata = LiveManifestMetadata(),
@@ -629,7 +652,7 @@ class LiveCameraComposition internal constructor(
         // only off the happy-path pre-seal fence leaves the container unfinalized -- on the device
         // that produced a 40-byte stub with every frame encoded but nothing muxed. finish() is
         // idempotent and guarded, so finalizing on both terminal paths is exactly-once.
-        finalizeVideoWriter()
+        finalizeVideoWriter(observeForPublication = false)
         val waitForSourceStart = synchronized(monitor) {
             if (resourcesReleased || abandonRequested) return
             abandonRequested = true
@@ -1047,13 +1070,14 @@ class LiveCameraComposition internal constructor(
      * Ordering matters: the encoder and muxer must be finalized before telemetry is joined and the
      * session sealed, so no sample can arrive after the manifest describes the run.
      */
-    private fun finalizeVideoWriter() {
+    private fun finalizeVideoWriter(observeForPublication: Boolean) {
         val writer = synchronized(monitor) {
             if (videoWriterFinished) return
             videoWriterFinished = true
             videoWriter
         } ?: return
         val result = writer.finish()
+        if (observeForPublication) dependencies.finalizedVideoObserver?.invoke(writer, result)
         synchronized(monitor) { videoWriterResult = result }
     }
 
@@ -1408,7 +1432,7 @@ class LiveCameraComposition internal constructor(
         synchronized(monitor) {
             if (finalizationFenceCompleted) return
         }
-        finalizeVideoWriter()
+        finalizeVideoWriter(observeForPublication = true)
         dependencies.encoderFinalizationSlot.finalizeEncoder()
         val controller = synchronized(monitor) { telemetryController.takeIf { telemetryStarted } }
         try {
@@ -1657,6 +1681,10 @@ class LiveCameraComposition internal constructor(
             // the same staging attempt.
             val storagePort = AndroidStoragePort(roots)
             var exporter: SessionExporter? = null
+            var demuxedVideo: DemuxedVideoEvidence? = null
+            var finalizedVideoResult: VideoWriterResult? = null
+            var finalizedEncoderName: String? = null
+            var builtSynchronizationEvidence: SynchronizationEvidence? = null
             val clock = AndroidLiveClock()
             val thermalProbe = AndroidLiveThermalProbe.from(context)
             return LiveCameraComposition(
@@ -1687,6 +1715,33 @@ class LiveCameraComposition internal constructor(
                             )
                         }
                     },
+                    finalizedVideoObserver = if (!recordVideo) {
+                        null
+                    } else {
+                        { writer: LiveVideoWriter, result: VideoWriterResult ->
+                            val attempt = checkNotNull(exporter?.openStagingAttempt) {
+                                "finalized video has no open staging attempt"
+                            }
+                            val identity = storagePort.reconcileArtifact(attempt, DurableArtifact.VIDEO)
+                            val observed = storagePort.openVideoReadDescriptor(attempt).use { descriptor ->
+                                VideoDemuxVerifier.verify(
+                                    descriptor = descriptor.fileDescriptor,
+                                    byteLength = identity.byteLength,
+                                    sha256 = identity.sha256,
+                                )
+                            }
+                            check(observed.videoPtsUs.size == observed.metadataPtsUs.size) {
+                                "video and metadata sample counts disagree"
+                            }
+                            check(observed.metadataPtsUs == observed.videoPtsUs) {
+                                "video and metadata tracks do not share presentation timestamps"
+                            }
+                            demuxedVideo = observed
+                            finalizedVideoResult = result
+                            finalizedEncoderName = (writer as? MuxerDiagnostics)?.encoderName()
+                                ?: error("finalized writer does not report its encoder component")
+                        }
+                    },
                     inferenceFactory = { nowNs ->
                         val factory = PoseLandmarkerLiveAdapterFactory(
                             provenance = provenance,
@@ -1709,6 +1764,97 @@ class LiveCameraComposition internal constructor(
                             manifestTemplate = template,
                             monotonicNowNs = monotonicNowNs,
                             manifestAtFinalization = atFinalization,
+                            observedVideoSynchronization = {
+                                builtSynchronizationEvidence?.let { evidence ->
+                                    val offset = deriveSynchronizationOffsetNs(evidence.samples)
+                                        ?: throw DurableReconciliationException(
+                                            "container timestamp transform is not one constant offset",
+                                        )
+                                    ObservedVideoSynchronization(offsetNs = offset, driftNsPerS = 0.0)
+                                }
+                            },
+                            synchronizationEvidenceBuilder = if (!recordVideo) {
+                                null
+                            } else {
+                                { build ->
+                                    val observed = demuxedVideo
+                                        ?: throw DurableReconciliationException(
+                                            "finalized container was not observed before seal",
+                                        )
+                                    val writerResult = finalizedVideoResult
+                                        ?: throw DurableReconciliationException(
+                                            "video writer result is missing before seal",
+                                        )
+                                    val encoderName = finalizedEncoderName
+                                        ?: throw DurableReconciliationException(
+                                            "encoder component identity is missing before seal",
+                                        )
+                                    if (observed.sha256 != build.video.sha256 ||
+                                        observed.byteLength != build.video.byteLength
+                                    ) {
+                                        throw DurableReconciliationException(
+                                            "finalized video changed after synchronization measurement",
+                                        )
+                                    }
+                                    val samples = observed.metadataPayloads.mapIndexed { index, payload ->
+                                        SynchronizationSample(
+                                            frameIndex = payload.frameIndex,
+                                            rebasedCaptureTimestampNs = payload.rebasedCaptureNs,
+                                            submittedPtsUs = payload.submittedPtsUs,
+                                            demuxedPtsUs = observed.metadataPtsUs[index],
+                                        )
+                                    }
+                                    val evidence = SynchronizationEvidence(
+                                        sessionId = template.sessionId.value,
+                                        manifestSessionId = template.sessionId.value,
+                                        artifacts = SynchronizationArtifacts(
+                                            videoRole = SESSION_VIDEO_ROLE,
+                                            videoPathRef = "video.mp4",
+                                            videoSha256 = build.video.sha256,
+                                            videoByteLength = build.video.byteLength,
+                                            rawPoseStreamPathRef = "frames.ndjson",
+                                            rawPoseStreamSha256 = build.pose.sha256,
+                                        ),
+                                        container = observed.container,
+                                        codec = encoderName,
+                                        cameraTimestampDomain = "android_elapsed_realtime_nanos_rebased",
+                                        encoderTimestampDomain = "container_presentation_time_us",
+                                        samples = samples,
+                                        videoPtsUs = observed.videoPtsUs,
+                                        counts = SynchronizationCounts(
+                                            deliveredCameraCallbacks = build.snapshot.counts.cameraFramesReceived.toInt(),
+                                            encodedVideoFrames = observed.videoPtsUs.size,
+                                            submittedInferenceFrames = build.snapshot.counts.inferenceFramesSubmitted.toInt(),
+                                            emittedPoseRecords = build.snapshot.counts.inferenceRecordsEmitted.toInt(),
+                                            droppedBeforeEncoder = writerResult.accounting.droppedBeforeEncoder,
+                                            encoderFailures = writerResult.accounting.encoderFailures,
+                                            inferenceSkippedFrames = build.snapshot.counts.framesSkippedBeforeInference.toInt(),
+                                            inferenceFailures = build.snapshot.counts.inferenceFailures.toInt(),
+                                        ),
+                                        firstCameraFrameTimestampNs = samples.firstOrNull()?.rebasedCaptureTimestampNs
+                                            ?: throw DurableReconciliationException(
+                                                "synchronization evidence has no camera samples",
+                                            ),
+                                        lastCameraFrameTimestampNs = samples.last().rebasedCaptureTimestampNs,
+                                        firstPoseCaptureTimestampNs = build.firstPoseCaptureTimestampNs,
+                                        lastPoseCaptureTimestampNs = build.lastPoseCaptureTimestampNs,
+                                        producerGitSha = BuildConfig.PROBE_GIT_SHA,
+                                        deviceModel = Build.MODEL,
+                                        deviceApiLevel = Build.VERSION.SDK_INT,
+                                        deviceAbi = Build.SUPPORTED_ABIS.firstOrNull().orEmpty(),
+                                        probeContainer = TASK3_PROBE_CONTAINER,
+                                        probeCodec = TASK3_PROBE_CODEC,
+                                    )
+                                    val blocking = synchronizationBlockingReasons(evidence)
+                                    if (blocking.isNotEmpty()) {
+                                        throw DurableReconciliationException(
+                                            "synchronization evidence is blocking: ${blocking.joinToString(",")}",
+                                        )
+                                    }
+                                    builtSynchronizationEvidence = evidence
+                                    renderSynchronizationEvidence(evidence).encodeToByteArray()
+                                }
+                            },
                             admissionFence = TombstoneSessionAdmissionFence(AndroidTombstoneFenceFilesystem(roots)),
                             deferAbortUntilFence = true,
                         ).also { exporter = it }

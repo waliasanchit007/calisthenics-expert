@@ -47,7 +47,7 @@ interface DurableSessionWriter {
      */
     fun seal(
         finalAggregates: FinalSessionAggregates,
-        synchronizationEvidence: ((videoSha256: String, poseSha256: String) -> ByteArray)? = null,
+        synchronizationEvidence: ((video: ArtifactReconciliation, pose: ArtifactReconciliation) -> ByteArray)? = null,
     ): SealedArtifacts
     fun abort(reason: String, counts: Counts)
 }
@@ -177,7 +177,7 @@ class DefaultDurableSessionWriter(
 
     override fun seal(
         finalAggregates: FinalSessionAggregates,
-        synchronizationEvidence: ((videoSha256: String, poseSha256: String) -> ByteArray)?,
+        synchronizationEvidence: ((video: ArtifactReconciliation, pose: ArtifactReconciliation) -> ByteArray)?,
     ): SealedArtifacts = serialized {
         requireState(DurableWriterState.OPEN)
         mutableState = DurableWriterState.SEALING
@@ -199,8 +199,13 @@ class DefaultDurableSessionWriter(
             // The muxer is finalized before the pre-seal fence continues, so nothing can still be
             // writing when this reads it.
             val video = storage.reconcileArtifact(currentAttempt, DurableArtifact.VIDEO)
+            if (video.byteLength > 0L && synchronizationEvidence == null && !synchronizationWritten) {
+                throw DurableReconciliationException(
+                    "a finalized video requires synchronization evidence in the same attempt",
+                )
+            }
             if (video.byteLength > 0L && synchronizationEvidence != null && !synchronizationWritten) {
-                val bytes = synchronizationEvidence(video.sha256, pose.sha256)
+                val bytes = synchronizationEvidence(video, pose)
                 require(bytes.isNotEmpty()) { "synchronization evidence bytes must not be empty" }
                 storage.appendArtifact(currentAttempt, DurableArtifact.SYNCHRONIZATION_EVIDENCE, bytes)
                 storage.flushArtifact(currentAttempt, DurableArtifact.SYNCHRONIZATION_EVIDENCE)

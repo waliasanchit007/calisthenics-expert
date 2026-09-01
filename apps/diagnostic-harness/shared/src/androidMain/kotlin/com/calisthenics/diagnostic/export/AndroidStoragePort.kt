@@ -2,6 +2,7 @@ package com.calisthenics.diagnostic.export
 
 import android.system.Os
 import android.system.OsConstants
+import android.os.ParcelFileDescriptor
 import com.calisthenics.diagnostic.contract.Counts
 import com.calisthenics.diagnostic.contract.decodeFrame
 import com.calisthenics.diagnostic.contract.Uuid
@@ -326,6 +327,13 @@ class AndroidStoragePort(override val roots: StorageRoots) : StoragePort {
     fun closeVideoDescriptor(attempt: StagingAttempt) {
         videoFiles.remove(attempt.path)?.let { runCatching { it.close() } }
     }
+
+    /** A read-only descriptor for the finalized staged video, without exposing its path. */
+    fun openVideoReadDescriptor(attempt: StagingAttempt): ParcelFileDescriptor =
+        ParcelFileDescriptor.open(
+            artifactPath(attempt, DurableArtifact.VIDEO).toFile(),
+            ParcelFileDescriptor.MODE_READ_ONLY,
+        )
 
     private fun framesPath(attempt: StagingAttempt): Path = Paths.get(attempt.path, FRAMES_FILE_NAME)
 

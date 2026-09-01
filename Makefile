@@ -632,11 +632,36 @@ verify-harness-s25-synchronized-video:
 	printf 'synchronized video target: serial=%s model=%s marketing_name=%s api=%s\n' \
 		"$$serial" "$$model" "$$marketing_name" \
 		"$$(adb -s "$$serial" shell getprop ro.build.version.sdk | tr -d '\r')"; \
-	cd apps/diagnostic-harness && ./gradlew --no-daemon :androidApp:assembleDebug :androidApp:assembleDebugAndroidTest; \
-	adb -s "$$serial" install -r androidApp/build/outputs/apk/debug/androidApp-debug.apk; \
-	adb -s "$$serial" install -r androidApp/build/outputs/apk/androidTest/debug/androidApp-debug-androidTest.apk; \
-	transcript=$$(mktemp); \
-	trap 'rm -f "$$transcript"' EXIT INT TERM; \
+	if [ -n "$$(git status --porcelain --untracked-files=normal)" ]; then \
+		echo "error: source must be clean before preparing the synchronized-video candidate" >&2; \
+		exit 1; \
+	fi; \
+	$(MAKE) fetch-model-asset; \
+	(cd apps/diagnostic-harness && ./gradlew --no-daemon :androidApp:assembleDebug :androidApp:assembleDebugAndroidTest); \
+	app_apk=apps/diagnostic-harness/androidApp/build/outputs/apk/debug/androidApp-debug.apk; \
+	test_apk=apps/diagnostic-harness/androidApp/build/outputs/apk/androidTest/debug/androidApp-debug-androidTest.apk; \
+	expected_app_sha256=$$(shasum -a 256 "$$app_apk" | awk '{print $$1}'); \
+	expected_test_sha256=$$(shasum -a 256 "$$test_apk" | awk '{print $$1}'); \
+	adb -s "$$serial" install -r "$$app_apk"; \
+	adb -s "$$serial" install -r "$$test_apk"; \
+	app_remote_apk=$$(adb -s "$$serial" shell pm path com.calisthenics.diagnostic.android | tr -d '\r' | sed -n 's/^package://p' | head -n 1); \
+	test_remote_apk=$$(adb -s "$$serial" shell pm path com.calisthenics.diagnostic.android.test | tr -d '\r' | sed -n 's/^package://p' | head -n 1); \
+	if [ -z "$$app_remote_apk" ] || [ -z "$$test_remote_apk" ]; then \
+		echo "error: exact synchronized-video candidate is not installed" >&2; \
+		exit 1; \
+	fi; \
+	candidate_tmp=$$(mktemp -d); transcript=$$(mktemp); \
+	trap 'rm -rf "$$candidate_tmp"; rm -f "$$transcript"' EXIT INT TERM; \
+	adb -s "$$serial" exec-out cat "$$app_remote_apk" > "$$candidate_tmp/app.apk"; \
+	adb -s "$$serial" exec-out cat "$$test_remote_apk" > "$$candidate_tmp/test.apk"; \
+	actual_app_sha256=$$(shasum -a 256 "$$candidate_tmp/app.apk" | awk '{print $$1}'); \
+	actual_test_sha256=$$(shasum -a 256 "$$candidate_tmp/test.apk" | awk '{print $$1}'); \
+	if [ "$$actual_app_sha256" != "$$expected_app_sha256" ] || [ "$$actual_test_sha256" != "$$expected_test_sha256" ]; then \
+		echo "error: installed candidate bytes differ from built candidate" >&2; \
+		exit 1; \
+	fi; \
+	printf 'synchronized video candidate: git_sha=%s app_sha256=%s test_sha256=%s\n' \
+		"$$(git rev-parse HEAD)" "$$expected_app_sha256" "$$expected_test_sha256"; \
 	set +e; \
 	adb -s "$$serial" shell am instrument -w -r -e class com.calisthenics.diagnostic.composition.SynchronizedVideoDeviceGateTest com.calisthenics.diagnostic.android.test/androidx.test.runner.AndroidJUnitRunner >"$$transcript" 2>&1; \
 	instrument_status=$$?; \
@@ -647,7 +672,7 @@ verify-harness-s25-synchronized-video:
 		echo "error: am instrument exited $$instrument_status; transcript is untrustworthy" >&2; \
 		exit "$$instrument_status"; \
 	fi; \
-	cd ../.. && $(VENV_PYTHON) tools/check_synchronized_video_run.py "$$transcript" \
+	$(VENV_PYTHON) tools/check_synchronized_video_run.py "$$transcript" \
 		--probe docs/evidence/device-probes/s25-ultra-SM-S938B-api36-container-timestamp.json --pull
 
 # Task 5's bounded physical live-capture evidence gate. The device test emits one typed record;

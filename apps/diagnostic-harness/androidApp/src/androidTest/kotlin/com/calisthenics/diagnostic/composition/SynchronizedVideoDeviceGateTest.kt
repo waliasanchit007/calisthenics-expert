@@ -10,10 +10,13 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
 import androidx.test.platform.app.InstrumentationRegistry
 import com.calisthenics.diagnostic.android.BuildConfig
+import com.calisthenics.diagnostic.export.AndroidStorageRoots
+import com.calisthenics.diagnostic.export.StorageRootsResult
 import com.calisthenics.diagnostic.probe.CameraCapabilityProbe
 import com.calisthenics.diagnostic.probe.readMarketingName
 import com.calisthenics.diagnostic.replay.CameraCapabilityObservation
 import com.calisthenics.diagnostic.replay.androidDeviceClassOf
+import com.calisthenics.diagnostic.session.FinalizationResult
 import com.calisthenics.diagnostic.video.DemuxedVideoEvidence
 import com.calisthenics.diagnostic.video.VideoDemuxVerifier
 import java.io.File
@@ -47,6 +50,10 @@ class SynchronizedVideoDeviceGateTest {
         val blocking = mutableListOf<String>()
         var demuxed: DemuxedVideoEvidence? = null
         var sessionId = "unknown"
+        var manifestFile: File? = null
+        var videoFile: File? = null
+        var poseFile: File? = null
+        var synchronizationFile: File? = null
         var observation = CameraCapabilityObservation(
             cameraId = "unknown",
             timestampSource = "UNKNOWN",
@@ -56,11 +63,6 @@ class SynchronizedVideoDeviceGateTest {
             underlyingImageAvailable = false,
             pixelFormat = "UNKNOWN",
         )
-
-        // App-private, outside every registered export root: this gate observes the encoder, it
-        // does not publish a study artifact.
-        val videoFile = File(context.filesDir, "m05b-synchronized-video-gate.mp4")
-        videoFile.delete()
 
         try {
             grantCameraPermission(instrumentation, context.packageName)
@@ -88,15 +90,35 @@ class SynchronizedVideoDeviceGateTest {
                 is LiveCameraStartResult.Started -> {
                     awaitBoundedCapture(composition)
                     sessionId = composition.manifest()?.sessionId?.value ?: "unknown"
-                    composition.stop()
+                    when (val finalization = composition.stop().finalization) {
+                        is FinalizationResult.Published -> Unit
+                        is FinalizationResult.Failed ->
+                            blocking += "session_publish_failed:${finalization.failureCode}"
+                        is FinalizationResult.Cancelled -> blocking += "session_publish_cancelled"
+                    }
                 }
             }
 
             if (blocking.isEmpty()) {
-                if (!videoFile.isFile || videoFile.length() == 0L) {
+                val roots = when (val result = AndroidStorageRoots.from(context)) {
+                    is StorageRootsResult.Ready -> result.roots
+                    is StorageRootsResult.Unavailable -> error(result.reason)
+                }
+                val committed = File(roots.exportsRoot, sessionId)
+                manifestFile = File(committed, "manifest.json")
+                videoFile = File(committed, "video.mp4")
+                poseFile = File(committed, "frames.ndjson")
+                synchronizationFile = File(committed, "synchronization-evidence.json")
+                if (manifestFile?.isFile != true) blocking += "committed_manifest_absent"
+                if (poseFile?.isFile != true) blocking += "committed_pose_stream_absent"
+                if (synchronizationFile?.isFile != true) {
+                    blocking += "committed_synchronization_evidence_absent"
+                }
+                val committedVideo = videoFile
+                if (committedVideo?.isFile != true || committedVideo.length() == 0L) {
                     blocking += "video_container_absent"
                 } else {
-                    demuxed = runCatching { VideoDemuxVerifier.verify(videoFile.absolutePath) }
+                    demuxed = runCatching { VideoDemuxVerifier.verify(committedVideo.absolutePath) }
                         .getOrElse { error ->
                             // Report why. A generic failure reason hid a real encoder defect
                             // behind an empty-container symptom for two device runs.
@@ -130,15 +152,18 @@ class SynchronizedVideoDeviceGateTest {
             sessionId = sessionId,
             observation = observation,
             demuxed = demuxed,
+            manifestFile = manifestFile,
             videoFile = videoFile,
+            poseFile = poseFile,
+            synchronizationFile = synchronizationFile,
             accounting = composition?.videoAccounting(),
             writerResult = composition?.videoWriterResult(),
             muxerDiagnostics = composition?.videoMuxerDiagnostics().orEmpty(),
             encoderName = composition?.videoEncoderName(),
             blocking = blocking.distinct().sorted(),
         )
-        // Deliberately left in place: the host pulls and verifies it byte-exactly, which is
-        // stronger than the device asserting its own digest. The next run deletes it first.
+        // The committed session remains in the registered export root. The host pulls and
+        // validates every artifact byte-exactly; the device never edits the evidence ledger.
 
         instrumentation.sendStatus(STATUS_CODE, Bundle().apply { putString(STATUS_TAG, record) })
     }
@@ -162,7 +187,10 @@ class SynchronizedVideoDeviceGateTest {
         sessionId: String,
         observation: CameraCapabilityObservation,
         demuxed: DemuxedVideoEvidence?,
-        videoFile: File,
+        manifestFile: File?,
+        videoFile: File?,
+        poseFile: File?,
+        synchronizationFile: File?,
         accounting: com.calisthenics.diagnostic.video.VideoAccounting?,
         writerResult: com.calisthenics.diagnostic.video.VideoWriterResult?,
         muxerDiagnostics: Map<String, Long>,
@@ -199,10 +227,19 @@ class SynchronizedVideoDeviceGateTest {
             put("camera_timestamp_source", observation.timestampSource)
         }
         putJsonObject("artifacts") {
-            // A path ref, never an absolute path: the record must stay sanitized.
-            put("video_path_ref", videoFile.name)
+            val exportRef = "exports/$sessionId"
+            put("manifest_path_ref", "$exportRef/manifest.json")
+            put("manifest_sha256", sha256Of(manifestFile))
+            put("manifest_byte_length", manifestFile?.length() ?: 0L)
+            put("video_path_ref", "$exportRef/video.mp4")
             put("video_sha256", demuxed?.sha256 ?: sha256Of(videoFile))
-            put("video_byte_length", demuxed?.byteLength ?: videoFile.length())
+            put("video_byte_length", demuxed?.byteLength ?: videoFile?.length() ?: 0L)
+            put("pose_stream_path_ref", "$exportRef/frames.ndjson")
+            put("pose_stream_sha256", sha256Of(poseFile))
+            put("pose_stream_byte_length", poseFile?.length() ?: 0L)
+            put("synchronization_evidence_path_ref", "$exportRef/synchronization-evidence.json")
+            put("synchronization_evidence_sha256", sha256Of(synchronizationFile))
+            put("synchronization_evidence_byte_length", synchronizationFile?.length() ?: 0L)
         }
         putJsonObject("counts") {
             put("accepted_frames", accounting?.accepted)
@@ -233,8 +270,8 @@ class SynchronizedVideoDeviceGateTest {
         put("blocking_result", blocking.isNotEmpty())
     }.toString()
 
-    private fun sha256Of(file: File): String {
-        if (!file.isFile) return ""
+    private fun sha256Of(file: File?): String {
+        if (file?.isFile != true) return ""
         val digest = MessageDigest.getInstance("SHA-256")
         file.inputStream().use { stream ->
             val block = ByteArray(64 * 1024)

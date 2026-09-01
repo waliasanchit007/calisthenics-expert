@@ -3,6 +3,7 @@ package com.calisthenics.diagnostic.video
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import java.io.File
+import java.io.FileDescriptor
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.security.MessageDigest
@@ -38,49 +39,70 @@ object VideoDemuxVerifier {
         val extractor = MediaExtractor()
         try {
             extractor.setDataSource(path)
-
-            var videoTrack = -1
-            var metadataTrack = -1
-            var codec = ""
-            val discovered = mutableListOf<String>()
-            for (index in 0 until extractor.trackCount) {
-                val format = extractor.getTrackFormat(index)
-                val mime = format.getString(MediaFormat.KEY_MIME).orEmpty()
-                discovered += mime
-                when {
-                    mime.startsWith("video/") -> {
-                        videoTrack = index
-                        codec = mime
-                    }
-
-                    mime == MediaCodecVideoWriter.METADATA_MIME -> metadataTrack = index
-                }
-            }
-            // Name what was actually found. A bare "no video track" says nothing about whether
-            // the muxer wrote the wrong MIME, one track, or none.
-            require(videoTrack >= 0) {
-                "container has no video track; tracks=" + discovered.joinToString(",")
-            }
-            require(metadataTrack >= 0) {
-                "container has no metadata track; tracks=" + discovered.joinToString(",")
-            }
-
-            val videoPtsUs = readPresentationTimestamps(extractor, videoTrack)
-            val metadataPtsUs = mutableListOf<Long>()
-            val metadataPayloads = readMetadata(extractor, metadataTrack, metadataPtsUs)
-
-            return DemuxedVideoEvidence(
-                videoPtsUs = videoPtsUs,
-                metadataPtsUs = metadataPtsUs.toList(),
-                metadataPayloads = metadataPayloads,
-                codec = codec,
-                container = "video/mp4",
-                byteLength = file.length(),
-                sha256 = sha256Of(file),
-            )
+            return readEvidence(extractor, file.length(), sha256Of(file))
         } finally {
             extractor.release()
         }
+    }
+
+    /** Read a finalized container through storage-owned descriptor authority. */
+    fun verify(
+        descriptor: FileDescriptor,
+        byteLength: Long,
+        sha256: String,
+    ): DemuxedVideoEvidence {
+        require(byteLength > 0L) { "finalized container is empty" }
+        require(sha256.matches(Regex("^[0-9a-f]{64}$"))) { "invalid finalized-container SHA-256" }
+        val extractor = MediaExtractor()
+        try {
+            extractor.setDataSource(descriptor, 0L, byteLength)
+            return readEvidence(extractor, byteLength, sha256)
+        } finally {
+            extractor.release()
+        }
+    }
+
+    private fun readEvidence(
+        extractor: MediaExtractor,
+        byteLength: Long,
+        sha256: String,
+    ): DemuxedVideoEvidence {
+        var videoTrack = -1
+        var metadataTrack = -1
+        var codec = ""
+        val discovered = mutableListOf<String>()
+        for (index in 0 until extractor.trackCount) {
+            val format = extractor.getTrackFormat(index)
+            val mime = format.getString(MediaFormat.KEY_MIME).orEmpty()
+            discovered += mime
+            when {
+                mime.startsWith("video/") -> {
+                    videoTrack = index
+                    codec = mime
+                }
+
+                mime == MediaCodecVideoWriter.METADATA_MIME -> metadataTrack = index
+            }
+        }
+        require(videoTrack >= 0) {
+            "container has no video track; tracks=" + discovered.joinToString(",")
+        }
+        require(metadataTrack >= 0) {
+            "container has no metadata track; tracks=" + discovered.joinToString(",")
+        }
+
+        val videoPtsUs = readPresentationTimestamps(extractor, videoTrack)
+        val metadataPtsUs = mutableListOf<Long>()
+        val metadataPayloads = readMetadata(extractor, metadataTrack, metadataPtsUs)
+        return DemuxedVideoEvidence(
+            videoPtsUs = videoPtsUs,
+            metadataPtsUs = metadataPtsUs.toList(),
+            metadataPayloads = metadataPayloads,
+            codec = codec,
+            container = "video/mp4",
+            byteLength = byteLength,
+            sha256 = sha256,
+        )
     }
 
     private fun readPresentationTimestamps(extractor: MediaExtractor, track: Int): List<Long> {

@@ -45,12 +45,13 @@ def _write_probe(tmp_path: Path, document: dict | None = None) -> Path:
 
 
 def _record(probe_path: Path, **overrides) -> dict:
+    session_id = "00000000-0000-4000-8000-000000000001"
     record = {
         "record_kind": "synchronized_video_device_gate_observation",
         "sanitized": True,
         "non_participant_observation": True,
         "contains_landmark_coordinates": False,
-        "session_id": "00000000-0000-4000-8000-000000000001",
+        "session_id": session_id,
         "environment": {
             "device_class": "physical_device",
             "manufacturer": "samsung",
@@ -63,8 +64,20 @@ def _record(probe_path: Path, **overrides) -> dict:
             "probe_sha256": checker.probe_digest(probe_path),
         },
         "artifacts": {
+            "manifest_path_ref": f"exports/{session_id}/manifest.json",
+            "manifest_sha256": "a" * 64,
+            "manifest_byte_length": 512,
+            "video_path_ref": f"exports/{session_id}/video.mp4",
             "video_sha256": "b" * 64,
             "video_byte_length": 1024,
+            "pose_stream_path_ref": f"exports/{session_id}/frames.ndjson",
+            "pose_stream_sha256": "c" * 64,
+            "pose_stream_byte_length": 256,
+            "synchronization_evidence_path_ref": (
+                f"exports/{session_id}/synchronization-evidence.json"
+            ),
+            "synchronization_evidence_sha256": "d" * 64,
+            "synchronization_evidence_byte_length": 768,
         },
         "blocking_reasons": [],
     }
@@ -95,6 +108,17 @@ def test_a_container_other_than_the_probe_container_is_blocked(tmp_path: Path) -
     record["provenance"]["container"] = "video/webm"
 
     assert "probe_container_mismatch" in checker.check_record(record, probe, probe_path)
+
+
+def test_an_artifact_reference_outside_the_committed_session_is_blocked(tmp_path: Path) -> None:
+    probe_path = _write_probe(tmp_path)
+    probe = checker.load_probe(probe_path)
+    record = _record(probe_path)
+    record["artifacts"]["video_path_ref"] = "exports/other/video.mp4"
+
+    assert "committed_artifact_reference_mismatch" in checker.check_record(
+        record, probe, probe_path
+    )
 
 
 def test_the_host_binds_the_probe_digest_rather_than_trusting_the_device(tmp_path: Path) -> None:
@@ -147,6 +171,15 @@ def test_a_payload_whose_digest_disagrees_with_the_manifest_is_blocked(tmp_path:
     assert "video_digest_mismatch" in reasons
 
 
+def test_each_committed_artifact_keeps_its_own_verification_reason(tmp_path: Path) -> None:
+    payload = tmp_path / "manifest.json"
+    payload.write_bytes(b"{}")
+
+    reasons = checker.verify_payload(payload, "d" * 64, 9999, artifact_name="manifest")
+
+    assert reasons == ["manifest_byte_length_mismatch", "manifest_digest_mismatch"]
+
+
 def test_a_payload_whose_byte_count_disagrees_with_the_manifest_is_blocked(tmp_path: Path) -> None:
     payload = tmp_path / "video.mp4"
     payload.write_bytes(b"synthetic")
@@ -163,6 +196,75 @@ def test_a_matching_payload_produces_no_reasons(tmp_path: Path) -> None:
     digest = hashlib.sha256(b"synthetic").hexdigest()
 
     assert checker.verify_payload(payload, digest, len(b"synthetic")) == []
+
+
+def test_committed_artifact_paths_are_derived_from_the_session_export() -> None:
+    session_id = "00000000-0000-4000-8000-000000000001"
+
+    assert checker.remote_artifact_path(session_id, "manifest.json") == (
+        f"files/diagnostic-harness/exports/{session_id}/manifest.json"
+    )
+    assert checker.remote_artifact_path(session_id, "video.mp4") == (
+        f"files/diagnostic-harness/exports/{session_id}/video.mp4"
+    )
+
+
+def test_all_four_artifact_references_must_name_the_same_committed_session(
+    tmp_path: Path,
+) -> None:
+    probe_path = _write_probe(tmp_path)
+    probe = checker.load_probe(probe_path)
+
+    for key in (
+        "manifest_path_ref",
+        "video_path_ref",
+        "pose_stream_path_ref",
+        "synchronization_evidence_path_ref",
+    ):
+        record = _record(probe_path)
+        record["artifacts"][key] = record["artifacts"][key].replace(
+            record["session_id"], "00000000-0000-4000-8000-000000000002"
+        )
+        assert "committed_artifact_reference_mismatch" in checker.check_record(
+            record, probe, probe_path
+        )
+
+
+def test_export_validation_uses_the_authoritative_contract_cli(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest = tmp_path / "manifest.json"
+    frames = tmp_path / "frames.ndjson"
+    manifest.write_text("{}", encoding="utf-8")
+    frames.write_text("", encoding="utf-8")
+    observed: list[list[str]] = []
+
+    class Result:
+        returncode = 0
+
+    def fake_run(command, **kwargs):
+        observed.append(command)
+        return Result()
+
+    monkeypatch.setattr(checker.subprocess, "run", fake_run)
+
+    assert checker.validate_export(manifest, frames) is True
+    assert observed == [
+        [
+            checker.sys.executable,
+            "-m",
+            "observation_contracts",
+            "validate-session",
+            str(manifest),
+            str(frames),
+        ]
+    ]
+
+
+@pytest.mark.parametrize("name", ["../video.mp4", "/video.mp4", "nested/video.mp4", ""])
+def test_committed_artifact_paths_reject_traversal_and_non_leaf_names(name: str) -> None:
+    with pytest.raises(checker.SynchronizedVideoCheckError):
+        checker.remote_artifact_path("00000000-0000-4000-8000-000000000001", name)
 
 
 def test_an_absolute_path_makes_a_record_unsanitized(tmp_path: Path) -> None:

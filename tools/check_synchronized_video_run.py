@@ -35,6 +35,9 @@ _S25_MARKER = "S25 Ultra"
 _AUTHORIZED_MANUFACTURER = "samsung"
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_SESSION_ID = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+)
 _ABSOLUTE_PATH = re.compile(r"(?:file://)?(?:/|[A-Za-z]:[\\/])\S+")
 
 EXIT_OK = 0
@@ -44,6 +47,19 @@ EXIT_USAGE = 2
 
 class SynchronizedVideoCheckError(Exception):
     """A malformed invocation or transcript. Distinct from a blocking observation."""
+
+
+def remote_artifact_path(session_id: str, leaf_name: str) -> str:
+    """Return one registry-derived committed-export path for ``run-as cat``.
+
+    The app owns the absolute storage root. The host names only the fixed app-relative registry
+    root, one validated session identifier, and one leaf artifact name.
+    """
+    if not _SESSION_ID.fullmatch(session_id):
+        raise SynchronizedVideoCheckError("record has no valid committed session_id")
+    if not leaf_name or Path(leaf_name).name != leaf_name or "/" in leaf_name or "\\" in leaf_name:
+        raise SynchronizedVideoCheckError("committed artifact must be one leaf name")
+    return f"files/diagnostic-harness/exports/{session_id}/{leaf_name}"
 
 
 def is_authorized_target(environment: dict) -> bool:
@@ -134,16 +150,56 @@ def pull_binary(serial: str, package: str, remote: str, destination: Path) -> No
     os.replace(temporary, destination)
 
 
-def verify_payload(path: Path, expected_sha256: str, expected_bytes: int) -> list[str]:
+def verify_payload(
+    path: Path,
+    expected_sha256: str,
+    expected_bytes: int,
+    *,
+    artifact_name: str = "video",
+) -> list[str]:
     """Compare a pulled payload against what the manifest declares."""
     reasons: list[str] = []
     actual_bytes = path.stat().st_size
     if actual_bytes != expected_bytes:
-        reasons.append("video_byte_length_mismatch")
+        reasons.append(f"{artifact_name}_byte_length_mismatch")
     actual_sha = hashlib.sha256(path.read_bytes()).hexdigest()
     if not _SHA256.match(expected_sha256 or "") or actual_sha != expected_sha256:
-        reasons.append("video_digest_mismatch")
+        reasons.append(f"{artifact_name}_digest_mismatch")
     return reasons
+
+
+_COMMITTED_ARTIFACTS = {
+    "manifest": ("manifest.json", "manifest_path_ref"),
+    "video": ("video.mp4", "video_path_ref"),
+    "pose_stream": ("frames.ndjson", "pose_stream_path_ref"),
+    "synchronization_evidence": (
+        "synchronization-evidence.json",
+        "synchronization_evidence_path_ref",
+    ),
+}
+
+
+def _expected_record_path(session_id: str, leaf_name: str) -> str:
+    if not _SESSION_ID.fullmatch(session_id):
+        return ""
+    return f"exports/{session_id}/{leaf_name}"
+
+
+def validate_export(manifest_path: Path, frames_path: Path) -> bool:
+    """Run the released validator against the exact pulled export."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "observation_contracts",
+            "validate-session",
+            str(manifest_path),
+            str(frames_path),
+        ],
+        capture_output=True,
+        check=False,
+    )
+    return result.returncode == 0
 
 
 def check_record(record: dict, probe: dict, probe_path: Path) -> list[str]:
@@ -173,6 +229,12 @@ def check_record(record: dict, probe: dict, probe_path: Path) -> list[str]:
         reasons.append("probe_codec_mismatch")
     if observed.get("container") != probe_provenance.get("container"):
         reasons.append("probe_container_mismatch")
+
+    session_id = record.get("session_id")
+    artifacts = record.get("artifacts") or {}
+    for leaf_name, path_key in _COMMITTED_ARTIFACTS.values():
+        if artifacts.get(path_key) != _expected_record_path(session_id, leaf_name):
+            reasons.append("committed_artifact_reference_mismatch")
 
     return sorted(set(reasons))
 
@@ -208,6 +270,58 @@ def extract_record(transcript: str) -> dict:
     return json.loads(matches[0])
 
 
+def _required_artifact_measurement(artifacts: dict, key: str) -> tuple[str, int]:
+    expected_sha = artifacts.get(f"{key}_sha256")
+    expected_bytes = artifacts.get(f"{key}_byte_length")
+    if not isinstance(expected_sha, str) or not _SHA256.fullmatch(expected_sha):
+        raise SynchronizedVideoCheckError(f"record has no valid {key}_sha256")
+    if not isinstance(expected_bytes, int) or isinstance(expected_bytes, bool) or expected_bytes < 0:
+        raise SynchronizedVideoCheckError(f"record has no valid {key}_byte_length")
+    return expected_sha, expected_bytes
+
+
+def pull_and_verify_committed_export(
+    serial: str,
+    package: str,
+    record: dict,
+    destination: Path,
+) -> list[str]:
+    """Pull the four manifest-bound artifacts and validate them as one export."""
+    session_id = record.get("session_id")
+    if not isinstance(session_id, str) or not _SESSION_ID.fullmatch(session_id):
+        raise SynchronizedVideoCheckError("record has no valid committed session_id")
+    artifacts = record.get("artifacts")
+    if not isinstance(artifacts, dict):
+        raise SynchronizedVideoCheckError("record has no artifacts object")
+
+    reasons: list[str] = []
+    local_paths: dict[str, Path] = {}
+    for artifact_name, (leaf_name, _) in _COMMITTED_ARTIFACTS.items():
+        local_path = destination / leaf_name
+        pull_binary(
+            serial,
+            package,
+            remote_artifact_path(session_id, leaf_name),
+            local_path,
+        )
+        expected_sha, expected_bytes = _required_artifact_measurement(
+            artifacts, artifact_name
+        )
+        reasons.extend(
+            verify_payload(
+                local_path,
+                expected_sha,
+                expected_bytes,
+                artifact_name=artifact_name,
+            )
+        )
+        local_paths[artifact_name] = local_path
+
+    if not validate_export(local_paths["manifest"], local_paths["pose_stream"]):
+        reasons.append("session_contract_validation_failed")
+    return sorted(set(reasons))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("transcript", type=Path, help="instrumentation transcript")
@@ -228,21 +342,13 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.pull:
             serial = require_exactly_one_authorized_device()
-            artifacts = record.get("artifacts") or {}
-            # The gate writes its container app-private, outside every registered export root:
-            # it observes the encoder rather than publishing a study artifact.
-            path_ref = artifacts.get("video_path_ref")
-            if not path_ref or "/" in path_ref:
-                raise SynchronizedVideoCheckError("record has no usable video_path_ref")
-            remote = f"/data/user/0/{args.package}/files/{path_ref}"
             with tempfile.TemporaryDirectory() as staging:
-                video = Path(staging) / "video.mp4"
-                pull_binary(serial, args.package, remote, video)
                 reasons.extend(
-                    verify_payload(
-                        video,
-                        artifacts.get("video_sha256", ""),
-                        int(artifacts.get("video_byte_length", -1)),
+                    pull_and_verify_committed_export(
+                        serial,
+                        args.package,
+                        record,
+                        Path(staging),
                     )
                 )
             reasons = sorted(set(reasons))

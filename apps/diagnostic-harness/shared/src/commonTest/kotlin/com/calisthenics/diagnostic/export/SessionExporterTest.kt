@@ -17,6 +17,8 @@ import com.calisthenics.diagnostic.contract.SessionManifest
 import com.calisthenics.diagnostic.contract.Sha256
 import com.calisthenics.diagnostic.contract.Uuid
 import com.calisthenics.diagnostic.contract.decodeManifest
+import com.calisthenics.diagnostic.contract.encodeFrameLine
+import com.calisthenics.diagnostic.hash.Sha256Digest
 import com.calisthenics.diagnostic.purge.SessionAdmissionDecision
 import com.calisthenics.diagnostic.purge.SessionAdmissionFence
 import com.calisthenics.diagnostic.purge.SessionAdmissionPhase
@@ -331,11 +333,73 @@ class SessionExporterTest {
         val manifest = decodeManifest(storage.writtenManifest())
         assertEquals(
             emptyList(),
-            manifest.mediaReferences.filter { it.role == "synchronized_video" },
+            manifest.mediaReferences.filter { it.role == "session_video" },
             "a pose-only run must not describe a video it does not have beside it",
         )
         assertEquals(null, manifest.synchronizationEvidence)
         assertEquals(null, manifest.mediaRequired)
+    }
+
+    @Test
+    fun aVideoBearingRunCannotPublishWithoutSynchronizationEvidence() {
+        val storage = FakeStorage()
+        val exporter = SessionExporter(storage, manifest(), monotonicNowNs = { 0L })
+        val record = frame(posePresent = true)
+        exporter.appendPose(record)
+        val attempt = requireNotNull(exporter.openStagingAttempt)
+        storage.appendArtifact(attempt, DurableArtifact.VIDEO, "finalized-container".encodeToByteArray())
+        storage.flushArtifact(attempt, DurableArtifact.VIDEO)
+        storage.fsyncArtifact(attempt, DurableArtifact.VIDEO)
+
+        val result = exporter.finalize(snapshot(listOf(record)))
+
+        val failed = assertIs<FinalizationResult.Failed>(result)
+        assertEquals("stream_reconciliation_failed", failed.failureCode)
+        assertTrue(
+            storage.committedDirectories.isEmpty(),
+            "a media-required run without synchronization evidence must fail before rename",
+        )
+    }
+
+    @Test
+    fun synchronizationEvidenceBuilderReceivesTheExactReconciledArtifactsAndSessionBounds() {
+        val storage = FakeStorage()
+        var received: SynchronizationEvidenceBuildContext? = null
+        val exporter = SessionExporter(
+            storage = storage,
+            manifestTemplate = manifest(),
+            monotonicNowNs = { 0L },
+            observedVideoSynchronization = { ObservedVideoSynchronization(offsetNs = 0L, driftNsPerS = 0.0) },
+            synchronizationEvidenceBuilder = { context ->
+                received = context
+                "{}".encodeToByteArray()
+            },
+        )
+        val record = frame(posePresent = true)
+        exporter.appendPose(record)
+        val attempt = requireNotNull(exporter.openStagingAttempt)
+        val videoBytes = "finalized-container".encodeToByteArray()
+        storage.appendArtifact(attempt, DurableArtifact.VIDEO, videoBytes)
+        storage.flushArtifact(attempt, DurableArtifact.VIDEO)
+        storage.fsyncArtifact(attempt, DurableArtifact.VIDEO)
+
+        val result = exporter.finalize(snapshot(listOf(record)))
+
+        assertIs<FinalizationResult.Published>(result)
+        val context = requireNotNull(received)
+        assertEquals(videoBytes.size.toLong(), context.video.byteLength)
+        assertEquals(Sha256Digest.hex(videoBytes), context.video.sha256)
+        assertEquals(Sha256Digest.hex(encodeFrameLine(record).encodeToByteArray()), context.pose.sha256)
+        assertEquals(1L, context.snapshot.counts.inferenceRecordsEmitted)
+        assertEquals(record.captureTimestampNs, context.firstPoseCaptureTimestampNs)
+        assertEquals(record.captureTimestampNs, context.lastPoseCaptureTimestampNs)
+        val manifest = decodeManifest(storage.writtenManifest())
+        assertEquals(
+            listOf("session_video"),
+            manifest.mediaReferences.map { it.role }.filter { it == "session_video" },
+            "the exporter must use the released session-video role",
+        )
+        assertFalse(manifest.mediaReferences.any { it.role == "synchronized_video" })
     }
 
     @Test
