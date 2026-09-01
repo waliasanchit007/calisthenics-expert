@@ -273,6 +273,13 @@ git commit -m "feat: release synchronized session contracts"
 
 ### Task 4: Android in-app video and atomic multi-artifact publication
 
+**2026-09-02 physical correction:** The first complete S25 run proved that both MP4 tracks use a
+90 kHz timebase and that legitimate off-grid timestamps produce a 9 us submitted-minus-demuxed
+offset span. Exact-constant-only admission therefore rejects valid container quantization. Apply the
+approved additive profile and recovery plan in
+`docs/superpowers/plans/2026-09-02-bounded-quantization-synchronization.md` before completing this
+task. Preserve the released exact profile and historical Task 3 record; do not hand-pick a tolerance.
+
 **Registry ownership:** Task 4 does not release sustained error codes and does not advance the
 validator error-code registry. SessionManifest remains 1.2.0, and the synchronized `SESSION.*` failures
 already released in registry 1.3.0 remain authoritative. Task 8 owns sustained semantics and their
