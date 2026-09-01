@@ -79,6 +79,13 @@ kotlin {
     iosSimulatorArm64()
 
     sourceSets {
+        // JvmMain and androidMain both run on a JVM with java.nio.file available, and the purge
+        // filesystem is security-sensitive: traversal, symlink, and prefix guards must exist in
+        // exactly one place. A second copy for Android would be the wrong kind of duplication.
+        val jvmAndAndroidMain by creating { dependsOn(commonMain.get()) }
+        jvmMain.get().dependsOn(jvmAndAndroidMain)
+        androidMain.get().dependsOn(jvmAndAndroidMain)
+
         commonMain.dependencies {
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.serialization.json)

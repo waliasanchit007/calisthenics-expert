@@ -345,6 +345,9 @@ private class FileStorage(
         DurableArtifact.POSE_STREAM -> fileAttempt(attempt).framesPath
         DurableArtifact.TELEMETRY -> fileAttempt(attempt).telemetryPath
         DurableArtifact.RUN_ADMISSION -> fileAttempt(attempt).admissionPath
+        // The synthetic export is pose-only and deterministic; it records no video. The path is
+        // still named so the artifact set stays total rather than relying on an else branch.
+        DurableArtifact.VIDEO -> fileAttempt(attempt).framesPath.resolveSibling("video.mp4")
     }
 }
 

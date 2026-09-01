@@ -52,7 +52,7 @@ class JvmPurgeFilesystemTest {
         val exportPrefix = Path.of(roots.exportsRoot).resolve("${sessionId.value}-prefix")
         Files.createDirectories(exportPrefix)
 
-        val filesystem = JvmPurgeFilesystem(roots)
+        val filesystem = FilePurgeFilesystem(roots)
         val result = SyntheticPurge(filesystem, producerGitSha = "a".repeat(40))
             .purge(sessionId, "10000000-0000-4000-8000-000000000001")
 
@@ -84,7 +84,7 @@ class JvmPurgeFilesystemTest {
         )
 
         val result = runCatching {
-            SyntheticPurge(JvmPurgeFilesystem(roots), producerGitSha = "a".repeat(40))
+            SyntheticPurge(FilePurgeFilesystem(roots), producerGitSha = "a".repeat(40))
                 .purge(sessionId, "10000000-0000-4000-8000-000000000001")
         }
 
@@ -96,7 +96,7 @@ class JvmPurgeFilesystemTest {
     @Test
     fun registryDigestMismatchInADurableJournalIsATypedBlockerBeforeAnyNewOwnedEntryIsDeleted() {
         val roots = roots()
-        val filesystem = JvmPurgeFilesystem(roots)
+        val filesystem = FilePurgeFilesystem(roots)
         val purge = SyntheticPurge(filesystem, producerGitSha = "a".repeat(40))
         val export = Path.of(roots.exportsRoot).resolve(sessionId.value)
         val staging = Path.of(roots.stagingRoot).resolve("${sessionId.value}.42.staging")
@@ -158,7 +158,7 @@ class JvmPurgeFilesystemTest {
                 Files.writeString(target.resolve("owned.txt"), "synthetic")
             }
 
-            val result = SyntheticPurge(JvmPurgeFilesystem(roots), producerGitSha = "a".repeat(40))
+            val result = SyntheticPurge(FilePurgeFilesystem(roots), producerGitSha = "a".repeat(40))
                 .purge(sessionId, "10000000-0000-4000-8000-000000000001")
 
             assertEquals(PurgeState.PURGE_INCOMPLETE, result.state, name)
@@ -170,7 +170,7 @@ class JvmPurgeFilesystemTest {
     @Test
     fun journalBytesValidateInPythonAndAValidPriorLineMutationBreaksItsExactByteLink() {
         val roots = roots()
-        val filesystem = JvmPurgeFilesystem(roots)
+        val filesystem = FilePurgeFilesystem(roots)
         val export = Path.of(roots.exportsRoot).resolve(sessionId.value)
         val staging = Path.of(roots.stagingRoot).resolve("${sessionId.value}.42.staging")
         val transfer = Path.of(roots.transferStagingRoot).resolve("${sessionId.value}.transfer.bundle")
@@ -200,7 +200,7 @@ class JvmPurgeFilesystemTest {
     @Test
     fun schemaInvalidParseableFinalLineIsRejectedByBothPythonAndKotlin() {
         val roots = roots()
-        val filesystem = JvmPurgeFilesystem(roots)
+        val filesystem = FilePurgeFilesystem(roots)
         val export = Path.of(roots.exportsRoot).resolve(sessionId.value)
         val staging = Path.of(roots.stagingRoot).resolve("${sessionId.value}.42.staging")
         val transfer = Path.of(roots.transferStagingRoot).resolve("${sessionId.value}.transfer.bundle")
@@ -234,7 +234,7 @@ class JvmPurgeFilesystemTest {
     fun freshPurgeOfEmptyRegisteredRootsRemainsIncompleteInsteadOfCompletingVacuously() {
         val roots = roots()
 
-        val result = SyntheticPurge(JvmPurgeFilesystem(roots), producerGitSha = "a".repeat(40))
+        val result = SyntheticPurge(FilePurgeFilesystem(roots), producerGitSha = "a".repeat(40))
             .purge(sessionId, "10000000-0000-4000-8000-000000000001")
 
         assertEquals(PurgeState.PURGE_INCOMPLETE, result.state)

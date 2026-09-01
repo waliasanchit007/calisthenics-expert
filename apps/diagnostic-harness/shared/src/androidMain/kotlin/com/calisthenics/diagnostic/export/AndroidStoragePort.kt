@@ -37,6 +37,7 @@ class AndroidStoragePort(override val roots: StorageRoots) : StoragePort {
     /** Sole owner for artifact-channel lookup, force, close, and removal. */
     private val artifactChannelLock = Any()
     private val artifactChannels = mutableMapOf<Pair<String, DurableArtifact>, FileChannel>()
+    private val videoFiles = mutableMapOf<String, java.io.RandomAccessFile>()
     private val renamedPaths = mutableSetOf<String>()
 
     /**
@@ -215,6 +216,13 @@ class AndroidStoragePort(override val roots: StorageRoots) : StoragePort {
         if (artifact == DurableArtifact.RUN_ADMISSION) {
             return Files.newInputStream(path).use { reconcileRunAdmissionBytes(it.readBytes()) }
         }
+        if (artifact == DurableArtifact.VIDEO) {
+            // A container is opaque bytes written by the platform muxer. Reading it as NDJSON, as
+            // the append-only streams below are read, would either fail or silently mis-count.
+            // Its record count is not derivable from the bytes; the synchronization evidence is
+            // what states how many samples it holds.
+            return reconcileOpaqueBytes(path)
+        }
 
         val digest = MessageDigest.getInstance("SHA-256")
         var recordCount = 0L
@@ -274,6 +282,47 @@ class AndroidStoragePort(override val roots: StorageRoots) : StoragePort {
         return sequence to timeNs
     }
 
+    /** Byte length and digest of an opaque artifact, with no record parsing. */
+    private fun reconcileOpaqueBytes(path: Path): ArtifactReconciliation {
+        val digest = MessageDigest.getInstance("SHA-256")
+        var byteLength = 0L
+        Files.newInputStream(path).use { stream ->
+            val block = ByteArray(64 * 1024)
+            while (true) {
+                val read = stream.read(block)
+                if (read <= 0) break
+                digest.update(block, 0, read)
+                byteLength += read
+            }
+        }
+        return ArtifactReconciliation(
+            byteLength = byteLength,
+            sha256 = digest.digest().joinToString("") { "%02x".format(it) },
+            recordCount = 0L,
+            posePresentCount = null,
+        )
+    }
+
+    /**
+     * A seekable descriptor for the video artifact inside [attempt].
+     *
+     * MediaMuxer owns its output and seeks while finalizing, so it cannot be fed byte ranges
+     * through appendArtifact. Handing up a descriptor rather than a path keeps the platform layout
+     * private: the caller can write this one already-opened file and cannot name or traverse
+     * anything else.
+     */
+    fun openVideoDescriptor(attempt: StagingAttempt): java.io.FileDescriptor {
+        val path = artifactPath(attempt, DurableArtifact.VIDEO)
+        val file = java.io.RandomAccessFile(path.toFile(), "rw")
+        videoFiles[attempt.path] = file
+        return file.fd
+    }
+
+    /** Closes the video descriptor for [attempt], if one was opened. */
+    fun closeVideoDescriptor(attempt: StagingAttempt) {
+        videoFiles.remove(attempt.path)?.let { runCatching { it.close() } }
+    }
+
     private fun framesPath(attempt: StagingAttempt): Path = Paths.get(attempt.path, FRAMES_FILE_NAME)
 
     private fun artifactPath(attempt: StagingAttempt, artifact: DurableArtifact): Path =
@@ -281,6 +330,7 @@ class AndroidStoragePort(override val roots: StorageRoots) : StoragePort {
             DurableArtifact.POSE_STREAM -> FRAMES_FILE_NAME
             DurableArtifact.TELEMETRY -> TELEMETRY_FILE_NAME
             DurableArtifact.RUN_ADMISSION -> RUN_ADMISSION_FILE_NAME
+            DurableArtifact.VIDEO -> VIDEO_FILE_NAME
         })
 
     private fun checkpointPath(attempt: StagingAttempt): Path = Paths.get(attempt.path, CHECKPOINT_FILE_NAME)
@@ -327,6 +377,7 @@ class AndroidStoragePort(override val roots: StorageRoots) : StoragePort {
     private companion object {
         const val FRAMES_FILE_NAME = "frames.ndjson"
         const val TELEMETRY_FILE_NAME = "telemetry.ndjson"
+        const val VIDEO_FILE_NAME = "video.mp4"
         const val RUN_ADMISSION_FILE_NAME = "run-admission.json"
         const val CHECKPOINT_FILE_NAME = "checkpoint"
         const val MANIFEST_FILE_NAME = "manifest.json"

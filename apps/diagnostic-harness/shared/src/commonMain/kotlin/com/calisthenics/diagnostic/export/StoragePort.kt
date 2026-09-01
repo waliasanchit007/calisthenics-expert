@@ -82,6 +82,15 @@ enum class DurableArtifact {
     POSE_STREAM,
     TELEMETRY,
     RUN_ADMISSION,
+
+    /**
+     * The synchronized video container for this session.
+     *
+     * Unlike the append-only streams, the platform muxer owns this file and writes it itself, so
+     * it is opened through a descriptor rather than fed byte ranges. It still lives inside the
+     * staging attempt and commits with the session: the encoder may not publish independently.
+     */
+    VIDEO,
 }
 
 data class ArtifactReconciliation(

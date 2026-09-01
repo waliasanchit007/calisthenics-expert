@@ -30,7 +30,7 @@ import kotlinx.serialization.json.long
  * root. NOFOLLOW classification and device/inode rechecks narrow the Android app-private
  * single-writer TOCTOU assumption, but do not claim immunity from a malicious concurrent writer.
  */
-class JvmPurgeFilesystem(private val roots: StorageRoots) : PurgeFilesystem {
+class FilePurgeFilesystem(private val roots: StorageRoots) : PurgeFilesystem {
     override val registrySha256: String = StorageLocationRegistry.CANONICAL_REGISTRY_SHA256
 
     private val rootPaths = mapOf(
@@ -206,7 +206,8 @@ class JvmPurgeFilesystem(private val roots: StorageRoots) : PurgeFilesystem {
         if (snapshot(export)?.kind != NodeKind.DIRECTORY) return false
         val manifest = export.resolve("manifest.json")
         if (requireRegularFile(manifest) == null) return false
-        val decoded = decodeManifest(Files.readString(manifest))
+        // Files.readString is a Java 11 API that Android does not provide; readAllBytes is.
+        val decoded = decodeManifest(Files.readAllBytes(manifest).decodeToString())
         decoded.sessionKind == "live_conformance" &&
             decoded.sessionId.value == sessionId.value &&
             decoded.participantPseudonymId == "synthetic-m05-${sessionId.value}"
