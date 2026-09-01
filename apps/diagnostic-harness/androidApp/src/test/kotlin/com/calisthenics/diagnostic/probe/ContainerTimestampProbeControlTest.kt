@@ -14,6 +14,8 @@ class ContainerTimestampProbeControlTest {
 
         assertEquals(3, controls.onGrid.size)
         assertEquals(controls.onGrid.size, controls.offGrid.size)
+        assertEquals(listOf(1_000_000L, 1_033_300L, 1_066_600L), controls.onGrid)
+        assertEquals(listOf(1_000_000L, 1_033_301L, 1_066_602L), controls.offGrid)
         assertTrue(controls.onGrid.zipWithNext().all { (before, after) -> before < after })
         assertTrue(controls.offGrid.zipWithNext().all { (before, after) -> before < after })
         assertTrue(controls.onGrid.all { it * 90_000L % 1_000_000L == 0L })

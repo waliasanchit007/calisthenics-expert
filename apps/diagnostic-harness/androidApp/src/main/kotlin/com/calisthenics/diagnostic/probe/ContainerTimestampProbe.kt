@@ -45,7 +45,11 @@ fun deriveControlledSubmittedPts(timebases: TrackTimescales): ControlledSubmitte
     val base = ((1_000_000L + microsecondGrid - 1L) / microsecondGrid) * microsecondGrid
     val onGridInterval = ((33_333L + microsecondGrid / 2L) / microsecondGrid) * microsecondGrid
     val onGrid = listOf(base, base + onGridInterval, base + 2L * onGridInterval)
-    val offGrid = listOf(base, base + 33_333L, base + 66_666L)
+    val offGrid = listOf(
+        base,
+        base + onGridInterval + 1L,
+        base + 2L * onGridInterval + 2L,
+    )
     require(onGrid.all { it * ticksPerSecond % 1_000_000L == 0L }) {
         "derived on-grid sequence is not aligned to the observed track timebase"
     }
@@ -70,21 +74,22 @@ class ContainerTimestampProbe(private val context: Context) {
     fun run(): ContainerTimestampProbeResult {
         val calibration = runOnce(CALIBRATION_PTS_US)
         val controls = deriveControlledSubmittedPts(calibration.timebases)
-        check(controls.offGrid == CALIBRATION_PTS_US) {
-            "calibration sequence no longer matches the controlled off-grid sequence"
-        }
         val onGrid = runOnce(controls.onGrid)
+        val offGrid = runOnce(controls.offGrid)
         check(onGrid.codecName == calibration.codecName) {
             "controlled probe selected different encoders across runs"
         }
-        check(onGrid.timebases == calibration.timebases) {
+        check(offGrid.codecName == calibration.codecName) {
+            "controlled probe selected different encoders across runs"
+        }
+        check(onGrid.timebases == calibration.timebases && offGrid.timebases == calibration.timebases) {
             "controlled probe observed different track timebases across runs"
         }
         return ContainerTimestampProbeResult(
             onGrid = ContainerTimestampProbeSequence(controls.onGrid, onGrid.demuxedPtsUs),
             offGrid = ContainerTimestampProbeSequence(
                 controls.offGrid,
-                calibration.demuxedPtsUs,
+                offGrid.demuxedPtsUs,
             ),
             timebases = calibration.timebases,
             container = "video/mp4",
