@@ -77,7 +77,7 @@
 
   Run the two focused test commands above plus `./.venv/bin/ruff check tools/check_m05b_physical_purge.py reference/tests/test_m05b_physical_purge_check.py` and `./.venv/bin/mypy --strict tools/check_m05b_physical_purge.py`.
 
-- [ ] **Step 9: Commit the contract/checker increment**
+- [x] **Step 9: Commit the contract/checker increment**
 
   Commit message: `feat: add physical purge evidence checker`.
 
@@ -94,37 +94,37 @@
 - Consumes: `LiveCameraComposition.fromAndroid(..., recordVideo = true)`, `AndroidStorageRoots.from(context)`, `FilePurgeFilesystem`, `AndroidSyntheticPurge`, `PurgeSessionId.parseOrNull`, `PhysicalPurgeObservation.render()`.
 - Produces: one instrumentation class that creates, validates, and purges a complete synthetic session; exactly one status payload tagged `M05B_PHYSICAL_PURGE_RECORD`.
 
-- [ ] **Step 1: Write RED structure tests**
+- [x] **Step 1: Write RED structure tests**
 
   Assert the device gate requests video, waits for encoded frames, finalizes the session, checks all four committed artifacts before purge, creates one owned staging directory named `<id>.1.staging`, creates one owned transfer directory named `<id>.transfer.bundle`, invokes `AndroidSyntheticPurge(FilePurgeFilesystem(roots), BuildConfig.PROBE_GIT_SHA)`, requires `PURGE_COMPLETE`, verifies all three on-device post-scans are empty, verifies the tombstone exists, and calls `sendStatus` exactly once.
 
-- [ ] **Step 2: Run RED Android unit/compilation checks**
+- [x] **Step 2: Run RED Android unit/compilation checks**
 
   Run `cd apps/diagnostic-harness && ./gradlew --no-daemon :androidApp:testDebugUnitTest --tests '*PhysicalPurgeDeviceGateContractTest*' :androidApp:compileDebugAndroidTestKotlin`.
 
   Expected: structure test fails because the gate is absent.
 
-- [ ] **Step 3: Implement the short live session setup**
+- [x] **Step 3: Implement the short live session setup**
 
   Use the same authorized camera observation, bounded capture loop, live-conformance manifest derivation, and teardown sequence as `SynchronizedVideoDeviceGateTest`. Require at least one encoded/demuxed video sample and non-empty committed `manifest.json`, `video.mp4`, `frames.ndjson`, and `synchronization-evidence.json`. Do not duplicate synchronization validation; consume the already-admitted Task 4 composition result.
 
-- [ ] **Step 4: Add non-vacuous test-owned residues**
+- [x] **Step 4: Add non-vacuous test-owned residues**
 
   After publication and before purge, resolve `StorageRoots` once. Create `<stagingRoot>/<id>.1.staging/owned.bin` and `<transferStagingRoot>/<id>.transfer.bundle/owned.bin` using literal synthetic bytes. Never create outside those registry-derived roots and never take a path argument from instrumentation input.
 
-- [ ] **Step 5: Execute and verify the existing purge transaction**
+- [x] **Step 5: Execute and verify the existing purge transaction**
 
   Parse the generated session ID into `PurgeSessionId`, generate a lowercase UUID operation ID, invoke `AndroidSyntheticPurge`, and require `PURGE_COMPLETE`. Independently call `FilePurgeFilesystem.postScan` for all `devicePurgeLocations`, require `ownedRemaining == 0`, require the export/staging/transfer owned entries absent, and require the tombstone journal file present and non-empty. Attempt a fresh staging admission under the purged session ID and require `PURGE.SESSION_TOMBSTONED`.
 
-- [ ] **Step 6: Emit one sanitized observation**
+- [x] **Step 6: Emit one sanitized observation**
 
   Hash/read the tombstone only after the transaction is terminal. Populate `PhysicalPurgeObservation` from measured preconditions and the returned purge record. Put it into one `Bundle` and call `InstrumentationRegistry.sendStatus` once. On any throwable, emit a typed blocking observation rather than a success-looking partial record; still destroy camera lifecycle resources.
 
-- [ ] **Step 7: Run focused GREEN checks**
+- [x] **Step 7: Run focused GREEN checks**
 
   Run the Step 2 command and confirm the Android test APK assembles.
 
-- [ ] **Step 8: Prove device-gate mutations**
+- [x] **Step 8: Prove device-gate mutations**
 
   Remove `recordVideo = true` and require the structure test to fail. Remove creation of each non-export residue in turn and require the matching non-vacuity assertion to fail. Move purge before the complete-session checks and require the ordering assertion to fail. Remove the tombstone-backed re-admission check and require the fence assertion to fail.
 
