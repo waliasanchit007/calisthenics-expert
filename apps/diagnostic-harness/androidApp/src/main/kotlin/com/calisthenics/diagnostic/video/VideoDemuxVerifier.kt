@@ -42,18 +42,28 @@ object VideoDemuxVerifier {
             var videoTrack = -1
             var metadataTrack = -1
             var codec = ""
+            val discovered = mutableListOf<String>()
             for (index in 0 until extractor.trackCount) {
                 val format = extractor.getTrackFormat(index)
-                when (val mime = format.getString(MediaFormat.KEY_MIME).orEmpty()) {
-                    MediaCodecVideoWriter.METADATA_MIME -> metadataTrack = index
-                    else -> if (mime.startsWith("video/")) {
+                val mime = format.getString(MediaFormat.KEY_MIME).orEmpty()
+                discovered += mime
+                when {
+                    mime.startsWith("video/") -> {
                         videoTrack = index
                         codec = mime
                     }
+
+                    mime == MediaCodecVideoWriter.METADATA_MIME -> metadataTrack = index
                 }
             }
-            require(videoTrack >= 0) { "container has no video track" }
-            require(metadataTrack >= 0) { "container has no metadata track" }
+            // Name what was actually found. A bare "no video track" says nothing about whether
+            // the muxer wrote the wrong MIME, one track, or none.
+            require(videoTrack >= 0) {
+                "container has no video track; tracks=" + discovered.joinToString(",")
+            }
+            require(metadataTrack >= 0) {
+                "container has no metadata track; tracks=" + discovered.joinToString(",")
+            }
 
             val videoPtsUs = readPresentationTimestamps(extractor, videoTrack)
             val metadataPtsUs = mutableListOf<Long>()

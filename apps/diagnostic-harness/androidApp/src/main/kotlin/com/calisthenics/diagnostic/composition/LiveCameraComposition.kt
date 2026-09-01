@@ -625,6 +625,11 @@ class LiveCameraComposition internal constructor(
 
     /** Releases live-owned resources without entering the five-second drain path. */
     fun abandon() {
+        // A session that abandons must still close its encoder and muxer. Hanging finalization
+        // only off the happy-path pre-seal fence leaves the container unfinalized -- on the device
+        // that produced a 40-byte stub with every frame encoded but nothing muxed. finish() is
+        // idempotent and guarded, so finalizing on both terminal paths is exactly-once.
+        finalizeVideoWriter()
         val waitForSourceStart = synchronized(monitor) {
             if (resourcesReleased || abandonRequested) return
             abandonRequested = true
@@ -1022,6 +1027,7 @@ class LiveCameraComposition internal constructor(
     /** Lazily constructed per run, and only when this run records video. */
     private var videoWriter: com.calisthenics.diagnostic.video.LiveVideoWriter? = null
     private var videoWriterFinished = false
+    private var videoWriterResult: com.calisthenics.diagnostic.video.VideoWriterResult? = null
     private val videoDispositions =
         mutableListOf<Pair<Long, com.calisthenics.diagnostic.video.VideoDisposition>>()
 
@@ -1047,12 +1053,22 @@ class LiveCameraComposition internal constructor(
             videoWriterFinished = true
             videoWriter
         } ?: return
-        writer.finish()
+        val result = writer.finish()
+        synchronized(monitor) { videoWriterResult = result }
     }
 
     /** Per-run video accounting, or null when this run recorded no video. */
     internal fun videoAccounting(): com.calisthenics.diagnostic.video.VideoAccounting? =
         synchronized(monitor) { videoWriter?.accounting() }
+
+    /**
+     * The completed writer result, or null if this run recorded no video or never finalized it.
+     *
+     * Exposed so the device gate can report whether finalization actually ran rather than leaving
+     * an empty container unexplained.
+     */
+    internal fun videoWriterResult(): com.calisthenics.diagnostic.video.VideoWriterResult? =
+        synchronized(monitor) { videoWriterResult }
 
     private fun canonicalize(frame: OwnedYuvFrame): ByteArray {
         val upright = yuv420ToUprightRgb24(

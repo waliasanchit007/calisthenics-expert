@@ -152,23 +152,35 @@ def check_record(record: dict, probe: dict, probe_path: Path) -> list[str]:
         reasons.append("unauthorized_device_target")
 
     # Provenance: the probe measured one constant transform on one codec in one container.
+    #
+    # The device reports only what it observed. The host owns the comparison and the digest
+    # binding, because the device cannot know the digest of a file that lives in the repository.
     observed = record.get("provenance") or {}
     probe_provenance = probe.get("provenance") or {}
     if observed.get("codec") != probe_provenance.get("codec"):
         reasons.append("probe_codec_mismatch")
     if observed.get("container") != probe_provenance.get("container"):
         reasons.append("probe_container_mismatch")
-    if observed.get("probe_sha256") != probe_digest(probe_path):
-        reasons.append("probe_digest_mismatch")
 
     return sorted(set(reasons))
 
 
 def assert_sanitized(record: dict) -> None:
-    """No absolute host or device paths may appear in a record meant for the repository."""
-    rendered = json.dumps(record)
-    if _ABSOLUTE_PATH.search(rendered):
-        raise SynchronizedVideoCheckError("record contains an absolute path and is not sanitized")
+    """No absolute host or device path may appear in the fields that could carry one.
+
+    The scan is deliberately scoped rather than applied to the whole record. `Build.FINGERPRINT`
+    legitimately contains slash-led substrings (`samsung/pa3qxins/pa3q:16/...`) and is device
+    identity, not a path; scanning the whole record rejects every honest observation.
+    """
+    suspect: list[str] = []
+    artifacts = record.get("artifacts") or {}
+    suspect.extend(str(value) for key, value in artifacts.items() if key.endswith("path_ref"))
+    suspect.extend(str(reason) for reason in (record.get("blocking_reasons") or []))
+    for value in suspect:
+        if _ABSOLUTE_PATH.search(value):
+            raise SynchronizedVideoCheckError(
+                "record contains an absolute path and is not sanitized"
+            )
 
 
 def extract_record(transcript: str) -> dict:
@@ -222,7 +234,24 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {error}", file=sys.stderr)
         return EXIT_USAGE
 
-    print(json.dumps({"record": record, "blocking_reasons": reasons}, indent=2, sort_keys=True))
+    # The probe path and digest are bound into the gate result here, by the host, so the recorded
+    # evidence names exactly which admitted probe this run inherited its transform class from.
+    print(
+        json.dumps(
+            {
+                "record": record,
+                "inherited_probe": {
+                    "path_ref": args.probe.as_posix(),
+                    "sha256": probe_digest(args.probe),
+                    "codec": (probe.get("provenance") or {}).get("codec"),
+                    "container": (probe.get("provenance") or {}).get("container"),
+                },
+                "blocking_reasons": reasons,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
     if reasons:
         print(
             "blocked: this observation is recorded as blocking and is not admissible",

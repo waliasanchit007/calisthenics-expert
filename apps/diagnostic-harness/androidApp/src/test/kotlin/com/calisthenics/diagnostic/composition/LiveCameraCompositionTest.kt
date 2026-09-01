@@ -132,6 +132,41 @@ class LiveCameraCompositionTest {
     }
 
     @Test
+    fun abandoningTheSessionStillFinalizesTheVideoWriter() {
+        var now = 1_000_000_000L
+        val writer = RecordingVideoWriter()
+        val harness = Harness(
+            recordingVideoWriter = writer,
+            clockOverride = LiveCameraComposition.AndroidLiveClock { now },
+        )
+        assertIs<LiveCameraStartResult.Started>(harness.start(10))
+        now = 1_000_100_000L
+        harness.composition.handleFrame(frame(timestampNs = 1_000_002_000L))
+
+        harness.composition.abandon()
+
+        // An abandoned session must still close its encoder and muxer. Without this the container
+        // is left unfinalized: on the device that produced a 40-byte stub with every frame
+        // encoded and nothing muxed.
+        assertEquals(1, writer.finishCount, "abandon must finalize the video writer")
+    }
+
+    @Test
+    fun theVideoWriterIsFinalizedExactlyOnceAcrossStopAndAbandon() {
+        val writer = RecordingVideoWriter()
+        withHarness(Harness(recordingVideoWriter = writer)) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            harness.source.emit(frame(timestampNs = 1_000_002_000L))
+            harness.inference.completeSuccess()
+
+            harness.composition.stop()
+            harness.composition.abandon()
+
+            assertEquals(1, writer.finishCount, "finalization must be exactly once, not twice")
+        }
+    }
+
+    @Test
     fun noVideoWriterIsConstructedWhenTheRunRecordsNoVideo() {
         var now = 1_000_000_000L
         val harness = Harness(

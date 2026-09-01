@@ -135,6 +135,16 @@ class SeamedVideoWriter(
     private val encoder: VideoEncoderPort,
     private val muxer: VideoMuxerPort,
 ) : LiveVideoWriter {
+    /**
+     * The writer owns its own mutual exclusion.
+     *
+     * The composition deliberately calls [accept] outside the session monitor, because encoding
+     * must never hold the session lock. CameraX delivers frames on a background executor, so two
+     * callbacks can enter concurrently; unsynchronised counters lose updates and the accounting
+     * invariant then fails. This was not visible to single-threaded unit tests and only appeared
+     * on the device.
+     */
+    private val lock = Any()
     private var accepted = 0
     private var encoded = 0
     private var droppedBeforeEncoder = 0
@@ -157,7 +167,7 @@ class SeamedVideoWriter(
         frameIndex: Long,
         rebasedCaptureNs: Long,
         ownedFrame: OwnedYuvFrame,
-    ): VideoDisposition {
+    ): VideoDisposition = synchronized(lock) {
         check(!finished) { "writer already finished; construct one writer per run" }
         val ptsUs = submittedPtsUsOf(rebasedCaptureNs)
         check(allSubmittedPtsUs.add(ptsUs)) { "duplicate submitted PTS $ptsUs" }
@@ -185,7 +195,7 @@ class SeamedVideoWriter(
             }
         }
         writeDrainedUnits()
-        return disposition
+        return@synchronized disposition
     }
 
     /** Write each finished unit as a paired video+metadata sample at the same muxer PTS. */
@@ -199,15 +209,16 @@ class SeamedVideoWriter(
         }
     }
 
-    override fun accounting(): VideoAccounting =
+    override fun accounting(): VideoAccounting = synchronized(lock) {
         VideoAccounting(
             accepted = accepted,
             encoded = encoded,
             droppedBeforeEncoder = droppedBeforeEncoder,
             encoderFailures = encoderFailures,
         )
+    }
 
-    override fun finish(): VideoWriterResult {
+    override fun finish(): VideoWriterResult = synchronized(lock) {
         if (!finished) {
             encoder.signalEndOfStream()
             writeDrainedUnits()
@@ -219,8 +230,13 @@ class SeamedVideoWriter(
             muxer.release()
             encoder.release()
         }
-        return VideoWriterResult(
-            accounting = accounting(),
+        return@synchronized VideoWriterResult(
+            accounting = VideoAccounting(
+                accepted = accepted,
+                encoded = encoded,
+                droppedBeforeEncoder = droppedBeforeEncoder,
+                encoderFailures = encoderFailures,
+            ),
             submittedPtsUs = submittedPtsUs.toList(),
             muxedPtsUs = muxedPtsUs.toList(),
         )

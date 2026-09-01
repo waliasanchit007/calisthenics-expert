@@ -4,6 +4,8 @@ import com.calisthenics.diagnostic.camera.OwnedYuvFrame
 import com.calisthenics.diagnostic.preprocessing.FrameRotation
 import com.calisthenics.diagnostic.preprocessing.YuvColorRange
 import com.calisthenics.diagnostic.preprocessing.YuvColorStandard
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
@@ -207,6 +209,44 @@ class LiveVideoWriterTest {
         assertIs<VideoDisposition.Encoded>(second.accept(0, 0L, frame()))
     }
 
+    @Test
+    fun concurrentCallbacksKeepTheAccountingInvariant() {
+        // CameraX delivers on a background executor and the composition calls accept() outside the
+        // session monitor, so two callbacks can enter concurrently. Unsynchronised counters lose
+        // updates and VideoAccounting's init check then throws. A single-threaded test cannot see
+        // this; it first appeared on the device.
+        val muxer = SynchronizedRecordingMuxer()
+        val writer = SeamedVideoWriter(encoder = ThreadSafeImmediateEncoder(), muxer = muxer)
+        val threads = 8
+        val perThread = 60
+        val start = CountDownLatch(1)
+        val done = CountDownLatch(threads)
+        val failures = java.util.concurrent.CopyOnWriteArrayList<Throwable>()
+
+        repeat(threads) { t ->
+            Thread {
+                start.await()
+                repeat(perThread) { i ->
+                    val index = (t * perThread + i).toLong()
+                    val rebasedNs = (index + 1L) * 1_000L
+                    runCatching { writer.accept(index, rebasedNs, frame()) }
+                        .onFailure { failures += it }
+                }
+                done.countDown()
+            }.start()
+        }
+        start.countDown()
+        assertTrue(done.await(30, TimeUnit.SECONDS), "threads did not finish")
+
+        assertTrue(failures.isEmpty(), "concurrent accept failed")
+        val accounting = writer.accounting()
+        assertEquals(threads * perThread, accounting.accepted)
+        assertEquals(
+            accounting.accepted,
+            accounting.encoded + accounting.droppedBeforeEncoder + accounting.encoderFailures,
+        )
+    }
+
     // --- seams -------------------------------------------------------------------------------
 
     private fun newWriter(
@@ -338,6 +378,42 @@ class LiveVideoWriterTest {
             val units = ready.toList()
             ready.clear()
             return units
+        }
+
+        override fun signalEndOfStream() = Unit
+
+        override fun release() = Unit
+    }
+
+
+    private class SynchronizedRecordingMuxer : VideoMuxerPort {
+        private val guard = Any()
+        val videoPtsUs = mutableListOf<Long>()
+
+        override fun writeVideoSample(ptsUs: Long, bytes: ByteArray) {
+            synchronized(guard) { videoPtsUs += ptsUs }
+        }
+
+        override fun writeMetadataSample(ptsUs: Long, payload: MetadataPayload) = Unit
+
+        override fun stop() = Unit
+
+        override fun release() = Unit
+    }
+
+    private class ThreadSafeImmediateEncoder : VideoEncoderPort {
+        private val guard = Any()
+        private val ready = ArrayDeque<EncodedUnit>()
+
+        override fun submit(frame: OwnedYuvFrame, ptsUs: Long): SubmitOutcome {
+            synchronized(guard) { ready.addLast(EncodedUnit(ptsUs, ByteArray(1))) }
+            return SubmitOutcome.Accepted
+        }
+
+        override fun drain(): List<EncodedUnit> = synchronized(guard) {
+            val units = ready.toList()
+            ready.clear()
+            units
         }
 
         override fun signalEndOfStream() = Unit

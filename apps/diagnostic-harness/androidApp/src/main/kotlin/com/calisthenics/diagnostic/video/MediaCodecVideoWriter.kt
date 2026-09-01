@@ -52,12 +52,22 @@ internal interface VideoTrackSink {
  * the writer pairs metadata by presentation timestamp rather than by submission order.
  */
 internal class MediaCodecVideoEncoder(
-    width: Int,
-    height: Int,
+    private val width: Int,
+    private val height: Int,
     frameRate: Int,
     bitRate: Int,
     private val trackSink: VideoTrackSink,
 ) : VideoEncoderPort {
+
+    /**
+     * Bytes in one YUV420 frame.
+     *
+     * queueInputBuffer must be told how many bytes the buffer actually holds. Passing 0 -- easy to
+     * do when the planes were filled through getInputImage rather than the raw ByteBuffer -- marks
+     * every input as empty, so the codec encodes nothing and never emits output. On the device
+     * that produced five accepted frames, zero drained units, and a 40-byte container.
+     */
+    private val frameSizeBytes: Int = width * height * 3 / 2
 
     private val codec: MediaCodec = MediaCodec.createEncoderByType(MediaCodecVideoWriter.VIDEO_MIME)
     private val bufferInfo = MediaCodec.BufferInfo()
@@ -95,7 +105,7 @@ internal class MediaCodecVideoEncoder(
             val image = codec.getInputImage(index)
                 ?: return SubmitOutcome.Failed("encoder_input_image_unavailable")
             copyPlanes(frame, image)
-            codec.queueInputBuffer(index, 0, 0, ptsUs, 0)
+            codec.queueInputBuffer(index, 0, frameSizeBytes, ptsUs, 0)
             SubmitOutcome.Accepted
         } catch (error: IllegalStateException) {
             SubmitOutcome.Failed("encoder_queue_input_failed")
@@ -107,8 +117,13 @@ internal class MediaCodecVideoEncoder(
     override fun drain(): List<EncodedUnit> {
         if (released) return emptyList()
         val units = mutableListOf<EncodedUnit>()
+        // Before end of stream a zero timeout keeps the camera callback non-blocking. After it,
+        // the codec still owes us every remaining frame plus the format change that starts the
+        // muxer, and those take time to emerge: polling with a zero timeout returns nothing and
+        // the container is finalized empty.
+        val timeoutUs = if (endOfStreamSignalled) DRAIN_TIMEOUT_US else 0L
         while (true) {
-            val index = codec.dequeueOutputBuffer(bufferInfo, 0L)
+            val index = codec.dequeueOutputBuffer(bufferInfo, timeoutUs)
             when {
                 index == MediaCodec.INFO_TRY_AGAIN_LATER -> return units
 
@@ -206,6 +221,7 @@ internal class MediaCodecVideoEncoder(
 
     private companion object {
         const val END_OF_STREAM_TIMEOUT_US = 10_000L
+        const val DRAIN_TIMEOUT_US = 250_000L
     }
 }
 
