@@ -41,39 +41,39 @@
 - Consumes: `PurgeRecord.render()`, `PurgeState`, `StorageLocationId`, reserved synthetic IDs, existing synchronized-video session accounting.
 - Produces: `PhysicalPurgeObservation.render(): String`; host `parse_device_record`, `verify_device_record`, `verify_independent_post_scan`, `verify_tombstone_journal`, and `verify_instrumented_run` functions; one JSON host result containing no paths or stable device serial.
 
-- [ ] **Step 1: Write RED renderer tests**
+- [x] **Step 1: Write RED renderer tests**
 
   Add tests constructing a complete observation and asserting exactly these closed fields: schema version, record kind, sanitized/non-participant flags, device class/model/API, producer SHA, app/test APK SHA values supplied by the host, video-enabled precondition, four pre-purge artifact-presence booleans, closed purge state/sequence/location counts, and tombstone journal digest/length. Assert rendering refuses a non-reserved session ID, a non-complete purge, any zero pre-inventory root, or `video_present=false`. Assert output contains no absolute path, device serial, participant identifier, landmark coordinate, wall-clock timestamp, or operator identity.
 
-- [ ] **Step 2: Run the focused common test and verify RED**
+- [x] **Step 2: Run the focused common test and verify RED**
 
   Run `cd apps/diagnostic-harness && ./gradlew --no-daemon :shared:jvmTest --tests '*PhysicalPurgeEvidenceTest*'`.
 
   Expected: compilation fails because `PhysicalPurgeObservation` does not exist.
 
-- [ ] **Step 3: Implement the minimum renderer**
+- [x] **Step 3: Implement the minimum renderer**
 
   Implement an immutable observation whose constructor derives `admissible` from the closed inputs. `render()` must emit one compact JSON object, sort blockers, expose only bounded counts/digests and the reserved synthetic ID, and never accept a caller-declared success boolean.
 
-- [ ] **Step 4: Write RED host-checker tests**
+- [x] **Step 4: Write RED host-checker tests**
 
   Cover: non-zero instrumentation exit; missing/multiple status records; malformed JSON; wrong device/model/API/provenance; pose-only or missing video; incomplete/non-vacuous failure; unknown location; absolute path leakage; host post-scan residue; missing/invalid tombstone; tombstone hash mismatch; non-terminal journal; app/test APK mismatch; and a fully valid fixture. Patch subprocess calls and require exact argv arrays, never shell strings.
 
-- [ ] **Step 5: Run the host-checker tests and verify RED**
+- [x] **Step 5: Run the host-checker tests and verify RED**
 
   Run `./.venv/bin/pytest -q reference/tests/test_m05b_physical_purge_check.py`.
 
   Expected: import/file failure because the checker does not exist.
 
-- [ ] **Step 6: Implement the minimum host checker**
+- [x] **Step 6: Implement the minimum host checker**
 
   Parse exactly one `M05B_PHYSICAL_PURGE_RECORD=<json>` payload from the transcript. Validate device output before any adb read. Independently run fixed `adb -s SERIAL exec-out run-as PACKAGE ...` argv commands, accept only the three registry child roots `exports`, `staging`, and `transfer-staging`, and reject owned names matching the session ID, `<id>.<n>.staging`, or `<id>.transfer.bundle`. Pull `tombstones/<id>.purge-tombstone.json` byte-exactly, validate it with `validate_tombstone_journal`, require the last record to be `PURGE_COMPLETE`, recompute SHA/length, and compare them with the device observation. Emit one sanitized JSON result to stdout; exit non-zero on every mismatch.
 
-- [ ] **Step 7: Prove load-bearing mutations**
+- [x] **Step 7: Prove load-bearing mutations**
 
   Mutate the session-relative owned-name matcher to ignore transfer bundles and require the residue test to fail. Mutate the tombstone terminal-state check to accept `PURGE_INCOMPLETE` and require the terminal-journal test to fail. Restore byte-exactly after each mutation.
 
-- [ ] **Step 8: Run focused GREEN checks**
+- [x] **Step 8: Run focused GREEN checks**
 
   Run the two focused test commands above plus `./.venv/bin/ruff check tools/check_m05b_physical_purge.py reference/tests/test_m05b_physical_purge_check.py` and `./.venv/bin/mypy --strict tools/check_m05b_physical_purge.py`.
 
