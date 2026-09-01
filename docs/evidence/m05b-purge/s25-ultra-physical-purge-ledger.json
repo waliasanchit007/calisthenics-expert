@@ -1,7 +1,7 @@
 {
-  "evidence_file": null,
-  "evidence_sha256": null,
-  "reason": "physical_purge_rehearsal_not_recorded",
+  "evidence_file": "docs/evidence/m05b-purge/s25-ultra-SM-S938B-api36-physical-purge.json",
+  "evidence_sha256": "e08ec49cd50a998f0192a8467203b9aa1eef35cddb2f7c9cc62c32c484a94513",
+  "reason": null,
   "required_device": "samsung_galaxy_s25_ultra",
-  "status": "pending"
+  "status": "recorded"
 }

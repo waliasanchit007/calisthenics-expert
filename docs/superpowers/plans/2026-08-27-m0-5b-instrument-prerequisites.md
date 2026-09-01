@@ -364,10 +364,10 @@ S25. This is not authorized by Task 5a.
 publication evidence. Rehearse against the complete video-enabled session shape; do not substitute
 the historical pose-only software rehearsal.
 
-- [ ] Create and rehearse one complete short video-enabled synthetic session; a pose-only run is invalid.
-- [ ] Independently inspect the app-private post-scan through host `run-as`, then add the host checker,
+- [x] Create and rehearse one complete short video-enabled synthetic session; a pose-only run is invalid.
+- [x] Independently inspect the app-private post-scan through host `run-as`, then add the host checker,
   final physical Make target/build-contract, and pending/recorded evidence ledger validation.
-- [ ] Record physical evidence only after the exact final binary and Task 4 artifacts are available; never
+- [x] Record physical evidence only after the exact final binary and Task 4 artifacts are available; never
   substitute emulator evidence or claim Task 5a as a rehearsal.
 
 ---

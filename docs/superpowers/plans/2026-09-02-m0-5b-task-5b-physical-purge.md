@@ -169,7 +169,7 @@
 
   Remove the installed test-APK hash comparison and require the build-contract test to fail. Replace the checker exit with a grep and require failure. Point a recorded ledger at an unrelated JSON file and require the ledger test to fail. Restore byte-exactly.
 
-- [ ] **Step 6: Run focused GREEN checks and commit**
+- [x] **Step 6: Run focused GREEN checks and commit**
 
   Run the build-contract, ledger, and purge checker tests; Ruff and strict mypy on touched Python; Android unit and test-APK assembly. Commit message: `feat: add physical purge device gate`.
 
@@ -187,27 +187,27 @@
 - Consumes: clean exact Task 5b candidate and one attached authorized physical S25.
 - Produces: recorded non-participant evidence bound to git SHA and exact APK hashes, a validated terminal tombstone, and completed Task 5b checkboxes.
 
-- [ ] **Step 1: Verify the physical preconditions**
+- [x] **Step 1: Verify the physical preconditions**
 
   Confirm one authorized physical Samsung Galaxy S25 Ultra, Android API 36, clean worktree, local HEAD equals remote branch, `apps/diagnostic-harness/local.properties` exists, and the model asset is present only through the fetch task.
 
-- [ ] **Step 2: Run the physical gate without interpreting text as success**
+- [x] **Step 2: Run the physical gate without interpreting text as success**
 
   Run `make verify-harness-s25-m05b-physical-purge` and accept only exit code 0 from the host checker. Preserve the printed sanitized host result. Do not rerun on the same session ID; every attempt uses a fresh reserved ID.
 
-- [ ] **Step 3: Independently inspect the result before recording**
+- [x] **Step 3: Independently inspect the result before recording**
 
   Confirm the host result reports a video-enabled precondition, non-vacuous inventory for every purge root, zero owned residue in all three roots, terminal `PURGE_COMPLETE`, a valid exact-byte tombstone chain, and a successful tombstone-backed re-admission refusal. Confirm no participant capture or participant identifier exists.
 
-- [ ] **Step 4: Record immutable evidence**
+- [x] **Step 4: Record immutable evidence**
 
   Add the exact sanitized host result as the evidence file. Change the ledger to `recorded`, point it to that file, and include its SHA-256. Run the ledger validator; do not edit the evidence in place after admission—any correction requires a new evidence file/version.
 
-- [ ] **Step 5: Run the complete verification boundary**
+- [x] **Step 5: Run the complete verification boundary**
 
   Run `make verify`, `make verify-harness-jvm`, `make verify-harness-ios`, Android unit tests and androidTest APK assembly, repository guard, focused host-checker/build-contract/ledger tests, and inspect `git diff --check`, `git status`, and the exact branch diff against `origin/main`.
 
-- [ ] **Step 6: Commit and push the evidence checkpoint**
+- [x] **Step 6: Commit and push the evidence checkpoint**
 
   Commit message: `test: record physical synthetic purge rehearsal`. Push the branch, verify local and remote HEAD match, and keep the worktree. Do not open a PR, merge, tag, or delete anything.
 

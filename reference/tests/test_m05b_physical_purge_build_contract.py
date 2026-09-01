@@ -52,16 +52,18 @@ def test_physical_purge_target_is_exact_candidate_checker_owned_and_never_writes
     assert "rm -rf" not in recipe
 
 
-def test_pending_ledger_is_closed_and_cannot_claim_recorded_evidence() -> None:
+def test_ledger_is_closed_and_recorded_mode_reopens_exact_evidence() -> None:
     ledger = json.loads(LEDGER.read_text(encoding="utf-8"))
 
-    assert ledger == {
-        "evidence_file": None,
-        "evidence_sha256": None,
-        "reason": "physical_purge_rehearsal_not_recorded",
-        "required_device": "samsung_galaxy_s25_ultra",
-        "status": "pending",
-    }
+    assert ledger["status"] in {"pending", "recorded"}
+    assert ledger["required_device"] == "samsung_galaxy_s25_ultra"
+    if ledger["status"] == "pending":
+        assert ledger["reason"] == "physical_purge_rehearsal_not_recorded"
+        assert ledger["evidence_file"] is None
+        assert ledger["evidence_sha256"] is None
+    else:
+        assert ledger["reason"] is None
+        assert checker.verify_recorded_ledger(ROOT, ledger) == []
 
 
 def test_recorded_ledger_helper_opens_and_hashes_the_exact_evidence(tmp_path: Path) -> None:
