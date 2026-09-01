@@ -7,10 +7,12 @@ import com.calisthenics.diagnostic.android.BuildConfig
 import com.calisthenics.diagnostic.replay.androidDeviceClassOf
 import com.calisthenics.diagnostic.study.ContainerTimestampEnvironment
 import com.calisthenics.diagnostic.study.ContainerTimestampEvidence
+import com.calisthenics.diagnostic.study.ContainerTimestampControls
 import com.calisthenics.diagnostic.study.ContainerTimestampObservation
 import com.calisthenics.diagnostic.study.ContainerTimestampProvenance
 import com.calisthenics.diagnostic.study.containerTimestampBlockingReasons
 import com.calisthenics.diagnostic.study.renderContainerTimestampEvidence
+import com.calisthenics.diagnostic.study.SynchronizationTimebases
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.test.assertContains
@@ -29,7 +31,7 @@ class ContainerTimestampProbeTest {
                     "probe must run off the Android main thread"
                 }
                 ContainerTimestampProbe(instrumentation.targetContext).run()
-            }.get(30, TimeUnit.SECONDS)
+            }.get(90, TimeUnit.SECONDS)
 
             val evidence = ContainerTimestampEvidence(
                 emittedBy = EMITTED_BY,
@@ -50,14 +52,30 @@ class ContainerTimestampProbeTest {
                     codec = observation.codec,
                 ),
                 observation = ContainerTimestampObservation(
-                    submittedPtsUs = observation.submittedPtsUs,
-                    demuxedPtsUs = observation.demuxedPtsUs,
+                    submittedPtsUs = observation.onGrid.submittedPtsUs,
+                    demuxedPtsUs = observation.onGrid.demuxedPtsUs,
+                ),
+                controls = ContainerTimestampControls(
+                    timebases = SynchronizationTimebases(
+                        videoTicksPerSecond = observation.timebases.videoTicksPerSecond,
+                        metadataTicksPerSecond = observation.timebases.metadataTicksPerSecond,
+                    ),
+                    onGrid = ContainerTimestampObservation(
+                        submittedPtsUs = observation.onGrid.submittedPtsUs,
+                        demuxedPtsUs = observation.onGrid.demuxedPtsUs,
+                    ),
+                    offGrid = ContainerTimestampObservation(
+                        submittedPtsUs = observation.offGrid.submittedPtsUs,
+                        demuxedPtsUs = observation.offGrid.demuxedPtsUs,
+                    ),
                 ),
             )
             val record = renderContainerTimestampEvidence(evidence)
 
-            assertTrue(observation.submittedPtsUs.all { it > 0L })
-            assertTrue(observation.demuxedPtsUs.all { it >= 0L })
+            assertTrue(observation.onGrid.submittedPtsUs.all { it > 0L })
+            assertTrue(observation.onGrid.demuxedPtsUs.all { it >= 0L })
+            assertTrue(observation.offGrid.submittedPtsUs.all { it > 0L })
+            assertTrue(observation.offGrid.demuxedPtsUs.all { it >= 0L })
             assertContains(record, "\"sanitized\":true")
             assertContains(record, "\"non_participant_observation\":true")
             assertFalse(record.contains(instrumentation.targetContext.cacheDir.absolutePath))

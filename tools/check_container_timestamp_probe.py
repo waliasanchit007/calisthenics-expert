@@ -34,6 +34,12 @@ BLOCK_COUNT_MISMATCH = "submitted_demuxed_count_mismatch"
 BLOCK_NON_CONSTANT_TRANSFORM = "container_timestamp_transform_non_constant"
 BLOCK_UNAUTHORIZED_TARGET = "unauthorized_device_target"
 BLOCK_PROVENANCE = "invalid_probe_git_sha"
+BLOCK_CONTROL_TIMEBASE_INVALID = "container_track_timebase_invalid"
+BLOCK_ON_GRID_NON_CONSTANT = "on_grid_transform_non_constant"
+BLOCK_ON_GRID_NOT_ALIGNED = "on_grid_submitted_pts_not_tick_aligned"
+BLOCK_OFF_GRID_EXACT = "off_grid_transform_vacuously_exact"
+BLOCK_OFF_GRID_NOT_OFF_GRID = "off_grid_submitted_pts_are_tick_aligned"
+BLOCK_OFF_GRID_SPAN_EXCEEDED = "off_grid_quantization_span_exceeded"
 
 _SUITE_LINE = re.compile(
     r"^INSTRUMENTATION_STATUS:\s+class=(?P<suite>[^\r\n]+)$", re.MULTILINE
@@ -123,8 +129,115 @@ def derive_constant_offset_us(observation: dict[str, Any]) -> int | None:
     return offsets.pop() if len(offsets) == 1 else None
 
 
+def _sequence_reasons(observation: object) -> list[str]:
+    if not isinstance(observation, dict):
+        return [BLOCK_COUNT_MISMATCH]
+    submitted = observation.get("submitted_pts_us")
+    demuxed = observation.get("demuxed_pts_us")
+    submitted = submitted if isinstance(submitted, list) else []
+    demuxed = demuxed if isinstance(demuxed, list) else []
+    reasons: list[str] = []
+    if not submitted:
+        reasons.append(BLOCK_SUBMITTED_PTS_EMPTY)
+    if any(not _is_int(value) or value <= 0 for value in submitted):
+        reasons.append(BLOCK_SUBMITTED_PTS_NOT_POSITIVE)
+    if any(not _is_int(value) or value < 0 for value in demuxed):
+        reasons.append(BLOCK_DEMUXED_PTS_NEGATIVE)
+    if not all(before < after for before, after in pairwise(submitted)):
+        reasons.append(BLOCK_SUBMITTED_ORDER)
+    if not all(before < after for before, after in pairwise(demuxed)):
+        reasons.append(BLOCK_DEMUXED_ORDER)
+    if len(submitted) != len(demuxed):
+        reasons.append(BLOCK_COUNT_MISMATCH)
+    return reasons
+
+
+def _controlled_timebase(observation: dict[str, Any]) -> int | None:
+    timebases = observation.get("container_timebases")
+    if not isinstance(timebases, dict):
+        return None
+    video = timebases.get("video_ticks_per_second")
+    metadata = timebases.get("metadata_ticks_per_second")
+    if not _is_int(video) or not _is_int(metadata) or video <= 0 or video != metadata:
+        return None
+    return video
+
+
+def _quantization_bound_ns(ticks_per_second: int) -> int:
+    return ((2_000_000_000 + ticks_per_second - 1) // ticks_per_second) + 2_000
+
+
+def _offset_interval_ns(observation: dict[str, Any]) -> dict[str, int] | None:
+    submitted = observation.get("submitted_pts_us")
+    demuxed = observation.get("demuxed_pts_us")
+    if not isinstance(submitted, list) or not isinstance(demuxed, list):
+        return None
+    if not submitted or len(submitted) != len(demuxed):
+        return None
+    if not all(_is_int(value) for value in submitted + demuxed):
+        return None
+    offsets = sorted(
+        (submitted_item - demuxed_item) * 1_000
+        for submitted_item, demuxed_item in zip(submitted, demuxed)
+    )
+    return {"minimum": offsets[0], "maximum": offsets[-1]}
+
+
+def _controlled_blocking_reasons(record: dict[str, Any]) -> list[str]:
+    observation = record.get("observation")
+    if not isinstance(observation, dict):
+        return [BLOCK_COUNT_MISMATCH]
+    on_grid = observation.get("on_grid")
+    off_grid = observation.get("off_grid")
+    reasons = _sequence_reasons(on_grid) + _sequence_reasons(off_grid)
+    ticks_per_second = _controlled_timebase(observation)
+    if ticks_per_second is None:
+        reasons.append(BLOCK_CONTROL_TIMEBASE_INVALID)
+    if isinstance(on_grid, dict) and not _sequence_reasons(on_grid):
+        if derive_constant_offset_us(on_grid) is None:
+            reasons.append(BLOCK_ON_GRID_NON_CONSTANT)
+        submitted = on_grid.get("submitted_pts_us")
+        assert isinstance(submitted, list)
+        if ticks_per_second is not None and not all(
+            value * ticks_per_second % 1_000_000 == 0 for value in submitted
+        ):
+            reasons.append(BLOCK_ON_GRID_NOT_ALIGNED)
+    if isinstance(off_grid, dict) and not _sequence_reasons(off_grid):
+        if derive_constant_offset_us(off_grid) is not None:
+            reasons.append(BLOCK_OFF_GRID_EXACT)
+        submitted = off_grid.get("submitted_pts_us")
+        assert isinstance(submitted, list)
+        if ticks_per_second is not None and all(
+            value * ticks_per_second % 1_000_000 == 0 for value in submitted
+        ):
+            reasons.append(BLOCK_OFF_GRID_NOT_OFF_GRID)
+        interval = _offset_interval_ns(off_grid)
+        if (
+            ticks_per_second is not None
+            and interval is not None
+            and interval["maximum"] - interval["minimum"]
+            > _quantization_bound_ns(ticks_per_second)
+        ):
+            reasons.append(BLOCK_OFF_GRID_SPAN_EXCEEDED)
+    return reasons
+
+
 def container_timestamp_blocking_reasons(record: dict[str, Any]) -> list[str]:
     """Recompute all admission blockers from observations and environment."""
+    if record.get("artifact_schema_version") == "1.1.0":
+        reasons = _controlled_blocking_reasons(record)
+        environment = record.get("environment")
+        if not isinstance(
+            environment, dict
+        ) or not is_authorized_container_timestamp_target(environment):
+            reasons.append(BLOCK_UNAUTHORIZED_TARGET)
+        provenance = record.get("provenance")
+        sha = (
+            provenance.get("harness_git_sha") if isinstance(provenance, dict) else None
+        )
+        if not isinstance(sha, str) or _SHA.fullmatch(sha) is None:
+            reasons.append(BLOCK_PROVENANCE)
+        return reasons
     observation = record.get("observation")
     environment = record.get("environment")
     if not isinstance(observation, dict) or not isinstance(environment, dict):
@@ -181,7 +294,7 @@ def require_exact_suite(transcript: str) -> None:
 def validate_record(record: dict[str, Any]) -> None:
     """Validate the record envelope and compare, but never use, its declared verdict."""
     _require(
-        record.get("artifact_schema_version") == "1.0.0",
+        record.get("artifact_schema_version") in {"1.0.0", "1.1.0"},
         "unexpected evidence schema version",
     )
     _require(
@@ -204,10 +317,16 @@ def validate_record(record: dict[str, Any]) -> None:
         not forbidden, f"evidence contains forbidden participant keys: {forbidden}"
     )
 
+    controlled = record.get("artifact_schema_version") == "1.1.0"
+    observation_fields = (
+        ("container_timebases", "on_grid", "off_grid")
+        if controlled
+        else _OBSERVATION_FIELDS
+    )
     for section, required in (
         ("environment", _ENVIRONMENT_FIELDS),
         ("provenance", _PROVENANCE_FIELDS),
-        ("observation", _OBSERVATION_FIELDS),
+        ("observation", observation_fields),
     ):
         block = record.get(section)
         _require(isinstance(block, dict), f"evidence has no {section} object")
@@ -246,27 +365,67 @@ def validate_record(record: dict[str, Any]) -> None:
 
     observation = record["observation"]
     assert isinstance(observation, dict)
-    submitted = observation["submitted_pts_us"]
-    demuxed = observation["demuxed_pts_us"]
-    _require(isinstance(submitted, list), "submitted_pts_us is not an array")
-    _require(isinstance(demuxed, list), "demuxed_pts_us is not an array")
-    _require(
-        all(_is_int(value) for value in submitted),
-        "submitted_pts_us contains a non-integer",
-    )
-    _require(
-        all(_is_int(value) for value in demuxed),
-        "demuxed_pts_us contains a non-integer",
-    )
-    declared_offset = observation["constant_offset_us"]
-    _require(
-        declared_offset is None or _is_int(declared_offset),
-        "constant_offset_us is not an integer or null",
-    )
-    _require(
-        declared_offset == derive_constant_offset_us(observation),
-        "declared constant_offset_us disagrees with the paired observations",
-    )
+    if controlled:
+        ticks_per_second = _controlled_timebase(observation)
+        _require(
+            ticks_per_second is not None,
+            "controlled evidence has invalid track timebases",
+        )
+        for name in ("on_grid", "off_grid"):
+            sequence = observation[name]
+            _require(isinstance(sequence, dict), f"{name} is not an object")
+            assert isinstance(sequence, dict)
+            submitted = sequence.get("submitted_pts_us")
+            demuxed = sequence.get("demuxed_pts_us")
+            _require(
+                isinstance(submitted, list), f"{name} submitted_pts_us is not an array"
+            )
+            _require(
+                isinstance(demuxed, list), f"{name} demuxed_pts_us is not an array"
+            )
+            assert isinstance(submitted, list) and isinstance(demuxed, list)
+            _require(
+                all(_is_int(value) for value in submitted + demuxed),
+                f"{name} contains a non-integer timestamp",
+            )
+            _require(
+                sequence.get("constant_offset_us")
+                == derive_constant_offset_us(sequence),
+                f"{name} declared constant_offset_us disagrees with paired observations",
+            )
+        off_grid = observation["off_grid"]
+        assert isinstance(off_grid, dict) and ticks_per_second is not None
+        _require(
+            off_grid.get("offset_interval_ns") == _offset_interval_ns(off_grid),
+            "off_grid declared offset interval disagrees with paired observations",
+        )
+        _require(
+            off_grid.get("quantization_span_bound_ns")
+            == _quantization_bound_ns(ticks_per_second),
+            "off_grid declared quantization bound disagrees with track timebase",
+        )
+    else:
+        submitted = observation["submitted_pts_us"]
+        demuxed = observation["demuxed_pts_us"]
+        _require(isinstance(submitted, list), "submitted_pts_us is not an array")
+        _require(isinstance(demuxed, list), "demuxed_pts_us is not an array")
+        _require(
+            all(_is_int(value) for value in submitted),
+            "submitted_pts_us contains a non-integer",
+        )
+        _require(
+            all(_is_int(value) for value in demuxed),
+            "demuxed_pts_us contains a non-integer",
+        )
+        declared_offset = observation["constant_offset_us"]
+        _require(
+            declared_offset is None or _is_int(declared_offset),
+            "constant_offset_us is not an integer or null",
+        )
+        _require(
+            declared_offset == derive_constant_offset_us(observation),
+            "declared constant_offset_us disagrees with the paired observations",
+        )
 
     reasons = container_timestamp_blocking_reasons(record)
     _require(

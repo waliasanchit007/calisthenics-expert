@@ -75,6 +75,53 @@ class ContainerTimestampEvidenceTest {
         )
     }
 
+    @Test
+    fun controlledEvidenceAdmitsExactOnGridAndNonexactBoundedOffGridSequences() {
+        val evidence = controlledEvidence()
+
+        assertEquals(emptyList(), containerTimestampBlockingReasons(evidence))
+        val rendered = renderContainerTimestampEvidence(evidence)
+        assertContains(rendered, "\"artifact_schema_version\":\"1.1.0\"")
+        assertContains(rendered, "\"video_ticks_per_second\":90000")
+        assertContains(rendered, "\"metadata_ticks_per_second\":90000")
+        assertContains(rendered, "\"constant_offset_us\":1000000")
+        assertContains(rendered, "\"minimum\":1000000000")
+        assertContains(rendered, "\"maximum\":1000009000")
+        assertContains(rendered, "\"quantization_span_bound_ns\":24223")
+    }
+
+    @Test
+    fun controlledEvidenceRejectsAVacuouslyExactOffGridSequence() {
+        val exact = ContainerTimestampObservation(
+            submittedPtsUs = listOf(1_000_000L, 1_033_300L, 1_066_600L),
+            demuxedPtsUs = listOf(0L, 33_300L, 66_600L),
+        )
+        val evidence = controlledEvidence().copy(
+            controls = controlledEvidence().controls?.copy(offGrid = exact),
+        )
+
+        assertContains(
+            containerTimestampBlockingReasons(evidence),
+            CONTAINER_TIMESTAMP_BLOCK_OFF_GRID_EXACT,
+        )
+    }
+
+    @Test
+    fun controlledEvidenceRejectsAnOverBoundInteriorVariation() {
+        val overBound = ContainerTimestampObservation(
+            submittedPtsUs = listOf(1_000_000L, 1_033_333L, 1_066_666L),
+            demuxedPtsUs = listOf(0L, 33_307L, 66_666L),
+        )
+        val evidence = controlledEvidence().copy(
+            controls = controlledEvidence().controls?.copy(offGrid = overBound),
+        )
+
+        assertContains(
+            containerTimestampBlockingReasons(evidence),
+            CONTAINER_TIMESTAMP_BLOCK_OFF_GRID_SPAN_EXCEEDED,
+        )
+    }
+
     private fun evidence(submitted: List<Long>, demuxed: List<Long>) = ContainerTimestampEvidence(
         emittedBy = "ContainerTimestampProbeTest",
         environment = environment(),
@@ -84,6 +131,23 @@ class ContainerTimestampEvidenceTest {
             codec = "video/avc",
         ),
         observation = ContainerTimestampObservation(submitted, demuxed),
+    )
+
+    private fun controlledEvidence() = evidence(
+        submitted = listOf(1_000_000L, 1_033_300L, 1_066_600L),
+        demuxed = listOf(0L, 33_300L, 66_600L),
+    ).copy(
+        controls = ContainerTimestampControls(
+            timebases = SynchronizationTimebases(90_000L, 90_000L),
+            onGrid = ContainerTimestampObservation(
+                submittedPtsUs = listOf(1_000_000L, 1_033_300L, 1_066_600L),
+                demuxedPtsUs = listOf(0L, 33_300L, 66_600L),
+            ),
+            offGrid = ContainerTimestampObservation(
+                submittedPtsUs = listOf(1_000_000L, 1_033_333L, 1_066_666L),
+                demuxedPtsUs = listOf(0L, 33_332L, 66_657L),
+            ),
+        ),
     )
 
     private fun environment() = ContainerTimestampEnvironment(

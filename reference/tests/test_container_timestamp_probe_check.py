@@ -18,10 +18,15 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parents[2] / "tools"))
 
 from check_container_timestamp_probe import (
+    BLOCK_CONTROL_TIMEBASE_INVALID,
     BLOCK_COUNT_MISMATCH,
     BLOCK_DEMUXED_ORDER,
     BLOCK_DEMUXED_PTS_NEGATIVE,
     BLOCK_NON_CONSTANT_TRANSFORM,
+    BLOCK_OFF_GRID_EXACT,
+    BLOCK_OFF_GRID_NOT_OFF_GRID,
+    BLOCK_OFF_GRID_SPAN_EXCEEDED,
+    BLOCK_ON_GRID_NON_CONSTANT,
     BLOCK_SUBMITTED_ORDER,
     BLOCK_SUBMITTED_PTS_EMPTY,
     BLOCK_SUBMITTED_PTS_NOT_POSITIVE,
@@ -108,6 +113,66 @@ def _record(
     return record
 
 
+def _controlled_observation(
+    *,
+    timebase: int = 90_000,
+    on_grid_submitted: list[int] | None = None,
+    on_grid_demuxed: list[int] | None = None,
+    off_grid_submitted: list[int] | None = None,
+    off_grid_demuxed: list[int] | None = None,
+) -> dict:
+    on_grid_submitted = on_grid_submitted or [1_000_000, 1_033_300, 1_066_600]
+    on_grid_demuxed = on_grid_demuxed or [0, 33_300, 66_600]
+    off_grid_submitted = off_grid_submitted or [1_000_000, 1_033_333, 1_066_666]
+    off_grid_demuxed = off_grid_demuxed or [0, 33_332, 66_657]
+    offsets_ns = sorted(
+        (submitted - demuxed) * 1_000
+        for submitted, demuxed in zip(off_grid_submitted, off_grid_demuxed, strict=True)
+    )
+    bound_ns = ((2_000_000_000 + timebase - 1) // timebase) + 2_000 if timebase > 0 else 0
+    return {
+        "container_timebases": {
+            "video_ticks_per_second": timebase,
+            "metadata_ticks_per_second": timebase,
+        },
+        "on_grid": {
+            "submitted_pts_us": on_grid_submitted,
+            "demuxed_pts_us": on_grid_demuxed,
+            "constant_offset_us": derive_constant_offset_us(
+                {
+                    "submitted_pts_us": on_grid_submitted,
+                    "demuxed_pts_us": on_grid_demuxed,
+                }
+            ),
+        },
+        "off_grid": {
+            "submitted_pts_us": off_grid_submitted,
+            "demuxed_pts_us": off_grid_demuxed,
+            "constant_offset_us": derive_constant_offset_us(
+                {
+                    "submitted_pts_us": off_grid_submitted,
+                    "demuxed_pts_us": off_grid_demuxed,
+                }
+            ),
+            "offset_interval_ns": {
+                "minimum": offsets_ns[0],
+                "maximum": offsets_ns[-1],
+            },
+            "quantization_span_bound_ns": bound_ns,
+        },
+    }
+
+
+def _controlled_record(*, observation: dict | None = None) -> dict:
+    record = _record()
+    record["artifact_schema_version"] = "1.1.0"
+    record["observation"] = _controlled_observation() if observation is None else observation
+    reasons = container_timestamp_blocking_reasons(record)
+    record["blocking_reasons"] = reasons
+    record["blocking_result"] = bool(reasons)
+    return record
+
+
 def _transcript(
     record: dict | None = None,
     *,
@@ -172,6 +237,63 @@ def test_extract_record_requires_exactly_one_evidence_record() -> None:
 def test_extract_record_accepts_a_complete_record() -> None:
     record = _record()
     assert extract_record(_transcript(record)) == record
+
+
+def test_controlled_record_accepts_exact_on_grid_and_nonexact_bounded_off_grid() -> None:
+    record = _controlled_record()
+
+    assert container_timestamp_blocking_reasons(record) == []
+    assert extract_record(_transcript(record)) == record
+
+
+def test_controlled_record_rejects_a_vacuously_exact_off_grid_sequence() -> None:
+    observation = _controlled_observation(
+        off_grid_submitted=[1_000_000, 1_033_300, 1_066_600],
+        off_grid_demuxed=[0, 33_300, 66_600],
+    )
+    record = _controlled_record(observation=observation)
+
+    assert container_timestamp_blocking_reasons(record) == [
+        BLOCK_OFF_GRID_EXACT,
+        BLOCK_OFF_GRID_NOT_OFF_GRID,
+    ]
+
+
+def test_controlled_record_rejects_an_over_bound_middle_sample() -> None:
+    observation = _controlled_observation(
+        off_grid_demuxed=[0, 33_307, 66_666],
+    )
+    record = _controlled_record(observation=observation)
+
+    assert container_timestamp_blocking_reasons(record) == [BLOCK_OFF_GRID_SPAN_EXCEEDED]
+
+
+def test_controlled_record_rejects_a_nonconstant_on_grid_sequence() -> None:
+    observation = _controlled_observation(on_grid_demuxed=[0, 33_299, 66_600])
+    record = _controlled_record(observation=observation)
+
+    assert container_timestamp_blocking_reasons(record) == [BLOCK_ON_GRID_NON_CONSTANT]
+
+
+@pytest.mark.parametrize(
+    "timebases",
+    [
+        None,
+        {"video_ticks_per_second": 0, "metadata_ticks_per_second": 0},
+        {"video_ticks_per_second": 90_000, "metadata_ticks_per_second": 1_000},
+    ],
+)
+def test_controlled_record_fails_closed_without_one_positive_common_timebase(
+    timebases: dict | None,
+) -> None:
+    observation = _controlled_observation()
+    if timebases is None:
+        observation.pop("container_timebases")
+    else:
+        observation["container_timebases"] = timebases
+    record = _controlled_record(observation=observation)
+
+    assert BLOCK_CONTROL_TIMEBASE_INVALID in container_timestamp_blocking_reasons(record)
 
 
 @pytest.mark.parametrize(

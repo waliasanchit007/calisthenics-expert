@@ -8,15 +8,55 @@ import android.media.MediaFormat
 import android.media.MediaMuxer
 import android.os.Build
 import android.os.SystemClock
+import com.calisthenics.diagnostic.video.MediaCodecVideoWriter
+import com.calisthenics.diagnostic.video.Mp4TrackTimescaleReader
+import com.calisthenics.diagnostic.video.TrackTimescales
+import java.nio.ByteBuffer
 import java.io.File
 import java.util.UUID
 
 data class ContainerTimestampProbeResult(
-    val submittedPtsUs: List<Long>,
-    val demuxedPtsUs: List<Long>,
+    val onGrid: ContainerTimestampProbeSequence,
+    val offGrid: ContainerTimestampProbeSequence,
+    val timebases: TrackTimescales,
     val container: String,
     val codec: String,
 )
+
+data class ContainerTimestampProbeSequence(
+    val submittedPtsUs: List<Long>,
+    val demuxedPtsUs: List<Long>,
+)
+
+data class ControlledSubmittedPts(
+    val onGrid: List<Long>,
+    val offGrid: List<Long>,
+)
+
+fun deriveControlledSubmittedPts(timebases: TrackTimescales): ControlledSubmittedPts {
+    val ticksPerSecond = timebases.videoTicksPerSecond
+    require(ticksPerSecond > 0L && ticksPerSecond == timebases.metadataTicksPerSecond) {
+        "controlled probe requires one positive common track timebase"
+    }
+    val microsecondGrid = 1_000_000L / greatestCommonDivisor(1_000_000L, ticksPerSecond)
+    require(microsecondGrid > 1L) {
+        "container timebase cannot express an integral-microsecond off-grid control"
+    }
+    val base = ((1_000_000L + microsecondGrid - 1L) / microsecondGrid) * microsecondGrid
+    val onGridInterval = ((33_333L + microsecondGrid / 2L) / microsecondGrid) * microsecondGrid
+    val onGrid = listOf(base, base + onGridInterval, base + 2L * onGridInterval)
+    val offGrid = listOf(base, base + 33_333L, base + 66_666L)
+    require(onGrid.all { it * ticksPerSecond % 1_000_000L == 0L }) {
+        "derived on-grid sequence is not aligned to the observed track timebase"
+    }
+    require(offGrid.any { it * ticksPerSecond % 1_000_000L != 0L }) {
+        "derived off-grid sequence is vacuously aligned"
+    }
+    return ControlledSubmittedPts(onGrid = onGrid, offGrid = offGrid)
+}
+
+private tailrec fun greatestCommonDivisor(left: Long, right: Long): Long =
+    if (right == 0L) left else greatestCommonDivisor(right, left % right)
 
 /**
  * Measures Android's real encoder -> MP4 muxer -> MP4 extractor timestamp transform.
@@ -28,21 +68,46 @@ data class ContainerTimestampProbeResult(
  */
 class ContainerTimestampProbe(private val context: Context) {
     fun run(): ContainerTimestampProbeResult {
+        val calibration = runOnce(CALIBRATION_PTS_US)
+        val controls = deriveControlledSubmittedPts(calibration.timebases)
+        check(controls.offGrid == CALIBRATION_PTS_US) {
+            "calibration sequence no longer matches the controlled off-grid sequence"
+        }
+        val onGrid = runOnce(controls.onGrid)
+        check(onGrid.codecName == calibration.codecName) {
+            "controlled probe selected different encoders across runs"
+        }
+        check(onGrid.timebases == calibration.timebases) {
+            "controlled probe observed different track timebases across runs"
+        }
+        return ContainerTimestampProbeResult(
+            onGrid = ContainerTimestampProbeSequence(controls.onGrid, onGrid.demuxedPtsUs),
+            offGrid = ContainerTimestampProbeSequence(
+                controls.offGrid,
+                calibration.demuxedPtsUs,
+            ),
+            timebases = calibration.timebases,
+            container = "video/mp4",
+            codec = calibration.codecName,
+        )
+    }
+
+    private fun runOnce(submittedPtsUs: List<Long>): ProbeRun {
         val output = File(context.cacheDir, "container-timestamp-${UUID.randomUUID()}.mp4")
         return try {
-            val encoded = encodeAndMux(output)
-            ContainerTimestampProbeResult(
-                submittedPtsUs = SUBMITTED_PTS_US,
-                demuxedPtsUs = demux(output),
-                container = "video/mp4",
-                codec = encoded.codecName,
+            val encoded = encodeAndMux(output, submittedPtsUs)
+            val demuxed = demux(output)
+            ProbeRun(
+                codecName = encoded.codecName,
+                demuxedPtsUs = demuxed.videoPtsUs,
+                timebases = demuxed.timebases,
             )
         } finally {
             check(!output.exists() || output.delete()) { "failed to delete timestamp-probe container" }
         }
     }
 
-    private fun encodeAndMux(output: File): EncodedContainer {
+    private fun encodeAndMux(output: File, submittedPtsUs: List<Long>): EncodedContainer {
         val encoder = MediaCodec.createEncoderByType(MIME_TYPE)
         val codecName = encoder.name
         var muxer: MediaMuxer? = null
@@ -60,7 +125,8 @@ class ContainerTimestampProbe(private val context: Context) {
 
             muxer = MediaMuxer(output.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
             val info = MediaCodec.BufferInfo()
-            var trackIndex = -1
+            var videoTrackIndex = -1
+            var metadataTrackIndex = -1
             var inputIndex = 0
             var inputEos = false
             var outputEos = false
@@ -77,7 +143,7 @@ class ContainerTimestampProbe(private val context: Context) {
                     if (inputBufferIndex >= 0) {
                         val inputBuffer = checkNotNull(encoder.getInputBuffer(inputBufferIndex))
                         inputBuffer.clear()
-                        if (inputIndex < SUBMITTED_PTS_US.size) {
+                        if (inputIndex < submittedPtsUs.size) {
                             check(inputBuffer.remaining() >= frame.size) {
                                 "encoder input buffer is smaller than the synthetic frame"
                             }
@@ -86,7 +152,7 @@ class ContainerTimestampProbe(private val context: Context) {
                                 inputBufferIndex,
                                 0,
                                 frame.size,
-                                SUBMITTED_PTS_US[inputIndex],
+                                submittedPtsUs[inputIndex],
                                 0,
                             )
                             inputIndex += 1
@@ -95,7 +161,7 @@ class ContainerTimestampProbe(private val context: Context) {
                                 inputBufferIndex,
                                 0,
                                 0,
-                                SUBMITTED_PTS_US.last() + FRAME_INTERVAL_US,
+                                submittedPtsUs.last() + FRAME_INTERVAL_US,
                                 MediaCodec.BUFFER_FLAG_END_OF_STREAM,
                             )
                             inputEos = true
@@ -107,7 +173,12 @@ class ContainerTimestampProbe(private val context: Context) {
                     MediaCodec.INFO_TRY_AGAIN_LATER -> Unit
                     MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
                         check(!muxerStarted) { "encoder output format changed more than once" }
-                        trackIndex = muxer.addTrack(encoder.outputFormat)
+                        metadataTrackIndex = muxer.addTrack(
+                            MediaFormat().apply {
+                                setString(MediaFormat.KEY_MIME, MediaCodecVideoWriter.METADATA_MIME)
+                            },
+                        )
+                        videoTrackIndex = muxer.addTrack(encoder.outputFormat)
                         muxer.start()
                         muxerStarted = true
                     }
@@ -118,7 +189,14 @@ class ContainerTimestampProbe(private val context: Context) {
                             check(muxerStarted) { "encoder emitted media before its output format" }
                             encodedBuffer.position(info.offset)
                             encodedBuffer.limit(info.offset + info.size)
-                            muxer.writeSampleData(trackIndex, encodedBuffer, info)
+                            muxer.writeSampleData(videoTrackIndex, encodedBuffer, info)
+                            val metadata = ByteBuffer.allocate(java.lang.Long.BYTES)
+                                .putLong(info.presentationTimeUs)
+                                .apply { flip() }
+                            val metadataInfo = MediaCodec.BufferInfo().apply {
+                                set(0, metadata.remaining(), info.presentationTimeUs, 0)
+                            }
+                            muxer.writeSampleData(metadataTrackIndex, metadata, metadataInfo)
                         }
                         outputEos = info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
                         encoder.releaseOutputBuffer(outputBufferIndex, false)
@@ -135,27 +213,52 @@ class ContainerTimestampProbe(private val context: Context) {
         }
     }
 
-    private fun demux(output: File): List<Long> {
+    private fun demux(output: File): DemuxedProbe {
         check(output.isFile && output.length() > 0L) { "timestamp probe did not produce an MP4" }
         val extractor = MediaExtractor()
         try {
             extractor.setDataSource(output.absolutePath)
-            val trackIndex = (0 until extractor.trackCount).firstOrNull { index ->
-                extractor.getTrackFormat(index).getString(MediaFormat.KEY_MIME)?.startsWith("video/") == true
-            } ?: error("timestamp probe MP4 contains no video track")
-            extractor.selectTrack(trackIndex)
-            return buildList {
-                while (extractor.sampleTime >= 0L) {
-                    add(extractor.sampleTime)
-                    if (!extractor.advance()) break
-                }
+            val tracks = (0 until extractor.trackCount).associateBy { index ->
+                extractor.getTrackFormat(index).getString(MediaFormat.KEY_MIME).orEmpty()
             }
+            val videoTrack = tracks.entries.singleOrNull { it.key.startsWith("video/") }?.value
+                ?: error("timestamp probe MP4 contains no unique video track")
+            val metadataTrack = tracks[MediaCodecVideoWriter.METADATA_MIME]
+                ?: error("timestamp probe MP4 contains no metadata track")
+            val videoPtsUs = readTrackPts(extractor, videoTrack)
+            val metadataPtsUs = readTrackPts(extractor, metadataTrack)
+            check(videoPtsUs == metadataPtsUs) {
+                "timestamp probe video and metadata PTS disagree"
+            }
+            return DemuxedProbe(
+                videoPtsUs = videoPtsUs,
+                timebases = Mp4TrackTimescaleReader.read(output.readBytes()),
+            )
         } finally {
             extractor.release()
         }
     }
 
+    private fun readTrackPts(extractor: MediaExtractor, trackIndex: Int): List<Long> {
+        extractor.selectTrack(trackIndex)
+        return buildList {
+            while (extractor.sampleTime >= 0L) {
+                add(extractor.sampleTime)
+                if (!extractor.advance()) break
+            }
+        }.also { extractor.unselectTrack(trackIndex) }
+    }
+
     private data class EncodedContainer(val codecName: String)
+    private data class ProbeRun(
+        val codecName: String,
+        val demuxedPtsUs: List<Long>,
+        val timebases: TrackTimescales,
+    )
+    private data class DemuxedProbe(
+        val videoPtsUs: List<Long>,
+        val timebases: TrackTimescales,
+    )
 
     private companion object {
         const val MIME_TYPE = "video/avc"
@@ -169,6 +272,6 @@ class ContainerTimestampProbe(private val context: Context) {
         const val FRAME_INTERVAL_US = 33_333L
         const val DEQUEUE_TIMEOUT_US = 10_000L
         const val PROBE_TIMEOUT_MS = 20_000L
-        val SUBMITTED_PTS_US = listOf(1_000_000L, 1_033_333L, 1_066_666L)
+        val CALIBRATION_PTS_US = listOf(1_000_000L, 1_033_333L, 1_066_666L)
     }
 }
