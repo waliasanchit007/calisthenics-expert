@@ -8,7 +8,7 @@ CLI := $(VENV_PYTHON) -m observation_contracts
 M05B_CANDIDATE_IDENTITY_FILE ?= .m05b-envelope-candidate.env
 M05B_ATTRIBUTION_IDENTITY_FILE ?= .m05b-attribution-candidate.json
 
-.PHONY: bootstrap verify verify-study-readiness verify-harness-jvm verify-harness-ios verify-harness-foundation verify-kotlin-export verify-harness-android-export-parity verify-harness-detection-replay verify-harness-s25-process-kill verify-harness-replay-export verify-harness-s25-five-run-replay verify-harness-s25-camera-probe verify-harness-s25-container-timestamp-probe verify-harness-s25-storage-exclusion prepare-harness-s25-m05b-envelope-candidate verify-harness-s25-m05b-envelope verify-harness-s25-m05b-attribution verify-harness-s25-live-capture fetch-model-asset prepare-harness-gradle-dependencies
+.PHONY: bootstrap verify verify-study-readiness verify-harness-jvm verify-harness-ios verify-harness-foundation verify-kotlin-export verify-harness-android-export-parity verify-harness-detection-replay verify-harness-s25-process-kill verify-harness-replay-export verify-harness-s25-five-run-replay verify-harness-s25-camera-probe verify-harness-s25-container-timestamp-probe verify-harness-s25-synchronized-video verify-harness-s25-storage-exclusion prepare-harness-s25-m05b-envelope-candidate verify-harness-s25-m05b-envelope verify-harness-s25-m05b-attribution verify-harness-s25-live-capture fetch-model-asset prepare-harness-gradle-dependencies
 
 bootstrap:
 	@command -v "$(PYTHON)" >/dev/null 2>&1 || { echo "error: Python interpreter '$(PYTHON)' was not found" >&2; exit 1; }
@@ -598,6 +598,57 @@ verify-harness-s25-m05b-attribution:
 	set +e; adb -s "$$serial" shell am instrument -w -r -e class com.calisthenics.diagnostic.composition.M05BAttributionDeviceGateTest com.calisthenics.diagnostic.android.test/androidx.test.runner.AndroidJUnitRunner >"$$transcript" 2>&1; instrument_status=$$?; set -e; \
 	cat "$$transcript"; \
 	$(VENV_PYTHON) tools/check_m05b_attribution.py --serial "$$serial" --package com.calisthenics.diagnostic.android --transcript "$$transcript" --subprocess-exit-code "$$instrument_status" --prepared-identity "$(M05B_ATTRIBUTION_IDENTITY_FILE)"
+
+verify-harness-s25-synchronized-video:
+	@set -eu; \
+	device_count=$$(adb devices -l | tail -n +2 | awk '$$2=="device"' | wc -l | tr -d ' '); \
+	if [ "$$device_count" -ne 1 ]; then \
+		echo "error: verify-harness-s25-synchronized-video requires exactly one authorized attached device, found $$device_count" >&2; \
+		exit 1; \
+	fi; \
+	serial=$$(adb devices -l | tail -n +2 | awk '$$2=="device" {print $$1}'); \
+	case "$$serial" in \
+		emulator-*) \
+			echo "error: attached target '$$serial' is an emulator; emulator results are never physical evidence" >&2; \
+			exit 1; \
+			;; \
+	esac; \
+	manufacturer=$$(adb -s "$$serial" shell getprop ro.product.manufacturer | tr -d '\r'); \
+	manufacturer_lower=$$(printf '%s' "$$manufacturer" | tr '[:upper:]' '[:lower:]'); \
+	marketing_name=$$(adb -s "$$serial" shell getprop ro.config.marketing_name | tr -d '\r'); \
+	model=$$(adb -s "$$serial" shell getprop ro.product.model | tr -d '\r'); \
+	model_upper=$$(printf '%s' "$$model" | tr '[:lower:]' '[:upper:]'); \
+	if [ "$$manufacturer_lower" != "samsung" ]; then \
+		echo "error: attached target '$$serial' has manufacturer '$$manufacturer', not Samsung" >&2; \
+		exit 1; \
+	fi; \
+	authorized=0; \
+	case "$$model_upper" in SM-S938*) authorized=1 ;; esac; \
+	case "$$marketing_name" in *"S25 Ultra"*) authorized=1 ;; esac; \
+	if [ "$$authorized" -ne 1 ]; then \
+		echo "error: attached target '$$serial' model '$$model' marketing name '$$marketing_name' is not the authorized S25 Ultra" >&2; \
+		exit 1; \
+	fi; \
+	printf 'synchronized video target: serial=%s model=%s marketing_name=%s api=%s\n' \
+		"$$serial" "$$model" "$$marketing_name" \
+		"$$(adb -s "$$serial" shell getprop ro.build.version.sdk | tr -d '\r')"; \
+	cd apps/diagnostic-harness && ./gradlew --no-daemon :androidApp:assembleDebug :androidApp:assembleDebugAndroidTest; \
+	adb -s "$$serial" install -r androidApp/build/outputs/apk/debug/androidApp-debug.apk; \
+	adb -s "$$serial" install -r androidApp/build/outputs/apk/androidTest/debug/androidApp-debug-androidTest.apk; \
+	transcript=$$(mktemp); \
+	trap 'rm -f "$$transcript"' EXIT INT TERM; \
+	set +e; \
+	adb -s "$$serial" shell am instrument -w -r -e class com.calisthenics.diagnostic.composition.SynchronizedVideoDeviceGateTest com.calisthenics.diagnostic.android.test/androidx.test.runner.AndroidJUnitRunner >"$$transcript" 2>&1; \
+	instrument_status=$$?; \
+	set -e; \
+	cat "$$transcript"; \
+	printf 'synchronized video instrumentation exit status: %s\n' "$$instrument_status"; \
+	if [ "$$instrument_status" -ne 0 ]; then \
+		echo "error: am instrument exited $$instrument_status; transcript is untrustworthy" >&2; \
+		exit "$$instrument_status"; \
+	fi; \
+	cd ../.. && $(VENV_PYTHON) tools/check_synchronized_video_run.py "$$transcript" \
+		--probe docs/evidence/device-probes/s25-ultra-SM-S938B-api36-container-timestamp.json --pull
 
 # Task 5's bounded physical live-capture evidence gate. The device test emits one typed record;
 # the host checker pulls and validates the exact export before deriving the final verdict. This

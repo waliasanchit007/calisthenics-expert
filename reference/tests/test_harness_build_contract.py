@@ -710,3 +710,43 @@ def test_ios_host_embeds_shared_compose_controller() -> None:
     assert "ContentView()" not in app
     assert "DiagnosticHarness.framework" in project
     assert "ContentView.swift in Sources" not in project
+
+
+def test_s25_synchronized_video_target_is_isolated_binary_safe_and_checker_owned() -> None:
+    """The synchronized-video gate must decide nothing itself.
+
+    `am instrument` exits 0 even when a test fails, so the verdict belongs to the checker's exit
+    status. The payload pull must also be binary-safe: `adb shell` performs LF/CRLF translation on
+    some hosts and would silently corrupt an MP4 while leaving a plausible file behind.
+    """
+    makefile = (ROOT / "Makefile").read_text()
+    target = makefile.split("verify-harness-s25-synchronized-video:", 1)[1]
+
+    phony_line = makefile.split("\n.PHONY", 1)[1].split("\n", 1)[0]
+    assert "verify-harness-s25-synchronized-video" in phony_line, (
+        "catches the new device gate never being declared phony alongside the others"
+    )
+    assert target.lstrip().startswith("@set -eu"), (
+        "catches the wrapper losing errexit, which would let a failing step be stepped over"
+    )
+    assert "SynchronizedVideoDeviceGateTest" in target
+    assert "tools/check_synchronized_video_run.py" in target
+    assert "--probe docs/evidence/device-probes/" in target, (
+        "the gate must consume the admitted Task 3 probe rather than assume its conclusion"
+    )
+    assert "found $$device_count" in target
+    assert "emulator-*)" in target
+    assert "SM-S938*" in target
+    assert "instrument_status" in target
+    assert "OK (" not in target, (
+        "catches the verdict being decided by grepping a success line instead of an exit status"
+    )
+
+
+def test_synchronized_video_checker_never_pulls_binaries_in_text_mode() -> None:
+    source = (ROOT / "tools" / "check_synchronized_video_run.py").read_text()
+
+    assert "exec-out" in source
+    assert '"shell", "run-as"' not in source, (
+        "adb shell translates line endings and would corrupt the MP4"
+    )
