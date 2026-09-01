@@ -54,6 +54,10 @@ class SessionExporter(
         if (writerOpenAdmission is SessionAdmissionDecision.Admitted) writer.open()
     }
 
+    /** The staging attempt this session is writing into, for platform sinks that own a file. */
+    val openStagingAttempt: StagingAttempt?
+        get() = writer.openStagingAttempt
+
     override fun appendPose(record: com.calisthenics.diagnostic.contract.RawPoseFrame) {
         writer.appendPose(record)
     }

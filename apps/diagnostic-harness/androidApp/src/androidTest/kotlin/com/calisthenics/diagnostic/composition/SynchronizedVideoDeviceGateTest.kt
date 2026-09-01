@@ -80,7 +80,7 @@ class SynchronizedVideoDeviceGateTest {
                 lifecycleOwner = owner,
                 cameraCapability = observation,
                 permissionGranted = true,
-                videoOutputPath = videoFile.absolutePath,
+                recordVideo = true,
             )
 
             when (val started = composition.start(CADENCE, operatorAttestedNoPerson = true)) {

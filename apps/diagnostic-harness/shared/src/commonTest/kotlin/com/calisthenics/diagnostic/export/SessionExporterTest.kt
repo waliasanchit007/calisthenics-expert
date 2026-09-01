@@ -333,6 +333,10 @@ class SessionExporterTest {
                 "replaceCheckpoint",
                 "replaceCheckpoint",
                 "reconcileArtifact:POSE_STREAM",
+                // Video is reconciled before the manifest is written, so a container that exists
+                // in the attempt is always described by the manifest that commits with it. A
+                // pose-only run reconciles an empty artifact and records no media reference.
+                "reconcileArtifact:VIDEO",
                 "writeManifest",
                 "fsyncFile:MANIFEST",
                 "fsyncDirectory:staging",

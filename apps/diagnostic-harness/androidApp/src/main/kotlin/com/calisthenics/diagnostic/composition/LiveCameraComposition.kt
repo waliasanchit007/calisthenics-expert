@@ -1634,12 +1634,12 @@ class LiveCameraComposition internal constructor(
             },
             onCompletion: (LiveCameraCompletion) -> Unit = {},
             /**
-             * Absolute path for this run's video container, or null to record no video.
+             * Whether this run records synchronized video into its own session export.
              *
              * Only short synchronization and purge runs enable video; sustained characterization
-             * records `video_enabled=false` and passes null.
+             * records `video_enabled=false`.
              */
-            videoOutputPath: String? = null,
+            recordVideo: Boolean = false,
         ): LiveCameraComposition {
             val roots = when (val result = AndroidStorageRoots.from(context)) {
                 is StorageRootsResult.Ready -> result.roots
@@ -1653,6 +1653,10 @@ class LiveCameraComposition internal constructor(
                     .use { it.readBytes().decodeToString() },
             )
             val provenance = requireLiveModelProvenance(replayProvenance, liveProvenance)
+            // One storage port for the session: the finalizer and the video sink must write into
+            // the same staging attempt.
+            val storagePort = AndroidStoragePort(roots)
+            var exporter: SessionExporter? = null
             val clock = AndroidLiveClock()
             val thermalProbe = AndroidLiveThermalProbe.from(context)
             return LiveCameraComposition(
@@ -1664,14 +1668,22 @@ class LiveCameraComposition internal constructor(
                     clock = clock,
                     scheduler = ExecutorLiveScheduler(),
                     sourceFactory = { AndroidLiveFrameSource(CameraXFrameSource(context, lifecycleOwner)) },
-                    videoWriterFactory = videoOutputPath?.let { path ->
+                    videoWriterFactory = if (!recordVideo) {
+                        null
+                    } else {
                         { width, height ->
+                            // The container is written into the session's own staging attempt, so
+                            // it commits with the session and is purged with it.
+                            val attempt = checkNotNull(exporter?.openStagingAttempt) {
+                                "video was requested before the staging attempt opened"
+                            }
                             com.calisthenics.diagnostic.video.MediaCodecVideoWriter.open(
-                                outputPath = path,
+                                descriptor = storagePort.openVideoDescriptor(attempt),
                                 width = width,
                                 height = height,
                                 frameRate = VIDEO_FRAME_RATE,
                                 bitRate = VIDEO_BIT_RATE,
+                                onReleased = { storagePort.closeVideoDescriptor(attempt) },
                             )
                         }
                     },
@@ -1693,13 +1705,13 @@ class LiveCameraComposition internal constructor(
                     },
                     sessionFinalizerFactory = LiveSessionFinalizerFactory { template, atFinalization, monotonicNowNs ->
                         SessionExporter(
-                            storage = AndroidStoragePort(roots),
+                            storage = storagePort,
                             manifestTemplate = template,
                             monotonicNowNs = monotonicNowNs,
                             manifestAtFinalization = atFinalization,
                             admissionFence = TombstoneSessionAdmissionFence(AndroidTombstoneFenceFilesystem(roots)),
                             deferAbortUntilFence = true,
-                        )
+                        ).also { exporter = it }
                     },
                     manifestMetadata = LiveManifestMetadata(
                         harnessGitSha = BuildConfig.PROBE_GIT_SHA,

@@ -19,15 +19,22 @@ object MediaCodecVideoWriter {
     const val VIDEO_MIME: String = MediaFormat.MIMETYPE_VIDEO_AVC
     const val METADATA_MIME: String = "application/octet-stream"
 
-    /** Open a writer for one run. The caller owns [outputPath] and must not reuse it. */
+    /**
+     * Open a writer for one run over [descriptor].
+     *
+     * The descriptor belongs to the video artifact inside the session's staging attempt, so the
+     * container commits with the session. The encoder never publishes independently and never
+     * learns a filesystem path.
+     */
     fun open(
-        outputPath: String,
+        descriptor: java.io.FileDescriptor,
         width: Int,
         height: Int,
         frameRate: Int,
         bitRate: Int,
+        onReleased: () -> Unit = {},
     ): LiveVideoWriter {
-        val sink = MediaMuxerVideoSink(outputPath)
+        val sink = MediaMuxerVideoSink(descriptor, onReleased)
         val encoder = MediaCodecVideoEncoder(
             width = width,
             height = height,
@@ -265,9 +272,12 @@ internal class MediaCodecVideoEncoder(
  * its real output format, so the muxer starts on that handshake. Samples are refused before start
  * rather than silently dropped — a lost sample would desynchronise the video and pose streams.
  */
-internal class MediaMuxerVideoSink(outputPath: String) : VideoMuxerPort, VideoTrackSink {
+internal class MediaMuxerVideoSink(
+    descriptor: java.io.FileDescriptor,
+    private val onReleased: () -> Unit = {},
+) : VideoMuxerPort, VideoTrackSink {
 
-    private val muxer = MediaMuxer(outputPath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+    private val muxer = MediaMuxer(descriptor, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
     private val metadataTrack: Int
     private var videoTrack: Int = NO_TRACK
     private var started = false
@@ -331,6 +341,8 @@ internal class MediaMuxerVideoSink(outputPath: String) : VideoMuxerPort, VideoTr
         if (released) return
         released = true
         muxer.release()
+        // The storage layer owns the underlying file handle; hand it back so it can be closed.
+        onReleased()
     }
 
     private companion object {

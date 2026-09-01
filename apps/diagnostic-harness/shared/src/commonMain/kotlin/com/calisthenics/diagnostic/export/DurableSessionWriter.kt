@@ -18,6 +18,16 @@ import kotlinx.coroutines.sync.withLock
 interface DurableSessionWriter {
     val sessionId: Uuid
     val state: DurableWriterState
+
+    /**
+     * The staging attempt this session is writing into, or null before [open] or after seal.
+     *
+     * Exposed so a platform sink that must own its own file, such as the video muxer, can be
+     * opened inside the same attempt and therefore commit with the session. Nothing may publish
+     * outside the attempt.
+     */
+    val openStagingAttempt: StagingAttempt?
+
     fun open()
     fun appendPose(record: RawPoseFrame)
     fun appendTelemetry(encodedRecord: String)
@@ -44,6 +54,9 @@ class DefaultDurableSessionWriter(
         private set
 
     private var attempt: StagingAttempt? = null
+
+    override val openStagingAttempt: StagingAttempt?
+        get() = attempt
     private var poseCount = 0L
     private var posePresentCount = 0L
     private var durablePoseCount = 0L
@@ -152,6 +165,12 @@ class DefaultDurableSessionWriter(
                 if (telemetryCount > 0) {
                     add(SealedArtifact(DurableArtifact.TELEMETRY, storage.reconcileArtifact(currentAttempt, DurableArtifact.TELEMETRY)))
                 }
+                // Video presence is read from the attempt rather than signalled: if a container was
+                // muxed into this attempt it is here, and if the run recorded no video the
+                // reconciliation is an empty artifact. The muxer is finalized before the pre-seal
+                // fence continues, so nothing can still be writing when this reads it.
+                val video = storage.reconcileArtifact(currentAttempt, DurableArtifact.VIDEO)
+                if (video.byteLength > 0L) add(SealedArtifact(DurableArtifact.VIDEO, video))
             }
             val poseReconciliation = reconciled.single {
                 it.artifact == DurableArtifact.POSE_STREAM
