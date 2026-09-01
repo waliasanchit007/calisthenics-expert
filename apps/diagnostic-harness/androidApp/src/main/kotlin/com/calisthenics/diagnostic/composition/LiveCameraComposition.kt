@@ -100,6 +100,12 @@ private const val REQUESTED_CAMERA_WIDTH = 1280
 private const val REQUESTED_CAMERA_HEIGHT = 720
 private const val STALL_TIMEOUT_NS = 5_000_000_000L
 private const val DRAIN_TIMEOUT_NS = 5_000_000_000L
+
+/** Camera cadence is fixed at 30 FPS for every M0.5B run; the encoder matches it. */
+private const val VIDEO_FRAME_RATE = 30
+
+/** Conservative constant bitrate: short synchronization runs, not archival quality. */
+private const val VIDEO_BIT_RATE = 8_000_000
 private val LIVE_M05_INPUT_CLASS = M05InputClass.EMPTY_SCENE
 
 sealed interface LiveCameraStartResult {
@@ -293,10 +299,15 @@ class LiveCameraComposition internal constructor(
         /**
          * Per-run video writer factory, or null when the run records no video.
          *
+         * Receives the negotiated source dimensions: the encoder must be configured for the
+         * resolution the camera actually delivers, which is only known once frames arrive.
+         *
          * Video is enabled only for short synchronization and purge runs; sustained
          * characterization records `video_enabled=false`, so null is the normal case there.
          */
-        val videoWriterFactory: (() -> com.calisthenics.diagnostic.video.LiveVideoWriter)? = null,
+        val videoWriterFactory: (
+            (width: Int, height: Int) -> com.calisthenics.diagnostic.video.LiveVideoWriter
+        )? = null,
         val sessionFinalizerFactory: LiveSessionFinalizerFactory,
         val sessionIdProvider: () -> Uuid = M05SessionIdGenerator::next,
         val manifestMetadata: LiveManifestMetadata = LiveManifestMetadata(),
@@ -1018,7 +1029,7 @@ class LiveCameraComposition internal constructor(
         val factory = dependencies.videoWriterFactory ?: return
         val writer = synchronized(monitor) {
             if (videoWriterFinished) return
-            videoWriter ?: factory().also { videoWriter = it }
+            videoWriter ?: factory(pending.frame.width, pending.frame.height).also { videoWriter = it }
         }
         val disposition = writer.accept(pending.index, pending.rebasedCaptureNs, pending.frame)
         synchronized(monitor) { videoDispositions += pending.index to disposition }
@@ -1595,6 +1606,13 @@ class LiveCameraComposition internal constructor(
                 SessionRunnerRegistrationResult.ACCEPTED
             },
             onCompletion: (LiveCameraCompletion) -> Unit = {},
+            /**
+             * Absolute path for this run's video container, or null to record no video.
+             *
+             * Only short synchronization and purge runs enable video; sustained characterization
+             * records `video_enabled=false` and passes null.
+             */
+            videoOutputPath: String? = null,
         ): LiveCameraComposition {
             val roots = when (val result = AndroidStorageRoots.from(context)) {
                 is StorageRootsResult.Ready -> result.roots
@@ -1619,6 +1637,17 @@ class LiveCameraComposition internal constructor(
                     clock = clock,
                     scheduler = ExecutorLiveScheduler(),
                     sourceFactory = { AndroidLiveFrameSource(CameraXFrameSource(context, lifecycleOwner)) },
+                    videoWriterFactory = videoOutputPath?.let { path ->
+                        { width, height ->
+                            com.calisthenics.diagnostic.video.MediaCodecVideoWriter.open(
+                                outputPath = path,
+                                width = width,
+                                height = height,
+                                frameRate = VIDEO_FRAME_RATE,
+                                bitRate = VIDEO_BIT_RATE,
+                            )
+                        }
+                    },
                     inferenceFactory = { nowNs ->
                         val factory = PoseLandmarkerLiveAdapterFactory(
                             provenance = provenance,

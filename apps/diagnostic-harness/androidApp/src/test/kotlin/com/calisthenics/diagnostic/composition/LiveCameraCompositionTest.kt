@@ -101,7 +101,9 @@ class LiveCameraCompositionTest {
             harness.composition.handleFrame(frame(timestampNs = 1_000_002_000L))
             harness.composition.handleFrame(frame(timestampNs = 1_000_035_000L))
 
-            assertEquals(1, harness.events.count { it == "video.writer.open" })
+            assertEquals(1, harness.events.count { it.startsWith("video.writer.open") })
+            // The encoder is configured for the resolution the camera actually delivers.
+            assertEquals(1, harness.events.count { it == "video.writer.open:2x2" })
         } finally {
             harness.composition.abandon()
         }
@@ -142,7 +144,7 @@ class LiveCameraCompositionTest {
             harness.composition.handleFrame(frame(timestampNs = 1_000_002_000L))
 
             // Sustained characterization records video_enabled=false; no encoder may be built.
-            assertEquals(0, harness.events.count { it == "video.writer.open" })
+            assertEquals(0, harness.events.count { it.startsWith("video.writer.open") })
             assertNull(harness.composition.videoAccounting())
         } finally {
             harness.composition.abandon()
@@ -1618,8 +1620,8 @@ class LiveCameraCompositionTest {
                 },
                 encoderFinalizationSlot = { events += "encoder.finalize" },
                 videoWriterFactory = recordingVideoWriter?.let { writer ->
-                    {
-                        events += "video.writer.open"
+                    { width, height ->
+                        events += "video.writer.open:${width}x$height"
                         // Delegate so the harness can observe finalization ordering against the
                         // rest of the pre-seal fence.
                         object : com.calisthenics.diagnostic.video.LiveVideoWriter by writer {
