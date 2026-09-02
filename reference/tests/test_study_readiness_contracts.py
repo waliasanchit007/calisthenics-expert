@@ -174,7 +174,7 @@ def test_minimal_readiness_manifest_is_valid() -> None:
     assert_valid(study_readiness_schema_validator(), readiness_manifest())
 
 
-def test_new_study_error_codes_are_unique_and_appended() -> None:
+def test_study_error_code_release_block_remains_unique_and_contiguous() -> None:
     registry_path = (
         Path(__file__).parents[2] / "contracts" / "tooling" / "validator_error_codes.v1.json"
     )
@@ -192,8 +192,9 @@ def test_new_study_error_codes_are_unique_and_appended() -> None:
         "STUDY.SYNTHETIC_DETECTION_PENDING",
         "STUDY.LOCATION_REGISTRY",
     ]
-    assert registry["registry_version"] == "1.4.0"
-    assert registry["codes"][-len(expected) :] == expected
+    assert registry["registry_version"] == "1.5.0"
+    start = registry["codes"].index(expected[0])
+    assert registry["codes"][start : start + len(expected)] == expected
     for code in expected:
         assert registry["codes"].count(code) == 1
 

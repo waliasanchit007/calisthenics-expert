@@ -69,6 +69,10 @@ def test_draft_schema_is_structurally_valid_and_tombstone_semantics_are_draft_lo
     assert validate_tombstone_record(record) == []
 
 
+def test_invalid_tombstone_structure_emits_the_stable_schema_code() -> None:
+    assert [issue.code for issue in validate_tombstone_record({})] == ["PURGE.SCHEMA"]
+
+
 def test_tombstone_rejects_non_reserved_id_wrong_registered_locations_and_vacuous_inventory() -> (
     None
 ):

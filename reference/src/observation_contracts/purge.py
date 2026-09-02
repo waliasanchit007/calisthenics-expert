@@ -1,9 +1,4 @@
-"""Draft-local validation for M0.5B synthetic purge tombstones.
-
-This module intentionally does not use the released validator-code registry. Task 5a owns only
-the draft contract; a future coordinated schema release can decide whether any ``PURGE.*`` code
-becomes a released validator error.
-"""
+"""Validation for M0.5B synthetic purge tombstones."""
 
 from __future__ import annotations
 
@@ -17,6 +12,7 @@ from jsonschema import Draft202012Validator
 
 from observation_contracts.errors import ValidationIssue
 from observation_contracts.schema_loader import load_purge_tombstone_schema
+from observation_contracts.validator_codes import require_stable_validator_code
 
 _LOCATION_IDS = ("device_export", "device_staging", "device_transfer_staging")
 _RESERVED_SESSION_ID = re.compile(r"^00000000-0000-4000-8000-[0-9a-f]{12}$")
@@ -201,5 +197,8 @@ def _contains_sensitive_value(value: object) -> bool:
 
 def _issue(path: str, code: str, message: str) -> ValidationIssue:
     return ValidationIssue(
-        code=code, artifact_path=path, artifact_kind="purge_tombstone_draft", message=message
+        code=require_stable_validator_code(code),
+        artifact_path=path,
+        artifact_kind="purge_tombstone_draft",
+        message=message,
     )

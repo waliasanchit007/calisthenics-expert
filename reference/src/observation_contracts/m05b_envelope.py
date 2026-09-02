@@ -18,6 +18,7 @@ from observation_contracts.schema_loader import (
     load_m05b_run_admission_schema,
     load_m05b_start_envelope_schema,
 )
+from observation_contracts.validator_codes import require_stable_validator_code
 
 M05BKind = Literal["start_envelope", "execution_order", "run_admission", "attempt_entry"]
 
@@ -572,7 +573,7 @@ def admit_run(
         raise RuntimeError("admission did not execute the released conjunct set in order")
 
     observed = copy.deepcopy(dict(observed_start))
-    blocking = list(dict.fromkeys(blocking))
+    blocking = [require_stable_validator_code(code) for code in dict.fromkeys(blocking)]
     return {
         "run_admission_schema_version": "1.0.0",
         "record_kind": "m05b_run_admission",
@@ -612,7 +613,11 @@ def _schema_issues(
 
 def _issue(kind: str, path: str, code: str, pointer: str, message: str) -> ValidationIssue:
     return ValidationIssue(
-        code=code, artifact_path=path, artifact_kind=kind, pointer=pointer, message=message
+        code=require_stable_validator_code(code),
+        artifact_path=path,
+        artifact_kind=kind,
+        pointer=pointer,
+        message=message,
     )
 
 

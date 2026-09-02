@@ -111,7 +111,7 @@ def test_schema_is_registered_and_valid_record_is_admitted() -> None:
     assert sustained.validate_sustained_record(record) == []
 
 
-def test_sustained_semantic_codes_await_task8_registry_stabilization() -> None:
+def test_sustained_semantic_codes_are_completely_released_by_task8() -> None:
     registry = json.loads(
         (ROOT / "contracts/tooling/validator_error_codes.v1.json").read_text(encoding="utf-8")
     )
@@ -152,15 +152,8 @@ def test_sustained_semantic_codes_await_task8_registry_stabilization() -> None:
         "SOURCE.OUTCOME",
         "BLOCKING_CODES.MISMATCH",
     }
-    # Task 3 completed its coordinated 1.3.0 contract/error-code release after its
-    # physical precondition. Task 8 owns the sustained-code release and performs it
-    # at its registry stabilization checkpoint (plan Task 8 Step 4), not Task 4.
-    # Until then these codes stay draft. When they are released, replace this
-    # disjointness guard with the complete subset requirement
-    # draft_task8_codes <= released -- never 'not ...isdisjoint(...)', which passes
-    # when only one of the 34 codes is released.
-    assert registry["registry_version"] == "1.4.0"
-    assert draft_task8_codes.isdisjoint(released)
+    assert registry["registry_version"] == "1.5.0"
+    assert draft_task8_codes <= released
 
 
 @pytest.mark.parametrize(
@@ -246,6 +239,43 @@ def test_final_attempt_admission_digest_binds_artifact_reference() -> None:
     assert "ATTEMPT.ADMISSION_DIGEST" in _codes(record)
 
 
+def test_attempt_cadence_and_record_identity_are_derived_from_the_chain() -> None:
+    record = _valid_record()
+    chain = copy.deepcopy(record["attempt_chain"])
+    assert isinstance(chain, list) and isinstance(chain[0], dict)
+    entry = chain[0]["entry"]
+    assert isinstance(entry, dict)
+    entry["cadence_fps"] = 15
+    chain[0]["entry_sha256"] = canonical_sha256(entry)
+    record["attempt_chain"] = chain
+
+    issues = _codes(record)
+    assert "ATTEMPT.CADENCE" in issues
+    assert "ATTEMPT.RECORD_MISMATCH" in issues
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "code"),
+    [
+        ("yuv_frames_released", 99, "STAGE.YUV"),
+        ("preprocessing_completed", 99, "STAGE.PREPROCESS"),
+        ("cadence_rejected", 89, "STAGE.CADENCE"),
+        ("inference_submitted", 9, "STAGE.INFERENCE"),
+        ("pose_records_durable", 9, "STAGE.POSE"),
+    ],
+)
+def test_each_stage_accounting_equation_emits_its_stable_code(
+    field: str, value: int, code: str
+) -> None:
+    record = _valid_record()
+    accounting = copy.deepcopy(record["stage_accounting"])
+    assert isinstance(accounting, dict)
+    accounting[field] = value
+    record["stage_accounting"] = accounting
+
+    assert code in _codes(record)
+
+
 def test_attempt_entry_hash_and_latency_percentiles_are_derived_not_trusted() -> None:
     record = _valid_record()
     chain = copy.deepcopy(record["attempt_chain"])
@@ -272,6 +302,25 @@ def test_empty_latency_histogram_is_blocking() -> None:
     assert "LATENCY.EMPTY" in _codes(record)
 
 
+def test_latency_count_and_upper_percentiles_are_derived_not_trusted() -> None:
+    count_record = _valid_record()
+    latency = copy.deepcopy(count_record["latency"])
+    assert isinstance(latency, dict)
+    latency["bucket_counts"] = [5, 3, 2, 1] + [0] * 10
+    count_record["latency"] = latency
+    assert "LATENCY.COUNT" in _codes(count_record)
+
+    for rank, code in (("95", "LATENCY.PERCENTILE_95"), ("99", "LATENCY.PERCENTILE_99")):
+        record = _valid_record()
+        latency = copy.deepcopy(record["latency"])
+        assert isinstance(latency, dict)
+        percentiles = latency["percentiles"]
+        assert isinstance(percentiles, dict)
+        percentiles[rank] = {"lower_inclusive_ns": 0, "upper_inclusive_ns": 1_000_000}
+        record["latency"] = latency
+        assert code in _codes(record)
+
+
 def test_telemetry_gap_and_end_coverage_block() -> None:
     record = _valid_record()
     telemetry = copy.deepcopy(record["telemetry"])
@@ -291,6 +340,41 @@ def test_delayed_first_telemetry_sample_blocks_start_coverage() -> None:
     telemetry["first_t_session_ns"] = 1
     record["telemetry"] = telemetry
     assert "TELEMETRY.START_COVERAGE" in _codes(record)
+
+
+def test_fixed_telemetry_count_is_load_bearing() -> None:
+    record = _valid_record()
+    telemetry = copy.deepcopy(record["telemetry"])
+    assert isinstance(telemetry, dict)
+    telemetry["fixed_sample_count"] = 1499
+    record["telemetry"] = telemetry
+    assert "TELEMETRY.COUNT" in _codes(record)
+
+
+def test_every_battery_temperature_component_is_required_and_delta_is_derived() -> None:
+    for missing, code in (
+        ("start_temperature_c", "BATTERY.START_TEMPERATURE_UNAVAILABLE"),
+        ("delta_temperature_c", "BATTERY.DELTA_TEMPERATURE_UNAVAILABLE"),
+    ):
+        record = _valid_record()
+        battery = copy.deepcopy(record["battery"])
+        assert isinstance(battery, dict)
+        battery.pop(missing)
+        record["battery"] = battery
+        assert code in _codes(record)
+
+    record = _valid_record()
+    battery = copy.deepcopy(record["battery"])
+    assert isinstance(battery, dict)
+    battery["delta_temperature_c"] = 1.5
+    record["battery"] = battery
+    assert "BATTERY.DELTA" in _codes(record)
+
+
+def test_transport_loss_is_a_stable_blocking_observation() -> None:
+    record = _valid_record()
+    record["process_outcome"] = "transport_lost"
+    assert "RUN.TRANSPORT_LOST" in _codes(record)
 
 
 def test_blocking_codes_are_exactly_recomputed() -> None:

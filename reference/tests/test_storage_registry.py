@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from xml.etree import ElementTree
 
+import pytest
+
 from observation_contracts.storage_registry import (
     load_storage_registry,
     storage_registry_validation_codes,
@@ -81,6 +83,36 @@ def test_semantics_reject_duplicate_ids_nested_android_roots_and_purgeable_tombs
         "STORAGE.REGISTRY_TOMBSTONE_PURGE",
     )
     assert storage_registry_validation_codes(eighth_location) == ("STORAGE.REGISTRY_LOCATION_SET",)
+
+
+def test_remaining_storage_registry_semantics_emit_their_stable_codes() -> None:
+    document = json.loads(REGISTRY_PATH.read_text(encoding="utf-8"))
+    duplicate_root = json.loads(json.dumps(document))
+    duplicate_root["locations"][1]["relative_root"] = duplicate_root["locations"][0][
+        "relative_root"
+    ]
+    android_exclusion = json.loads(json.dumps(document))
+    android_exclusion["locations"][0]["cloud_backup"] = "included"
+    missing_scan = json.loads(json.dumps(document))
+    missing_scan["locations"][0]["post_purge_scan"] = False
+
+    assert storage_registry_validation_codes(duplicate_root) == ("STORAGE.REGISTRY_DUPLICATE_ROOT",)
+    assert storage_registry_validation_codes(android_exclusion) == (
+        "STORAGE.REGISTRY_ANDROID_EXCLUSION",
+    )
+    assert storage_registry_validation_codes(missing_scan) == ("STORAGE.REGISTRY_POST_PURGE_SCAN",)
+
+
+def test_storage_registry_loader_emits_stable_structure_codes(tmp_path: Path) -> None:
+    not_object = tmp_path / "not-object.json"
+    not_object.write_text("[]", encoding="utf-8")
+    with pytest.raises(TypeError, match="STORAGE.REGISTRY_NOT_OBJECT"):
+        load_storage_registry(not_object)
+
+    invalid_schema = tmp_path / "invalid-schema.json"
+    invalid_schema.write_text("{}", encoding="utf-8")
+    with pytest.raises(ValueError, match="STORAGE.REGISTRY_SCHEMA"):
+        load_storage_registry(invalid_schema)
 
 
 def test_android_manifest_disables_backup_and_references_modern_extraction_rules() -> None:

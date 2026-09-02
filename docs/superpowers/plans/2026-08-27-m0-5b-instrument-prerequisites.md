@@ -451,12 +451,12 @@ ledger are required before any sustained device run.
   coverage, battery delta, process/source outcome, and typed blockers. The latency edges and percentile
   rule are frozen before physical runs.
 
-- [ ] **Step 1: Write RED duration/order/accounting tests. Prove the same-attempt admission-before-capture
+- [x] **Step 1: Write RED duration/order/accounting tests. Prove the same-attempt admission-before-capture
   boundary, scalar cooldown temperature with no defaults, immutable attempt-chain order/predecessor
   derivation, fixed latency histogram protocol, and telemetry gap/end coverage.**
-- [ ] **Step 2: Implement the sustained controller and typed evidence renderer**
-- [ ] **Step 3: Mutation-check 1,500 seconds, one-second overshoot, video false, camera 30, envelope/order identity, and all stage equations**
-- [ ] **Step 4: Registry stabilization checkpoint — stabilize the emitted-code contract before any
+- [x] **Step 2: Implement the sustained controller and typed evidence renderer**
+- [x] **Step 3: Mutation-check 1,500 seconds, one-second overshoot, video false, camera 30, envelope/order identity, and all stage equations**
+- [x] **Step 4: Registry stabilization checkpoint — stabilize the emitted-code contract before any
   physical run.** Task 8 owns sustained semantics and owns this release; Task 4 does not. Run this only
   after Steps 1-3 are complete, so that no code name is frozen while its semantics can still change
   (`errors.py`: released codes are never renamed or reused for a different condition). Required:
@@ -473,8 +473,9 @@ ledger are required before any sustained device run.
     fixture-side check alone will let it reopen;
   - add a repository test asserting that every stable emitted code is present in the released registry
     and that every guarded draft set remains unreleased;
-  - release the finalized sustained set as registry `1.4.0` with changelog, compatibility evidence,
+  - release the finalized sustained set as registry `1.5.0` with changelog, compatibility evidence,
     mutation evidence, and the review requirements in `contracts/schema-release-process.md`;
+    registry `1.4.0` was already released for bounded container quantization and remains immutable;
   - replace the temporary disjointness guard in `reference/tests/test_m05b_sustained.py` with the
     complete subset requirement `draft_task8_codes <= released_codes`. Never weaken it to
     `not draft_task8_codes.isdisjoint(released_codes)`, which passes when only one of the 34 codes is

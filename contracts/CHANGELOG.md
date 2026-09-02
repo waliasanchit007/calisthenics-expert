@@ -4,6 +4,25 @@ This changelog records releases of the observation schemas and their supporting
 tooling contracts. Application, harness, model, and analysis-package versions
 are independent of these contracts.
 
+## [1.5.0] - 2026-09-02
+
+Backward-compatible validator-tooling release for the admitted M0.5B instrument surfaces.
+
+- Added 101 stable codes used by storage-registry, purge, run-envelope/admission, and sustained-run
+  validation. The existing 49 codes remain unchanged; no released code was renamed, removed, or
+  reused.
+- Added an explicit source-emission contract covering all 147 codes currently emitted by admitted
+  Python reference validators under `reference/src/observation_contracts`. Stable emissions must be
+  present in the registry, guarded draft emissions must remain absent, and an undeclared emission
+  fails at each participating M0.5B issue-construction site. Twelve dotted admission-conjunct IDs
+  that never emit as error codes remain classified separately and unreleased.
+- Enumerated the dynamic sustained latency family as `LATENCY.PERCENTILE_50`,
+  `LATENCY.PERCENTILE_95`, and `LATENCY.PERCENTILE_99`; an open-ended prefix is not an admitted code.
+- Added behavioral-oracle coverage for every stable code, including direct verifier seams where
+  schema validation intentionally preempts a semantic branch.
+- This is an additive tooling release. Observation schemas, accepted observation instances, and
+  the bounded-quantization semantics released in `1.4.0` are unchanged.
+
 ## [1.4.0] - 2026-09-02
 
 Backward-compatible synchronization-reader extension following physical S25 evidence.

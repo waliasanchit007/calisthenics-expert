@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .schema_loader import load_strict_json, storage_location_registry_schema_validator
+from .validator_codes import require_stable_validator_code
 
 LOCATION_IDS = (
     "device_export",
@@ -92,7 +93,7 @@ def storage_registry_validation_codes(document: Mapping[str, Any]) -> tuple[str,
         if item.get("location_id") != "tombstone"
     ):
         codes.append("STORAGE.REGISTRY_POST_PURGE_SCAN")
-    return tuple(codes)
+    return tuple(require_stable_validator_code(code) for code in codes)
 
 
 def load_storage_registry(path: Path) -> StorageRegistry:
@@ -100,10 +101,10 @@ def load_storage_registry(path: Path) -> StorageRegistry:
     serialized = path.read_bytes()
     document = load_strict_json(serialized.decode("utf-8"))
     if not isinstance(document, Mapping):
-        raise TypeError("STORAGE.REGISTRY_NOT_OBJECT")
+        raise TypeError(require_stable_validator_code("STORAGE.REGISTRY_NOT_OBJECT"))
     structural = tuple(storage_location_registry_schema_validator().iter_errors(document))
     if structural:
-        raise ValueError("STORAGE.REGISTRY_SCHEMA")
+        raise ValueError(require_stable_validator_code("STORAGE.REGISTRY_SCHEMA"))
     semantic = storage_registry_validation_codes(document)
     if semantic:
         raise ValueError(",".join(semantic))

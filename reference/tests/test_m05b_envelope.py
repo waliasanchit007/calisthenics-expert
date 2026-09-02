@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import observation_contracts.m05b_envelope as envelope_module
 from observation_contracts.cli import main
 from observation_contracts.m05b_envelope import (
     REQUIRED_CONJUNCT_IDS,
@@ -195,6 +196,144 @@ def test_admission_derives_admitted_status_and_exact_required_conjunct_set() -> 
     assert "success" not in record
     assert "verdict" not in record
     assert "admitted" not in record
+
+
+def test_admission_emits_stable_ambient_network_and_order_binding_codes() -> None:
+    assert _admission(**{"ambient.constancy_operator_supplied": False})["blocking_codes"] == [
+        "AMBIENT.ATTESTATION_MISSING"
+    ]
+    assert _admission(**{"connectivity.network_identity_persisted": True})["blocking_codes"] == [
+        "CONNECTIVITY.NETWORK_IDENTITY"
+    ]
+    record = admit_run(
+        envelope=_envelope(),
+        order=_order(),
+        observed_start=_observed_start(),
+        session_id="00000000-0000-4000-8000-000000000001",
+        cadence_fps=10,
+        attempt_sequence=1,
+        predecessor_status="not_applicable",
+        envelope_path="envelope.json",
+        order_path="wrong.json",
+    )
+    assert record["blocking_codes"] == ["ORDER.PATH"]
+
+
+def test_schema_preempted_semantic_codes_have_direct_behavioral_oracles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    permissive_schema = lambda: {"type": "object"}
+    monkeypatch.setitem(envelope_module._SCHEMAS, "execution_order", permissive_schema)
+    issues = validate_m05b_document({"cadences_fps": [15, 10, 30]}, "execution_order")
+    assert [issue.code for issue in issues] == ["ORDER.PERMUTATION"]
+
+    monkeypatch.setattr(envelope_module, "validate_m05b_document", lambda *_args: [])
+    envelope = _envelope()
+    protocol = copy.deepcopy(envelope["protocol"])
+    assert isinstance(protocol, dict)
+    protocol["latency_bucket_upper_bounds_ns"] = []
+    protocol["latency_percentile_ranks"] = []
+    envelope["protocol"] = protocol
+    record = admit_run(
+        envelope=envelope,
+        order=_order(),
+        observed_start=_observed_start(),
+        session_id="00000000-0000-4000-8000-000000000001",
+        cadence_fps=10,
+        attempt_sequence=1,
+        predecessor_status="not_applicable",
+        envelope_path="envelope.json",
+        order_path="execution-order.json",
+    )
+    assert "PROTOCOL.LATENCY_BUCKETS" in record["blocking_codes"]
+    assert "PROTOCOL.LATENCY_PERCENTILES" in record["blocking_codes"]
+
+    for field, value, code in (
+        ("device_class", "emulator", "DEVICE.CLASS"),
+        ("manufacturer", "other", "DEVICE.MANUFACTURER"),
+        ("model", "SM-S937B", "DEVICE.MODEL"),
+        ("api_level", 35, "DEVICE.API"),
+    ):
+        envelope = _envelope()
+        observed = _observed_start()
+        envelope_device = copy.deepcopy(envelope["device"])
+        observed_device = copy.deepcopy(observed["device"])
+        assert isinstance(envelope_device, dict) and isinstance(observed_device, dict)
+        envelope_device[field] = value
+        observed_device[field] = value
+        envelope["device"] = envelope_device
+        observed["device"] = observed_device
+        record = admit_run(
+            envelope=envelope,
+            order=_order(),
+            observed_start=observed,
+            session_id="00000000-0000-4000-8000-000000000001",
+            cadence_fps=10,
+            attempt_sequence=1,
+            predecessor_status="not_applicable",
+            envelope_path="envelope.json",
+            order_path="execution-order.json",
+        )
+        assert code in record["blocking_codes"]
+
+    for field, value, code in (
+        ("inference_cadences_fps", [10], "PROTOCOL.CADENCE_SET"),
+        ("duration_ns", 1, "PROTOCOL.DURATION"),
+        ("overshoot_ns", 2, "PROTOCOL.OVERSHOOT"),
+    ):
+        envelope = _envelope()
+        protocol = copy.deepcopy(envelope["protocol"])
+        assert isinstance(protocol, dict)
+        protocol[field] = value
+        envelope["protocol"] = protocol
+        record = admit_run(
+            envelope=envelope,
+            order=_order(),
+            observed_start=_observed_start(),
+            session_id="00000000-0000-4000-8000-000000000001",
+            cadence_fps=10,
+            attempt_sequence=1,
+            predecessor_status="not_applicable",
+            envelope_path="envelope.json",
+            order_path="execution-order.json",
+        )
+        assert code in record["blocking_codes"]
+
+    envelope = _envelope()
+    procedure = copy.deepcopy(envelope["procedure"])
+    assert isinstance(procedure, dict)
+    procedure["idle_baseline_duration_ns"] = 1
+    procedure["procedure_sha256"] = canonical_sha256(
+        {key: value for key, value in procedure.items() if key != "procedure_sha256"}
+    )
+    envelope["procedure"] = procedure
+    record = admit_run(
+        envelope=envelope,
+        order=_order(),
+        observed_start=_observed_start(),
+        session_id="00000000-0000-4000-8000-000000000001",
+        cadence_fps=10,
+        attempt_sequence=1,
+        predecessor_status="not_applicable",
+        envelope_path="envelope.json",
+        order_path="execution-order.json",
+    )
+    assert "PROTOCOL.COOLDOWN" in record["blocking_codes"]
+
+
+def test_unpermitted_run_cadence_emits_the_stable_order_code() -> None:
+    record = admit_run(
+        envelope=_envelope(),
+        order=_order(),
+        observed_start=_observed_start(),
+        session_id="00000000-0000-4000-8000-000000000001",
+        cadence_fps=12,
+        attempt_sequence=1,
+        predecessor_status="not_applicable",
+        envelope_path="envelope.json",
+        order_path="execution-order.json",
+    )
+    assert "ORDER.PERMITTED" in record["blocking_codes"]
 
 
 def test_tagged_battery_observation_is_explicitly_nullable_and_non_blocking() -> None:
@@ -462,6 +601,14 @@ def test_privacy_negative_fields_are_rejected(forbidden: dict[str, object]) -> N
     assert validate_m05b_document(_envelope() | forbidden, "start_envelope")
 
 
+def test_privacy_semantic_code_is_stable_when_schema_preemption_is_bypassed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(envelope_module._SCHEMAS, "start_envelope", lambda: {"type": "object"})
+    issues = validate_m05b_document({"participant_id": "p001"}, "start_envelope")
+    assert [issue.code for issue in issues] == ["PRIVACY.FORBIDDEN_FIELD"]
+
+
 def test_nested_privacy_forbidden_fields_are_rejected_before_admission() -> None:
     observed = _observed_start()
     observed["device"] = {**observed["device"], "android_id": "raw-id"}  # type: ignore[index]
@@ -497,8 +644,14 @@ def test_forged_verdict_fields_are_rejected_even_when_true() -> None:
 
 def test_run_admission_rejects_forged_conjunct_set_or_status() -> None:
     record = _admission()
-    assert validate_m05b_document(record | {"evaluated_conjunct_ids": ["FAKE.ID"]}, "run_admission")
-    assert validate_m05b_document(record | {"admission_status": "blocked"}, "run_admission")
+    conjunct_issues = validate_m05b_document(
+        record | {"evaluated_conjunct_ids": ["FAKE.ID"]}, "run_admission"
+    )
+    verdict_issues = validate_m05b_document(
+        record | {"admission_status": "blocked"}, "run_admission"
+    )
+    assert [issue.code for issue in conjunct_issues] == ["ADMISSION.CONJUNCT_SET"]
+    assert [issue.code for issue in verdict_issues] == ["ADMISSION.VERDICT_FORGED"]
 
 
 def test_run_admission_schema_allows_unavailable_load_bearing_digests() -> None:

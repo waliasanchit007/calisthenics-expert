@@ -46,25 +46,26 @@ controller to admitted capture startup rather than construction/setup time.
 
 ## Task 3: Host/device gate software
 
-- [ ] Add an instrumentation gate that consumes prepared exact candidate, envelope, order, and attempt
+- [x] Add an instrumentation gate that consumes prepared exact candidate, envelope, order, and attempt
   history without rebuilding or installing. It emits a sanitized non-participant reference record;
   durable session artifacts remain authoritative.
-- [ ] Add a host checker that transfers exact artifacts with binary-safe `adb exec-out`, rehashes every
+- [x] Add a host checker that transfers exact artifacts with binary-safe `adb exec-out`, rehashes every
   reference, validates the admission and sustained record, and distinguishes admitted, blocking, and
   malformed outcomes by exit status.
-- [ ] Add `verify-harness-s25-m05b-sustained` and pending ledgers for 10/15/30 FPS. Require one
+- [x] Add `verify-harness-s25-m05b-sustained` and pending ledgers for 10/15/30 FPS. Require one
   authorized unplugged S25 over Wi-Fi ADB and exact installed candidate identity. The target never
   builds, installs, clears app state, retries a blocked observation, or writes a ledger.
-- [ ] Verify focused tests, `make verify`, JVM/Android/iOS gates, and exact diff scope.
+- [x] Verify focused tests, `make verify`, JVM/Android/iOS gates, and exact diff scope.
 
 ## Task 4: Error-code stabilization
 
-- [ ] Enumerate every dotted code emitted by admitted validators and every guarded draft set.
-- [ ] Add emission-side coverage so stable emitted codes must be registered and draft codes must be
+- [x] Enumerate every dotted code emitted by admitted validators and every guarded draft set.
+- [x] Add emission-side coverage so stable emitted codes must be registered and draft codes must be
   absent. Use behavioral or negative-fixture oracles for every stable code.
-- [ ] Release the final sustained code set under registry 1.4.0 using the schema release process,
-  changelog, compatibility, and mutation evidence.
-- [ ] Replace Task 8's temporary disjointness assertion with the complete subset assertion
+- [x] Release the final sustained code set under registry 1.5.0 using the schema release process
+  (`1.4.0` is the immutable bounded-quantization release), changelog, compatibility, and mutation
+  evidence.
+- [x] Replace Task 8's temporary disjointness assertion with the complete subset assertion
   `draft_task8_codes <= released_codes`.
 
 ## Exact-final-build boundary

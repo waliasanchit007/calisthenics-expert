@@ -1,10 +1,4 @@
-"""Fail-closed validation for one non-participant M0.5B sustained observation.
-
-This module deliberately validates only the draft sustained record. It does not
-manufacture or accept a SessionManifest, and its semantic codes remain draft
-until Task 8's registry stabilization checkpoint performs the coordinated
-contract/error-code release. Task 8 owns sustained semantics; Task 4 does not.
-"""
+"""Fail-closed validation for one non-participant M0.5B sustained observation."""
 
 from __future__ import annotations
 
@@ -17,6 +11,7 @@ from jsonschema import Draft202012Validator
 from observation_contracts.errors import ValidationIssue
 from observation_contracts.m05b_envelope import canonical_sha256, validate_m05b_document
 from observation_contracts.schema_loader import load_m05b_sustained_run_schema
+from observation_contracts.validator_codes import require_stable_validator_code
 
 LATENCY_BUCKET_UPPER_BOUNDS_NS: list[int | None] = [
     1_000_000,
@@ -483,7 +478,7 @@ def _check_outcomes(record: Mapping[str, object], path: str, issues: list[Valida
 
 def _issue(path: str, code: str, pointer: str, message: str) -> ValidationIssue:
     return ValidationIssue(
-        code=code,
+        code=require_stable_validator_code(code),
         artifact_path=path,
         artifact_kind="m05b_sustained_run",
         pointer=pointer,
