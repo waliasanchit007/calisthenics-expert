@@ -55,8 +55,18 @@ class AttributionModeTest {
             recorder.record(index.toLong(), PipelineStage.CADENCE, PipelineDisposition.CADENCE_SELECTION)
         }
         repeat(SustainedTelemetryLimits.MAX_FIXED_SAMPLES_FOR_1500_SECONDS.toInt()) { sequence ->
-            recorder.append(sample(sequence.toLong(), sequence * 1_000_000_000L))
+            recorder.append(
+                sample(
+                    sequence.toLong(),
+                    sequence * 1_000_000_000L,
+                    terminal = sequence.toLong() == SustainedTelemetryLimits.MAX_FIXED_SAMPLES_FOR_1500_SECONDS - 1L,
+                ),
+            )
         }
+        recorder.recordSustainedLatencySummary(
+            upperBoundsNs = listOf(1L, 2L, null),
+            bucketCounts = listOf(4L, 3L, 2L),
+        )
 
         val samples = sink.records.filterIsInstance<FixedTelemetrySample>()
         val counters = sink.records.filterIsInstance<SustainedStageCounterSample>()
@@ -66,6 +76,67 @@ class AttributionModeTest {
         assertEquals(SustainedTelemetryLimits.MAX_RECORDS_FOR_1500_SECONDS, sink.records.size.toLong())
         assertTrue(sink.records.none { it is PipelineStageEvent })
         assertTrue(recorder.retainedStageCount <= PipelineStage.entries.size * PipelineDisposition.entries.size)
+    }
+
+    @Test
+    fun sustainedLatencySummaryIsOneBoundedFinalRecordAfterTheTerminalSample() {
+        val sink = RecordingSink()
+        val recorder = PipelineStageRecorder(
+            nowNs = { 9L },
+            sink = sink,
+            recordingMode = PipelineTelemetryRecordingMode.SUSTAINED,
+        )
+        recorder.recordFixedSample(readings(320), terminal = true)
+
+        val record = recorder.recordSustainedLatencySummary(
+            upperBoundsNs = listOf(1_000_000L, 2_000_000L, null),
+            bucketCounts = listOf(7L, 2L, 1L),
+        )
+
+        assertEquals(record, sink.records.last())
+        assertEquals(10L, record.sampleCount)
+        assertEquals(
+            "{\"record_type\":\"sustained_latency_summary\",\"schema_version\":\"1.0.0\"," +
+                "\"sequence\":1,\"t_session_ns\":9," +
+                "\"upper_bounds_ns\":[1000000,2000000,null],\"bucket_counts\":[7,2,1]," +
+                "\"sample_count\":10}\n",
+            record.encodeNdjson(),
+        )
+    }
+
+    @Test
+    fun sustainedLatencySummaryRejectsPrematureDuplicateAndInvalidShapes() {
+        val recorder = PipelineStageRecorder(
+            nowNs = { 9L },
+            sink = RecordingSink(),
+            recordingMode = PipelineTelemetryRecordingMode.SUSTAINED,
+        )
+        kotlin.test.assertFailsWith<IllegalStateException> {
+            recorder.recordSustainedLatencySummary(listOf(1L, null), listOf(1L, 0L))
+        }
+        recorder.recordFixedSample(readings(320), terminal = true)
+        recorder.recordSustainedLatencySummary(listOf(1L, null), listOf(1L, 0L))
+        kotlin.test.assertFailsWith<IllegalStateException> {
+            recorder.recordSustainedLatencySummary(listOf(1L, null), listOf(1L, 0L))
+        }
+        kotlin.test.assertFailsWith<IllegalArgumentException> {
+            SustainedLatencySummaryRecord(0L, 0L, listOf(1L, null), listOf(1L), 1L)
+        }
+        kotlin.test.assertFailsWith<IllegalArgumentException> {
+            SustainedLatencySummaryRecord(0L, 0L, listOf(2L, 1L, null), listOf(1L, 0L, 0L), 1L)
+        }
+    }
+
+    @Test
+    fun shortAttributionModeCannotEmitASustainedLatencySummary() {
+        val recorder = PipelineStageRecorder(
+            nowNs = { 9L },
+            sink = RecordingSink(),
+            recordingMode = PipelineTelemetryRecordingMode.SHORT_ATTRIBUTION,
+        )
+        kotlin.test.assertFailsWith<IllegalStateException> {
+            recorder.recordSustainedLatencySummary(listOf(1L, null), listOf(1L, 0L))
+        }
     }
 
     @Test
@@ -112,7 +183,7 @@ class AttributionModeTest {
         assertFalse(sink.records.isEmpty())
     }
 
-    private fun sample(sequence: Long, tSessionNs: Long) = FixedTelemetrySample(
+    private fun sample(sequence: Long, tSessionNs: Long, terminal: Boolean = false) = FixedTelemetrySample(
         sequence = sequence,
         tSessionNs = tSessionNs,
         thermal = TelemetryValue.Unavailable("thermal"),
@@ -124,6 +195,7 @@ class AttributionModeTest {
         keepAwake = TelemetryValue.Unavailable("keep_awake"),
         brightness = TelemetryValue.Unavailable("brightness"),
         lifecycle = TelemetryValue.Unavailable("lifecycle"),
+        terminal = terminal,
     )
 
     private fun readings(batteryTemperatureDeciC: Int) = FixedTelemetryReadings(

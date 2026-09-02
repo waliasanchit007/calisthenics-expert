@@ -65,6 +65,64 @@ class M05BEnvelopeAcceptanceTest {
     }
 
     @Test
+    fun frozenEnvelopeOrderAndAttemptHistoryRoundTripFromTheirExactCanonicalBytes() {
+        val order = M05BArtifactCodec.bindOrder(executionOrder(), "execution-order.json")
+        val envelope = M05BArtifactCodec.bindEnvelope(
+            envelope(orderPath = order.path, orderSha256 = order.sha256),
+            "envelope.json",
+        )
+        val attempt = M05BAttemptChain.bind(
+            M05BAttemptEntry(
+                attemptSequence = 1,
+                cadenceFps = 10,
+                admissionSha256 = "a".repeat(64),
+                outcome = M05BAttemptOutcome.COMPLETED,
+                previousEntrySha256 = null,
+            ),
+        )
+
+        assertEquals(envelope, M05BArtifactCodec.decodeEnvelope(envelope.exactBytes, envelope.path))
+        assertEquals(order, M05BArtifactCodec.decodeOrder(order.exactBytes, order.path))
+        assertEquals(attempt, M05BArtifactCodec.decodeAttemptEntry(attempt.exactBytes))
+    }
+
+    @Test
+    fun frozenArtifactDecodersRejectNonCanonicalBytesInsteadOfNormalizingThem() {
+        val order = M05BArtifactCodec.bindOrder(executionOrder(), "execution-order.json")
+        val nonCanonical = order.exactBytes.decodeToString().replace(",", ", ").encodeToByteArray()
+
+        assertFailsWith<IllegalArgumentException> {
+            M05BArtifactCodec.decodeOrder(nonCanonical, order.path)
+        }
+    }
+
+    @Test
+    fun frozenRunInputBundlePreservesExactArtifactsAndRejectsDigestSubstitution() {
+        val order = M05BArtifactCodec.bindOrder(executionOrder(), "execution-order.json")
+        val envelope = M05BArtifactCodec.bindEnvelope(
+            envelope(orderPath = order.path, orderSha256 = order.sha256),
+            "envelope.json",
+        )
+        val observed = observedStart()
+        val bundle = M05BFrozenRunInputs.bind(envelope, order, observed)
+
+        val decoded = M05BFrozenRunInputs.decode(bundle.exactBytes)
+
+        assertEquals(envelope.typed, decoded.envelope.typed)
+        assertTrue(envelope.exactBytes.contentEquals(decoded.envelope.exactBytes))
+        assertEquals(order.typed, decoded.order.typed)
+        assertTrue(order.exactBytes.contentEquals(decoded.order.exactBytes))
+        assertEquals(observed, decoded.observedStart)
+
+        val substituted = bundle.exactBytes.decodeToString()
+            .replace(envelope.sha256, "f".repeat(64))
+            .encodeToByteArray()
+        assertFailsWith<IllegalArgumentException> {
+            M05BFrozenRunInputs.decode(substituted)
+        }
+    }
+
+    @Test
     fun baselineConsumesAllThreeHundredSamplesAndUsesEndOperatorAttestation() {
         val clock = FakeBaselineClock()
         var samples = 0
@@ -374,7 +432,9 @@ class M05BEnvelopeAcceptanceTest {
         val blockedTen = M05BAttemptChain.bind(
             M05BAttemptEntry(1, 10, "b".repeat(64), M05BAttemptOutcome.BLOCKED, null),
         )
-        assertEquals(10, M05BAttemptChain.derive(executionOrder(), listOf(blockedTen)).cadenceFps)
+        val blockedContext = M05BAttemptChain.derive(executionOrder(), listOf(blockedTen))
+        assertEquals(10, blockedContext.cadenceFps)
+        assertTrue("ATTEMPT.BLOCKED_OBSERVATION" in blockedContext.blockingCodes)
 
         val completedFifteen = M05BAttemptChain.bind(
             M05BAttemptEntry(2, 15, "c".repeat(64), M05BAttemptOutcome.COMPLETED, completedTen.sha256),
@@ -398,6 +458,71 @@ class M05BEnvelopeAcceptanceTest {
         val complete = M05BAttemptChain.derive(executionOrder(), listOf(completedTen, completedFifteen, completedThirty))
         assertEquals(0, complete.cadenceFps)
         assertTrue("ATTEMPT.ORDER_COMPLETE" in complete.blockingCodes)
+    }
+
+    @Test
+    fun publishedSessionRecoveryAppendsOneDeterministicCompletedEntryAndIsIdempotent() {
+        val published = M05BPublishedAttempt(
+            sessionId = "00000000-0000-4000-8000-000000000010",
+            attemptSequence = 1,
+            cadenceFps = 10,
+            admissionSha256 = "a".repeat(64),
+            outcome = M05BAttemptOutcome.COMPLETED,
+        )
+
+        val recovered = M05BPublishedAttemptRecovery.recover(
+            order = executionOrder(),
+            history = emptyList(),
+            published = published,
+        )
+
+        assertEquals(1, recovered.size)
+        assertEquals(M05BAttemptOutcome.COMPLETED, recovered.single().typed.outcome)
+        assertEquals(published.admissionSha256, recovered.single().typed.admissionSha256)
+        assertEquals(
+            recovered,
+            M05BPublishedAttemptRecovery.recover(executionOrder(), recovered, published),
+        )
+    }
+
+    @Test
+    fun orphanedPublishedSessionRecoversFailClosedAndCannotAdvanceOrRerunCadence() {
+        val orphan = M05BPublishedAttempt(
+            sessionId = "00000000-0000-4000-8000-000000000010",
+            attemptSequence = 1,
+            cadenceFps = 10,
+            admissionSha256 = "a".repeat(64),
+            outcome = M05BAttemptOutcome.BLOCKED,
+        )
+
+        val recovered = M05BPublishedAttemptRecovery.recover(executionOrder(), emptyList(), orphan)
+
+        assertEquals(M05BAttemptOutcome.BLOCKED, recovered.single().typed.outcome)
+        val next = M05BAttemptChain.derive(executionOrder(), recovered)
+        assertEquals(10, next.cadenceFps)
+        assertTrue("ATTEMPT.BLOCKED_OBSERVATION" in next.blockingCodes)
+        assertFailsWith<IllegalArgumentException> {
+            M05BPublishedAttemptRecovery.recover(
+                executionOrder(),
+                recovered,
+                orphan.copy(outcome = M05BAttemptOutcome.COMPLETED),
+            )
+        }
+    }
+
+    @Test
+    fun publishedSessionRecoveryRejectsAReissuedOrConflictingCadence() {
+        val published = M05BPublishedAttempt(
+            sessionId = "00000000-0000-4000-8000-000000000010",
+            attemptSequence = 2,
+            cadenceFps = 15,
+            admissionSha256 = "a".repeat(64),
+            outcome = M05BAttemptOutcome.COMPLETED,
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            M05BPublishedAttemptRecovery.recover(executionOrder(), emptyList(), published)
+        }
     }
 
     private fun executionOrder() = M05BExecutionOrder(

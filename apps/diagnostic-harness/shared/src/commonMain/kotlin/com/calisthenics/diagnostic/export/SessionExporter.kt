@@ -18,6 +18,7 @@ import com.calisthenics.diagnostic.session.SessionFinalizer
 import com.calisthenics.diagnostic.telemetry.FixedTelemetrySample
 import com.calisthenics.diagnostic.telemetry.PipelineStageEvent
 import com.calisthenics.diagnostic.telemetry.SustainedStageCounterSample
+import com.calisthenics.diagnostic.telemetry.SustainedLatencySummaryRecord
 import com.calisthenics.diagnostic.telemetry.TelemetryRecord
 import com.calisthenics.diagnostic.telemetry.TelemetrySink
 import kotlinx.coroutines.runBlocking
@@ -126,6 +127,7 @@ class SessionExporter(
             is FixedTelemetrySample -> record.tSessionNs
             is PipelineStageEvent -> record.tSessionNs
             is SustainedStageCounterSample -> record.tSessionNs
+            is SustainedLatencySummaryRecord -> record.tSessionNs
         }
         val orderedRecord = when (record) {
             is FixedTelemetrySample -> record.copy(
@@ -142,6 +144,10 @@ class SessionExporter(
                 fixedTelemetrySequence = requireNotNull(lastFixedTelemetrySequence) {
                     "sustained stage counters require a fixed telemetry sample"
                 },
+            )
+            is SustainedLatencySummaryRecord -> record.copy(
+                sequence = nextTelemetrySequence,
+                tSessionNs = recordTimeNs,
             )
         }
         writer.appendTelemetry(orderedRecord.encodeNdjson())

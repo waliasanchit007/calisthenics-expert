@@ -17,6 +17,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
@@ -326,6 +327,63 @@ data class M05BBoundArtifact<T>(
     val sha256: String,
 )
 
+data class M05BFrozenRunInputs(
+    val envelope: M05BBoundArtifact<M05BStartEnvelope>,
+    val order: M05BBoundArtifact<M05BExecutionOrder>,
+    val observedStart: M05BObservedStart,
+    val exactBytes: ByteArray,
+) {
+    companion object {
+        fun bind(
+            envelope: M05BBoundArtifact<M05BStartEnvelope>,
+            order: M05BBoundArtifact<M05BExecutionOrder>,
+            observedStart: M05BObservedStart,
+        ): M05BFrozenRunInputs {
+            require(M05BArtifactCodec.validateEnvelope(envelope).isEmpty())
+            require(M05BArtifactCodec.validateOrder(order).isEmpty())
+            require(envelope.typed.orderPath == order.path)
+            require(envelope.typed.orderSha256 == order.sha256)
+            val bytes = M05BArtifactCodec.canonicalBytes(buildJsonObject {
+                put("frozen_run_inputs_schema_version", "1.0.0")
+                put("record_kind", "m05b_frozen_run_inputs")
+                put("envelope_path", envelope.path)
+                put("envelope_sha256", envelope.sha256)
+                put("envelope_json", envelope.exactBytes.decodeToString())
+                put("order_path", order.path)
+                put("order_sha256", order.sha256)
+                put("order_json", order.exactBytes.decodeToString())
+                put("observed_start", M05BArtifactCodec.canonicalObservedStart(observedStart))
+            })
+            return M05BFrozenRunInputs(envelope, order, observedStart, bytes)
+        }
+
+        fun decode(exactBytes: ByteArray): M05BFrozenRunInputs {
+            val value = Json.parseToJsonElement(exactBytes.decodeToString()).jsonObject
+            require(M05BArtifactCodec.canonicalBytes(value).contentEquals(exactBytes)) {
+                "frozen run inputs must use the canonical encoding"
+            }
+            require(value.getValue("frozen_run_inputs_schema_version").jsonPrimitive.content == "1.0.0")
+            require(value.getValue("record_kind").jsonPrimitive.content == "m05b_frozen_run_inputs")
+            val envelope = M05BArtifactCodec.decodeEnvelope(
+                value.getValue("envelope_json").jsonPrimitive.content.encodeToByteArray(),
+                value.getValue("envelope_path").jsonPrimitive.content,
+            )
+            val order = M05BArtifactCodec.decodeOrder(
+                value.getValue("order_json").jsonPrimitive.content.encodeToByteArray(),
+                value.getValue("order_path").jsonPrimitive.content,
+            )
+            require(value.getValue("envelope_sha256").jsonPrimitive.content == envelope.sha256)
+            require(value.getValue("order_sha256").jsonPrimitive.content == order.sha256)
+            require(envelope.typed.orderPath == order.path)
+            require(envelope.typed.orderSha256 == order.sha256)
+            val observed = M05BArtifactCodec.decodeObservedStart(
+                M05BArtifactCodec.canonicalBytes(value.getValue("observed_start")),
+            )
+            return M05BFrozenRunInputs(envelope, order, observed, exactBytes)
+        }
+    }
+}
+
 object M05BArtifactCodec {
     fun bindEnvelope(value: M05BStartEnvelope, path: String): M05BBoundArtifact<M05BStartEnvelope> {
         requireRelativePath(path)
@@ -342,11 +400,41 @@ object M05BArtifactCodec {
     fun canonicalEnvelopeBytes(value: M05BStartEnvelope): ByteArray = canonicalBytes(envelopeJson(value))
     fun canonicalOrderBytes(value: M05BExecutionOrder): ByteArray = canonicalBytes(orderJson(value))
     fun canonicalObservedStart(value: M05BObservedStart): JsonObject = observedStartJson(value)
-    fun decodeObservedStart(exactBytes: ByteArray): M05BObservedStart {
-        val objectValue = Json.parseToJsonElement(exactBytes.decodeToString()).jsonObject
-        require(canonicalBytes(objectValue).contentEquals(exactBytes)) {
-            "observed-start bytes must use the canonical encoding"
+    fun decodeEnvelope(exactBytes: ByteArray, path: String): M05BBoundArtifact<M05BStartEnvelope> {
+        requireRelativePath(path)
+        val objectValue = decodeCanonicalObject(exactBytes)
+        require(objectValue.getValue("start_envelope_schema_version").jsonPrimitive.content == "1.0.0")
+        require(objectValue.getValue("record_kind").jsonPrimitive.content == "m05b_start_envelope")
+        return M05BBoundArtifact(envelopeFromJson(objectValue), path, exactBytes, sha256(exactBytes))
+    }
+
+    fun decodeOrder(exactBytes: ByteArray, path: String): M05BBoundArtifact<M05BExecutionOrder> {
+        requireRelativePath(path)
+        val objectValue = decodeCanonicalObject(exactBytes)
+        require(objectValue.getValue("execution_order_schema_version").jsonPrimitive.content == "1.0.0")
+        require(objectValue.getValue("record_kind").jsonPrimitive.content == "m05b_execution_order")
+        return M05BBoundArtifact(orderFromJson(objectValue), path, exactBytes, sha256(exactBytes))
+    }
+
+    fun decodeAttemptEntry(exactBytes: ByteArray): M05BBoundAttemptEntry {
+        val objectValue = decodeCanonicalObject(exactBytes)
+        require(objectValue.getValue("attempt_entry_schema_version").jsonPrimitive.content == "1.0.0")
+        require(objectValue.getValue("record_kind").jsonPrimitive.content == "m05b_attempt_entry")
+        val outcome = M05BAttemptOutcome.entries.single {
+            it.wireValue == objectValue.getValue("outcome").jsonPrimitive.content
         }
+        val typed = M05BAttemptEntry(
+            attemptSequence = requireNotNull(objectValue.getValue("attempt_sequence").jsonPrimitive.intOrNull),
+            cadenceFps = requireNotNull(objectValue.getValue("cadence_fps").jsonPrimitive.intOrNull),
+            admissionSha256 = objectValue.getValue("admission_sha256").jsonPrimitive.content,
+            outcome = outcome,
+            previousEntrySha256 = objectValue.nullableString("previous_entry_sha256"),
+        )
+        return M05BBoundAttemptEntry(typed, exactBytes, sha256(exactBytes))
+    }
+
+    fun decodeObservedStart(exactBytes: ByteArray): M05BObservedStart {
+        val objectValue = decodeCanonicalObject(exactBytes)
         return observedStartFromJson(objectValue)
     }
     fun sha256(bytes: ByteArray): String = Sha256Digest.hex(bytes)
@@ -530,6 +618,87 @@ object M05BArtifactCodec {
         )
     }
 
+    private fun envelopeFromJson(value: JsonObject): M05BStartEnvelope {
+        val procedure = value.getValue("procedure").jsonObject
+        val device = value.getValue("device").jsonObject
+        val power = value.getValue("power").jsonObject
+        val connectivity = value.getValue("connectivity").jsonObject
+        val thermal = value.getValue("thermal").jsonObject
+        val ambient = value.getValue("ambient").jsonObject
+        val display = value.getValue("display").jsonObject
+        val protocol = value.getValue("protocol").jsonObject
+        val order = value.getValue("order_binding").jsonObject
+        val baselineBattery = (power.getValue("baseline_battery_observation") as? JsonObject)?.let {
+            M05BBatteryObservation(
+                unit = it.getValue("unit").jsonPrimitive.content,
+                value = requireNotNull(it.getValue("value").jsonPrimitive.doubleOrNull),
+            )
+        }
+        return M05BStartEnvelope(
+            envelopeId = value.string("envelope_id"),
+            procedureVersion = procedure.string("procedure_version"),
+            procedureSha256 = procedure.string("procedure_sha256"),
+            appSha256 = device.string("app_sha256"),
+            modelSha256 = device.string("model_sha256"),
+            runtimeVersion = device.string("runtime_version"),
+            delegate = device.string("delegate"),
+            preprocessingVersion = device.string("preprocessing_version"),
+            deviceUnitDigest = device.string("device_unit_digest"),
+            deviceClass = device.string("device_class"),
+            manufacturer = device.string("manufacturer"),
+            model = device.string("model"),
+            deviceBuild = device.string("device_build"),
+            apiLevel = device.int("api_level"),
+            charging = power.boolean("charging"),
+            powerSource = power.string("power_source"),
+            hostBatteryOverrideRejected = power.boolean("host_battery_override_rejected"),
+            powerSaveMode = power.boolean("power_save_mode"),
+            baselineBatteryObservation = baselineBattery,
+            hostAdbTransport = connectivity.string("host_adb_transport"),
+            appTransport = connectivity.string("app_transport"),
+            networkIdentityPersisted = connectivity.boolean("network_identity_persisted"),
+            ambientToken = ambient.string("token"),
+            ambientConstancy = ambient.string("constancy"),
+            ambientConstancySource = ambient.string("constancy_source"),
+            keepAwake = display.boolean("keep_awake"),
+            brightnessMode = display.string("brightness_mode"),
+            brightnessRaw = display.double("brightness_raw"),
+            brightnessScaleMin = display.double("brightness_scale_min"),
+            brightnessScaleMax = display.double("brightness_scale_max"),
+            cameraFps = protocol.int("camera_fps"),
+            inferenceCadencesFps = protocol.getValue("inference_cadences_fps").jsonArray.map {
+                requireNotNull(it.jsonPrimitive.intOrNull)
+            },
+            durationNs = protocol.long("duration_ns"),
+            overshootNs = protocol.long("overshoot_ns"),
+            cooldownMaxDurationNs = procedure.long("cooldown_max_duration_ns"),
+            cooldownSamplingIntervalNs = procedure.long("cooldown_sampling_interval_ns"),
+            thermalStatus = thermal.string("initial_status"),
+            batteryTemperatureMinC = thermal.double("battery_temperature_min_c"),
+            batteryTemperatureMaxC = thermal.double("battery_temperature_max_c"),
+            batteryTemperatureRangeC = thermal.double("battery_temperature_range_c"),
+            orderPath = order.string("path"),
+            orderSha256 = order.string("sha256"),
+            producerGitSha = value.string("producer_git_sha"),
+        )
+    }
+
+    private fun orderFromJson(value: JsonObject) = M05BExecutionOrder(
+        cadencesFps = value.getValue("cadences_fps").jsonArray.map {
+            requireNotNull(it.jsonPrimitive.intOrNull)
+        },
+        orderId = value.string("order_id"),
+        producerGitSha = value.string("producer_git_sha"),
+    )
+
+    private fun decodeCanonicalObject(exactBytes: ByteArray): JsonObject {
+        val objectValue = Json.parseToJsonElement(exactBytes.decodeToString()).jsonObject
+        require(canonicalBytes(objectValue).contentEquals(exactBytes)) {
+            "artifact bytes must use the canonical encoding"
+        }
+        return objectValue
+    }
+
     private fun canonicalize(element: JsonElement): JsonElement = when (element) {
         is JsonObject -> JsonObject(element.entries.sortedBy { it.key }.associate { it.key to canonicalize(it.value) })
         is JsonArray -> JsonArray(element.map(::canonicalize))
@@ -544,6 +713,13 @@ object M05BArtifactCodec {
 
     private fun JsonObject.nullableString(key: String): String? =
         getValue(key).jsonPrimitive.contentOrNull
+
+    private fun JsonObject.string(key: String): String = getValue(key).jsonPrimitive.content
+    private fun JsonObject.int(key: String): Int = requireNotNull(getValue(key).jsonPrimitive.intOrNull)
+    private fun JsonObject.long(key: String): Long = requireNotNull(getValue(key).jsonPrimitive.longOrNull)
+    private fun JsonObject.double(key: String): Double = requireNotNull(getValue(key).jsonPrimitive.doubleOrNull)
+    private fun JsonObject.boolean(key: String): Boolean =
+        requireNotNull(getValue(key).jsonPrimitive.booleanOrNull)
 }
 
 enum class M05BAttemptOutcome(val wireValue: String) {
@@ -597,6 +773,9 @@ object M05BAttemptChain {
         if (history.lastOrNull()?.typed?.outcome == M05BAttemptOutcome.TRANSPORT_LOST) {
             blocking += "ATTEMPT.TRANSPORT_RECOVERY_REQUIRED"
         }
+        if (history.lastOrNull()?.typed?.outcome == M05BAttemptOutcome.BLOCKED) {
+            blocking += "ATTEMPT.BLOCKED_OBSERVATION"
+        }
         if (completedCadences >= order.cadencesFps.size) blocking += "ATTEMPT.ORDER_COMPLETE"
         val cadence = order.cadencesFps.getOrNull(completedCadences) ?: 0
         val predecessor = when (history.lastOrNull()?.typed?.outcome) {
@@ -620,6 +799,64 @@ object M05BAttemptChain {
         } else {
             put("previous_entry_sha256", value.previousEntrySha256)
         }
+    }
+}
+
+data class M05BPublishedAttempt(
+    val sessionId: String,
+    val attemptSequence: Int,
+    val cadenceFps: Int,
+    val admissionSha256: String,
+    val outcome: M05BAttemptOutcome,
+) {
+    init {
+        require(sessionId.isNotBlank())
+        require(attemptSequence > 0)
+        require(cadenceFps > 0)
+        require(SHA256.matches(admissionSha256))
+        require(outcome == M05BAttemptOutcome.COMPLETED || outcome == M05BAttemptOutcome.BLOCKED)
+    }
+}
+
+/**
+ * Reconstructs the one immutable terminal entry selected from durable published evidence.
+ *
+ * The published session and its run-admission artifact are authoritative; a lost instrumentation
+ * transcript cannot cause the same cadence to be issued again. An orphaned publication is supplied
+ * as BLOCKED; only a fully validated normal path supplies COMPLETED. Re-running recovery is
+ * byte-for-byte idempotent and a conflicting entry fails closed.
+ */
+object M05BPublishedAttemptRecovery {
+    fun recover(
+        order: M05BExecutionOrder,
+        history: List<M05BBoundAttemptEntry>,
+        published: M05BPublishedAttempt,
+    ): List<M05BBoundAttemptEntry> {
+        val existing = history.filter { it.typed.admissionSha256 == published.admissionSha256 }
+        if (existing.isNotEmpty()) {
+            require(existing.size == 1)
+            val entry = existing.single().typed
+            require(entry.attemptSequence == published.attemptSequence)
+            require(entry.cadenceFps == published.cadenceFps)
+            require(entry.outcome == published.outcome)
+            require(history.last() == existing.single())
+            return history
+        }
+
+        val context = M05BAttemptChain.derive(order, history)
+        require(context.blockingCodes.isEmpty()) { context.blockingCodes.joinToString(",") }
+        require(context.attemptSequence == published.attemptSequence)
+        require(context.cadenceFps == published.cadenceFps)
+        val appended = M05BAttemptChain.bind(
+            M05BAttemptEntry(
+                attemptSequence = published.attemptSequence,
+                cadenceFps = published.cadenceFps,
+                admissionSha256 = published.admissionSha256,
+                outcome = published.outcome,
+                previousEntrySha256 = context.previousEntrySha256,
+            ),
+        )
+        return history + appended
     }
 }
 

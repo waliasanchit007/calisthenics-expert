@@ -27,6 +27,7 @@ import com.calisthenics.diagnostic.study.M05BBaselineReducer
 import com.calisthenics.diagnostic.study.M05BBatteryObservation
 import com.calisthenics.diagnostic.study.M05BDeviceUnitDigest
 import com.calisthenics.diagnostic.study.M05BExecutionOrder
+import com.calisthenics.diagnostic.study.M05BFrozenRunInputs
 import com.calisthenics.diagnostic.study.M05BIdleBaselineSampler
 import com.calisthenics.diagnostic.study.M05BObservedStart
 import com.calisthenics.diagnostic.study.M05BPostBaselineAttestation
@@ -66,6 +67,7 @@ class M05BEnvelopeDeviceGateTest {
         }
         assertTrue(preSupplied.blockingCodes.isEmpty(), preSupplied.blockingCodes.joinToString(","))
         val pendingBaseline = baselineFile(context)
+        removeStaleFrozenInputs(context)
         if (pendingBaseline.exists()) {
             check(pendingBaseline.delete()) { "stale pending baseline could not be removed" }
             fsyncDirectory(pendingBaseline.parentFile!!)
@@ -171,6 +173,19 @@ class M05BEnvelopeDeviceGateTest {
         )
         val admitted = Json.parseToJsonElement(record).jsonObject
             .getValue("satisfies_s25_m05b_admission").jsonPrimitive.boolean
+        if (admitted) {
+            val frozenEnvelope = requireNotNull(envelope)
+            val orderArtifact = M05BArtifactCodec.bindOrder(order, frozenEnvelope.orderPath)
+            val envelopeArtifact = M05BArtifactCodec.bindEnvelope(frozenEnvelope, "envelope.json")
+            persistFrozenInputs(
+                context,
+                M05BFrozenRunInputs.bind(
+                    envelope = envelopeArtifact,
+                    order = orderArtifact,
+                    observedStart = observed,
+                ).exactBytes,
+            )
+        }
         instrumentation.sendStatus(
             7,
             Bundle().apply {
@@ -193,8 +208,38 @@ class M05BEnvelopeDeviceGateTest {
         fsyncDirectory(destination.parentFile!!)
     }
 
+    private fun persistFrozenInputs(context: android.content.Context, exactBytes: ByteArray) {
+        val destination = frozenInputsFile(context)
+        val temporary = File(destination.parentFile, "${destination.name}.tmp")
+        FileOutputStream(temporary).use { output ->
+            output.write(exactBytes)
+            output.flush()
+            output.fd.sync()
+        }
+        Os.rename(temporary.path, destination.path)
+        fsyncDirectory(destination.parentFile!!)
+    }
+
+    private fun removeStaleFrozenInputs(context: android.content.Context) {
+        val destination = frozenInputsFile(context)
+        val temporary = File(destination.parentFile, "${destination.name}.tmp")
+        var changed = false
+        if (temporary.exists()) {
+            check(temporary.delete()) { "stale frozen-input temporary file could not be removed" }
+            changed = true
+        }
+        if (destination.exists()) {
+            check(destination.delete()) { "stale frozen inputs could not be removed" }
+            changed = true
+        }
+        if (changed) fsyncDirectory(destination.parentFile!!)
+    }
+
     private fun baselineFile(context: android.content.Context): File =
         File(context.filesDir, "m05b-baseline-observations.json")
+
+    private fun frozenInputsFile(context: android.content.Context): File =
+        File(context.filesDir, "m05b-frozen-run-inputs.json")
 
     private fun fsyncDirectory(directory: File) {
         val descriptor = Os.open(directory.path, OsConstants.O_RDONLY, 0)

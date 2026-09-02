@@ -187,7 +187,7 @@ class LiveTelemetryController(
 
     fun start() = sampler.start()
 
-    fun stopAndJoinBeforeSeal() {
+    fun stopAndJoinBeforeSeal(afterTerminalSample: () -> Unit = {}) {
         val ownsStop = synchronized(stopMonitor) {
             if (!stopClaimed) true.also { stopClaimed = true } else false
         }
@@ -195,6 +195,7 @@ class LiveTelemetryController(
             var failure: Throwable? = null
             try {
                 sampler.stopAndJoinWithTerminalSample()
+                afterTerminalSample()
             } catch (error: Throwable) {
                 failure = error
             }

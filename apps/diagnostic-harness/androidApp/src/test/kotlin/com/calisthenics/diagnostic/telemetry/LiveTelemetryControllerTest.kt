@@ -279,5 +279,6 @@ class LiveTelemetryControllerTest {
         is PipelineStageEvent -> record.tSessionNs
         is FixedTelemetrySample -> record.tSessionNs
         is SustainedStageCounterSample -> record.tSessionNs
+        is SustainedLatencySummaryRecord -> record.tSessionNs
     }
 }

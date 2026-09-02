@@ -28,6 +28,7 @@ import com.calisthenics.diagnostic.telemetry.PipelineStage
 import com.calisthenics.diagnostic.telemetry.PipelineStageEvent
 import com.calisthenics.diagnostic.telemetry.PipelineTelemetryRecordingMode
 import com.calisthenics.diagnostic.telemetry.SustainedStageCounterSample
+import com.calisthenics.diagnostic.telemetry.SustainedLatencySummaryRecord
 import com.calisthenics.diagnostic.telemetry.TelemetryRecord
 import com.calisthenics.diagnostic.telemetry.TelemetrySink
 import com.calisthenics.diagnostic.telemetry.TelemetryValue
@@ -76,7 +77,7 @@ class LiveCameraCompositionTest {
             assertSame(harness.admissionWriter, observedWriter)
             assertEquals(1, harness.source.startCount)
             assertTrue(harness.events.indexOf("admission.fsync") < harness.events.indexOf("telemetry.sample"))
-            assertTrue(harness.events.indexOf("telemetry.sample") < harness.events.indexOf("source.start.entered"))
+            assertTrue(harness.events.indexOf("telemetry.scheduled") < harness.events.indexOf("source.start.entered"))
         } finally {
             harness.composition.abandon()
         }
@@ -361,6 +362,10 @@ class LiveCameraCompositionTest {
             assertEquals(1L, latency.count)
             assertEquals(1L, latency.bucketCounts.sum())
             assertEquals(14, latency.bucketCounts.size)
+            val durable = harness.telemetryRecords.filterIsInstance<SustainedLatencySummaryRecord>().single()
+            assertEquals(latency.bucketCounts, durable.bucketCounts)
+            assertEquals(com.calisthenics.diagnostic.study.M05BSustainedProtocol.latencyUpperBoundsNs, durable.upperBoundsNs)
+            assertEquals(latency.count, durable.sampleCount)
         }
     }
 

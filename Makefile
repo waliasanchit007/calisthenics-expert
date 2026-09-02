@@ -8,7 +8,7 @@ CLI := $(VENV_PYTHON) -m observation_contracts
 M05B_CANDIDATE_IDENTITY_FILE ?= .m05b-envelope-candidate.env
 M05B_ATTRIBUTION_IDENTITY_FILE ?= .m05b-attribution-candidate.json
 
-.PHONY: bootstrap verify verify-study-readiness verify-harness-jvm verify-harness-ios verify-harness-foundation verify-kotlin-export verify-harness-android-export-parity verify-harness-detection-replay verify-harness-s25-process-kill verify-harness-replay-export verify-harness-s25-five-run-replay verify-harness-s25-camera-probe verify-harness-s25-container-timestamp-probe verify-harness-s25-synchronized-video verify-harness-s25-storage-exclusion prepare-harness-s25-m05b-envelope-candidate verify-harness-s25-m05b-envelope verify-harness-s25-m05b-attribution verify-harness-s25-m05b-physical-purge verify-harness-s25-live-capture fetch-model-asset prepare-harness-gradle-dependencies
+.PHONY: bootstrap verify verify-study-readiness verify-harness-jvm verify-harness-ios verify-harness-foundation verify-kotlin-export verify-harness-android-export-parity verify-harness-detection-replay verify-harness-s25-process-kill verify-harness-replay-export verify-harness-s25-five-run-replay verify-harness-s25-camera-probe verify-harness-s25-container-timestamp-probe verify-harness-s25-synchronized-video verify-harness-s25-storage-exclusion prepare-harness-s25-m05b-envelope-candidate verify-harness-s25-m05b-envelope verify-harness-s25-m05b-attribution verify-harness-s25-m05b-sustained verify-harness-s25-m05b-physical-purge verify-harness-s25-live-capture fetch-model-asset prepare-harness-gradle-dependencies
 
 bootstrap:
 	@command -v "$(PYTHON)" >/dev/null 2>&1 || { echo "error: Python interpreter '$(PYTHON)' was not found" >&2; exit 1; }
@@ -598,6 +598,41 @@ verify-harness-s25-m05b-attribution:
 	set +e; adb -s "$$serial" shell am instrument -w -r -e class com.calisthenics.diagnostic.composition.M05BAttributionDeviceGateTest com.calisthenics.diagnostic.android.test/androidx.test.runner.AndroidJUnitRunner >"$$transcript" 2>&1; instrument_status=$$?; set -e; \
 	cat "$$transcript"; \
 	$(VENV_PYTHON) tools/check_m05b_attribution.py --serial "$$serial" --package com.calisthenics.diagnostic.android --transcript "$$transcript" --subprocess-exit-code "$$instrument_status" --prepared-identity "$(M05B_ATTRIBUTION_IDENTITY_FILE)"
+
+# Task 8 exact-final sustained gate. This target consumes the already-installed candidate and the
+# app-private frozen Task 7 inputs. It never builds, installs, clears state, retries, or writes an
+# evidence ledger. A blocked observation exits non-zero after its durable bytes are preserved.
+verify-harness-s25-m05b-sustained:
+	@set -eu; \
+	device_count=$$(adb devices -l | tail -n +2 | awk '$$2 == "device"' | wc -l | tr -d ' '); \
+	if [ "$$device_count" -ne 1 ]; then echo "error: sustained gate requires exactly one authorized attached device, found $$device_count" >&2; exit 1; fi; \
+	serial=$$(adb devices -l | tail -n +2 | awk '$$2 == "device" {print $$1}'); \
+	case "$$serial" in emulator-*) echo "error: emulator is not authorized for sustained evidence" >&2; exit 1 ;; *:*) ;; *) echo "error: sustained gate requires unplugged Wi-Fi ADB, got '$$serial'" >&2; exit 1 ;; esac; \
+	manufacturer=$$(adb -s "$$serial" shell getprop ro.product.manufacturer | tr -d '\r'); \
+	model=$$(adb -s "$$serial" shell getprop ro.product.model | tr -d '\r'); \
+	marketing_name=$$(adb -s "$$serial" shell getprop ro.config.marketing_name | tr -d '\r'); \
+	if ! $(VENV_PYTHON) -c 'import sys; from pathlib import Path; sys.path.insert(0, str(Path("tools").resolve())); from check_five_run_replay import is_authorized_five_run_gate_target; raise SystemExit(0 if is_authorized_five_run_gate_target({"device_class":"physical_device", "manufacturer":sys.argv[1], "model":sys.argv[2], "marketing_name":sys.argv[3]}) else 1)' "$$manufacturer" "$$model" "$$marketing_name"; then echo "error: attached target is not the authorized Samsung Galaxy S25 Ultra" >&2; exit 1; fi; \
+	if [ ! -f "$(M05B_CANDIDATE_IDENTITY_FILE)" ]; then echo "error: exact M0.5B candidate identity is missing" >&2; exit 1; fi; \
+	expected_app_sha256=$$(sed -n 's/^M05B_CANDIDATE_APP_SHA256=//p' "$(M05B_CANDIDATE_IDENTITY_FILE)"); \
+	expected_test_sha256=$$(sed -n 's/^M05B_CANDIDATE_TEST_SHA256=//p' "$(M05B_CANDIDATE_IDENTITY_FILE)"); \
+	expected_git_sha=$$(sed -n 's/^M05B_CANDIDATE_GIT_SHA=//p' "$(M05B_CANDIDATE_IDENTITY_FILE)"); \
+	if [ "$$expected_git_sha" != "$$(git rev-parse HEAD)" ] || [ -n "$$(git status --porcelain --untracked-files=normal)" ]; then echo "error: source changed after exact candidate preparation" >&2; exit 1; fi; \
+	for ledger in docs/evidence/m05b-attribution/s25-short-attribution-ledger.json docs/evidence/m05b-envelope/s25-ultra-m05b-envelope-ledger.json; do $(VENV_PYTHON) -c 'import json,sys; value=json.load(open(sys.argv[1], encoding="utf-8")); raise SystemExit(0 if value.get("status") == "recorded" else 1)' "$$ledger" || { echo "error: prerequisite ledger is not recorded: $$ledger" >&2; exit 1; }; done; \
+	: "$${M05B_AMBIENT_CONSTANCY_ATTESTATION:?set M05B_AMBIENT_CONSTANCY_ATTESTATION=constant after confirming the frozen ambient condition still holds}"; \
+	if [ "$$M05B_AMBIENT_CONSTANCY_ATTESTATION" != constant ]; then echo "error: changed ambient condition blocks the frozen sustained sequence" >&2; exit 3; fi; \
+	battery_dump=$$(adb -s "$$serial" shell dumpsys battery | tr -d '\r'); \
+	if printf '%s\n' "$$battery_dump" | grep -Eq '(^|: )((AC|USB|Wireless|Dock) powered): true'; then echo "error: sustained evidence requires an unplugged battery-powered S25" >&2; exit 3; fi; \
+	app_remote_apk=$$(adb -s "$$serial" shell pm path com.calisthenics.diagnostic.android | tr -d '\r' | sed -n 's/^package://p' | head -n 1); \
+	test_remote_apk=$$(adb -s "$$serial" shell pm path com.calisthenics.diagnostic.android.test | tr -d '\r' | sed -n 's/^package://p' | head -n 1); \
+	if [ -z "$$app_remote_apk" ] || [ -z "$$test_remote_apk" ]; then echo "error: exact sustained candidate is not installed" >&2; exit 1; fi; \
+	candidate_tmp=$$(mktemp -d); transcript=$$(mktemp); trap 'rm -rf "$$candidate_tmp"; rm -f "$$transcript"' EXIT INT TERM; \
+	adb -s "$$serial" exec-out cat "$$app_remote_apk" > "$$candidate_tmp/app.apk"; \
+	adb -s "$$serial" exec-out cat "$$test_remote_apk" > "$$candidate_tmp/test.apk"; \
+	actual_app_sha256=$$(shasum -a 256 "$$candidate_tmp/app.apk" | awk '{print $$1}'); actual_test_sha256=$$(shasum -a 256 "$$candidate_tmp/test.apk" | awk '{print $$1}'); \
+	if [ "$$actual_app_sha256" != "$$expected_app_sha256" ] || [ "$$actual_test_sha256" != "$$expected_test_sha256" ]; then echo "error: installed candidate bytes differ from the prepared identity" >&2; exit 1; fi; \
+	set +e; adb -s "$$serial" shell am instrument -w -r -e class com.calisthenics.diagnostic.composition.M05BSustainedDeviceGateTest -e host_adb_transport wifi -e host_battery_override_rejected true -e m05b_ambient_constancy_attestation "$$M05B_AMBIENT_CONSTANCY_ATTESTATION" com.calisthenics.diagnostic.android.test/androidx.test.runner.AndroidJUnitRunner >"$$transcript" 2>&1; instrument_status=$$?; set -e; \
+	cat "$$transcript"; \
+	$(VENV_PYTHON) tools/check_m05b_sustained_run.py --serial "$$serial" --package com.calisthenics.diagnostic.android --transcript "$$transcript" --subprocess-exit-code "$$instrument_status"
 
 verify-harness-s25-synchronized-video:
 	@set -eu; \

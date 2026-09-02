@@ -87,6 +87,7 @@ import com.calisthenics.diagnostic.study.M05BSustainedSourceOutcome
 import com.calisthenics.diagnostic.study.M05BSustainedStageAccounting
 import com.calisthenics.diagnostic.study.M05BSustainedTelemetrySummary
 import com.calisthenics.diagnostic.study.SustainedLatencyHistogram
+import com.calisthenics.diagnostic.study.M05BSustainedProtocol
 import com.calisthenics.diagnostic.study.deriveM05BSustainedStageAccounting
 import com.calisthenics.diagnostic.telemetry.TelemetrySink
 import com.calisthenics.diagnostic.telemetry.pipelineTerminalEvent
@@ -1641,7 +1642,19 @@ class LiveCameraComposition internal constructor(
         dependencies.encoderFinalizationSlot.finalizeEncoder()
         val controller = synchronized(monitor) { telemetryController.takeIf { telemetryStarted } }
         try {
-            controller?.stopAndJoinBeforeSeal()
+            controller?.stopAndJoinBeforeSeal {
+                val latencyCounts = synchronized(monitor) {
+                    sustainedLatencyHistogram.bucketCounts().takeIf {
+                        telemetryRecordingMode == PipelineTelemetryRecordingMode.SUSTAINED
+                    }
+                }
+                if (latencyCounts != null) {
+                    checkNotNull(stageRecorder).recordSustainedLatencySummary(
+                        upperBoundsNs = M05BSustainedProtocol.latencyUpperBoundsNs,
+                        bucketCounts = latencyCounts,
+                    )
+                }
+            }
         } catch (error: Throwable) {
             synchronized(monitor) {
                 recordTelemetryFailureLocked(error)

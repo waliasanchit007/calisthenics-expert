@@ -238,6 +238,7 @@ class PipelineStageRecorder(
     private var summaryTerminalSample = false
     private var summaryStartBatteryTemperatureC: Double? = null
     private var summaryEndBatteryTemperatureC: Double? = null
+    private var sustainedLatencySummaryRecorded = false
     private val recorderMutex = Mutex()
 
     val counts: Map<Pair<PipelineStage, PipelineDisposition>, Long>
@@ -296,6 +297,27 @@ class PipelineStageRecorder(
     }
 
     override fun append(record: TelemetryRecord) = serialized { appendLocked(record) }
+
+    fun recordSustainedLatencySummary(
+        upperBoundsNs: List<Long?>,
+        bucketCounts: List<Long>,
+    ): SustainedLatencySummaryRecord = serialized {
+        check(recordingMode == PipelineTelemetryRecordingMode.SUSTAINED) {
+            "latency summary is only valid for sustained telemetry"
+        }
+        check(summaryTerminalSample) { "terminal telemetry sample must precede latency summary" }
+        check(!sustainedLatencySummaryRecorded) { "latency summary may only be recorded once" }
+        val record = SustainedLatencySummaryRecord(
+            sequence = lastFixedSampleSequence + 1L,
+            tSessionNs = lastFixedSampleTimeNs,
+            upperBoundsNs = upperBoundsNs,
+            bucketCounts = bucketCounts,
+            sampleCount = bucketCounts.sum(),
+        )
+        sink.append(record)
+        sustainedLatencySummaryRecorded = true
+        record
+    }
 
     private fun appendLocked(record: TelemetryRecord) {
         if (recordingMode != PipelineTelemetryRecordingMode.SUSTAINED || record !is FixedTelemetrySample) {
@@ -400,11 +422,59 @@ data class SustainedStageCounterSample(
     }
 }
 
+/** One bounded terminal histogram record; individual inference latencies are never retained. */
+data class SustainedLatencySummaryRecord(
+    val sequence: Long,
+    val tSessionNs: Long,
+    val upperBoundsNs: List<Long?>,
+    val bucketCounts: List<Long>,
+    val sampleCount: Long,
+) : TelemetryRecord {
+    init {
+        require(sequence >= 0L) { "latency summary sequence must be non-negative" }
+        require(tSessionNs >= 0L) { "latency summary time must be non-negative" }
+        require(upperBoundsNs.isNotEmpty()) { "latency histogram bounds must not be empty" }
+        require(upperBoundsNs.size == bucketCounts.size) { "latency histogram shape mismatch" }
+        require(upperBoundsNs.last() == null) { "latency histogram must end in an unbounded bucket" }
+        require(upperBoundsNs.dropLast(1).all { it != null && it > 0L }) {
+            "bounded latency histogram limits must be positive"
+        }
+        val bounded = upperBoundsNs.dropLast(1).filterNotNull()
+        require(bounded.zipWithNext().all { (left, right) -> left < right }) {
+            "latency histogram bounds must be strictly increasing"
+        }
+        require(bucketCounts.all { it >= 0L }) { "latency histogram counts must be non-negative" }
+        require(sampleCount >= 0L && sampleCount == bucketCounts.sum()) {
+            "latency histogram sample count must equal its buckets"
+        }
+    }
+
+    override fun encodeNdjson(): String = buildString {
+        append('{')
+        stringField("record_type", "sustained_latency_summary")
+        append(',')
+        stringField("schema_version", SCHEMA_VERSION)
+        append(",\"sequence\":$sequence")
+        append(",\"t_session_ns\":$tSessionNs")
+        append(",\"upper_bounds_ns\":[")
+        upperBoundsNs.forEachIndexed { index, value ->
+            if (index > 0) append(',')
+            append(value ?: "null")
+        }
+        append("],\"bucket_counts\":[")
+        bucketCounts.forEachIndexed { index, value ->
+            if (index > 0) append(',')
+            append(value)
+        }
+        append("],\"sample_count\":$sampleCount}\n")
+    }
+}
+
 object SustainedTelemetryLimits {
     const val MAX_SESSION_SECONDS = 1_500L
     /** Initial sample, one sample per full second, and the mandatory terminal sample. */
     const val MAX_FIXED_SAMPLES_FOR_1500_SECONDS = MAX_SESSION_SECONDS + 2L
-    const val MAX_RECORDS_FOR_1500_SECONDS = MAX_FIXED_SAMPLES_FOR_1500_SECONDS * 2L
+    const val MAX_RECORDS_FOR_1500_SECONDS = MAX_FIXED_SAMPLES_FOR_1500_SECONDS * 2L + 1L
 }
 
 sealed interface TelemetryValue<out T> {
