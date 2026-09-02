@@ -79,6 +79,17 @@ data class PipelineTerminalEvent(
     val disposition: PipelineDisposition,
 )
 
+/** Constant-memory sustained summary; individual fixed samples remain only in the durable stream. */
+data class SustainedTelemetrySummary(
+    val fixedSampleCount: Long,
+    val firstTSessionNs: Long,
+    val lastTSessionNs: Long,
+    val maxInterSampleGapNs: Long,
+    val terminalSample: Boolean,
+    val startBatteryTemperatureC: Double?,
+    val endBatteryTemperatureC: Double?,
+)
+
 fun CallbackTerminalDisposition.pipelineTerminalEvent(): PipelineTerminalEvent = when (this) {
     CallbackTerminalDisposition.SOURCE_NOT_READY ->
         PipelineTerminalEvent(PipelineStage.CAMERA_CALLBACK, PipelineDisposition.SOURCE_NOT_READY)
@@ -220,6 +231,13 @@ class PipelineStageRecorder(
     private var lastFixedSampleSequence = -1L
     private var lastFixedSampleTimeNs = -1L
     private var nextFixedSampleSequence = 0L
+    private var summarySampleCount = 0L
+    private var summaryFirstTimeNs: Long? = null
+    private var summaryLastTimeNs: Long? = null
+    private var summaryMaxGapNs = 0L
+    private var summaryTerminalSample = false
+    private var summaryStartBatteryTemperatureC: Double? = null
+    private var summaryEndBatteryTemperatureC: Double? = null
     private val recorderMutex = Mutex()
 
     val counts: Map<Pair<PipelineStage, PipelineDisposition>, Long>
@@ -227,6 +245,18 @@ class PipelineStageRecorder(
 
     val retainedStageCount: Int
         get() = serialized { mutableCounts.size }
+
+    fun sustainedTelemetrySummary(): SustainedTelemetrySummary = serialized {
+        SustainedTelemetrySummary(
+            fixedSampleCount = summarySampleCount,
+            firstTSessionNs = summaryFirstTimeNs ?: 0L,
+            lastTSessionNs = summaryLastTimeNs ?: 0L,
+            maxInterSampleGapNs = summaryMaxGapNs,
+            terminalSample = summaryTerminalSample,
+            startBatteryTemperatureC = summaryStartBatteryTemperatureC,
+            endBatteryTemperatureC = summaryEndBatteryTemperatureC,
+        )
+    }
 
     fun record(frameIndex: Long, stage: PipelineStage, disposition: PipelineDisposition): PipelineStageEvent = serialized {
         val timeNs = nowNs()
@@ -289,6 +319,21 @@ class PipelineStageRecorder(
         }
         sink.append(record)
         sink.append(bucket)
+        observeSustainedSample(record)
+    }
+
+    private fun observeSustainedSample(record: FixedTelemetrySample) {
+        val previousTime = summaryLastTimeNs
+        if (summarySampleCount == 0L) {
+            summaryFirstTimeNs = record.tSessionNs
+            summaryStartBatteryTemperatureC = record.batteryTemperature.asTemperatureC()
+        } else if (previousTime != null) {
+            summaryMaxGapNs = maxOf(summaryMaxGapNs, record.tSessionNs - previousTime)
+        }
+        summarySampleCount += 1L
+        summaryLastTimeNs = record.tSessionNs
+        summaryTerminalSample = record.terminal
+        summaryEndBatteryTemperatureC = record.batteryTemperature.asTemperatureC()
     }
 
     fun assertReconciles(accounting: DeliveredCallbackAccounting) = serialized {
@@ -305,6 +350,11 @@ class PipelineStageRecorder(
     }
 
     private fun <T> serialized(block: () -> T): T = runBlocking { recorderMutex.withLock { block() } }
+}
+
+private fun TelemetryValue<Int>.asTemperatureC(): Double? = when (this) {
+    is TelemetryValue.Value -> value / 10.0
+    is TelemetryValue.Unavailable -> null
 }
 
 data class PipelineStageCount(

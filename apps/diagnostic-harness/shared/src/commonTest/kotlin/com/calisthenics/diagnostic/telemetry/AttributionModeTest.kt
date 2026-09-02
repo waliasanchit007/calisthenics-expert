@@ -69,6 +69,29 @@ class AttributionModeTest {
     }
 
     @Test
+    fun sustainedModeRetainsOnlyScalarCoverageAndBoundaryBatteryTemperatures() {
+        var nowNs = 0L
+        val recorder = PipelineStageRecorder(
+            nowNs = { nowNs },
+            sink = RecordingSink(),
+            recordingMode = PipelineTelemetryRecordingMode.SUSTAINED,
+        )
+        recorder.recordFixedSample(readings(320), terminal = false)
+        nowNs = 1_500_000_000L
+        recorder.recordFixedSample(readings(335), terminal = true)
+
+        val summary = recorder.sustainedTelemetrySummary()
+
+        assertEquals(2L, summary.fixedSampleCount)
+        assertEquals(0L, summary.firstTSessionNs)
+        assertEquals(1_500_000_000L, summary.lastTSessionNs)
+        assertEquals(1_500_000_000L, summary.maxInterSampleGapNs)
+        assertTrue(summary.terminalSample)
+        assertEquals(32.0, summary.startBatteryTemperatureC)
+        assertEquals(33.5, summary.endBatteryTemperatureC)
+    }
+
+    @Test
     fun stageCountsReconcileWithTheClosedCallbackDispositionLattice() {
         val sink = RecordingSink()
         val recorder = PipelineStageRecorder({ 7L }, sink, PipelineTelemetryRecordingMode.SHORT_ATTRIBUTION)
@@ -101,6 +124,18 @@ class AttributionModeTest {
         keepAwake = TelemetryValue.Unavailable("keep_awake"),
         brightness = TelemetryValue.Unavailable("brightness"),
         lifecycle = TelemetryValue.Unavailable("lifecycle"),
+    )
+
+    private fun readings(batteryTemperatureDeciC: Int) = FixedTelemetryReadings(
+        thermal = TelemetryValue.Value(2),
+        batteryTemperature = TelemetryValue.Value(batteryTemperatureDeciC),
+        batteryLevelOrCharge = TelemetryValue.Value(BatteryReading(BatteryReadingUnit.PERCENT, 75)),
+        charging = TelemetryValue.Value(false),
+        powerSource = TelemetryValue.Value("battery"),
+        connectivity = TelemetryValue.Value(ConnectivityState("wifi", true)),
+        keepAwake = TelemetryValue.Value(true),
+        brightness = TelemetryValue.Value(BrightnessState("manual", 0.5)),
+        lifecycle = TelemetryValue.Value("foreground"),
     )
 
     private val expectedTerminalEvents = mapOf(

@@ -66,6 +66,19 @@ class SessionExporterTest {
     }
 
     @Test
+    fun publishedPoseCountAppearsOnlyAfterReconciliationAndDurablePublication() {
+        val storage = FakeStorage()
+        val exporter = SessionExporter(storage, manifest(), monotonicNowNs = { 0L })
+        val record = frame(posePresent = true)
+        exporter.appendPose(record)
+
+        assertEquals(null, exporter.publishedPoseRecordCount)
+        assertIs<FinalizationResult.Published>(exporter.finalize(snapshot(listOf(record))))
+
+        assertEquals(1L, exporter.publishedPoseRecordCount)
+    }
+
+    @Test
     fun tombstoneFenceRefusesWithoutOpeningWriterAndRechecksImmediatelyBeforePublishRename() {
         val refusedStorage = FakeStorage()
         val refusal = SessionExporter(

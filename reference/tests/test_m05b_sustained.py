@@ -167,7 +167,7 @@ def test_sustained_semantic_codes_await_task8_registry_stabilization() -> None:
     ("field", "value", "code"),
     [
         ("duration_target_ns", 1_499_000_000_000, "DURATION.TARGET"),
-        ("stop_requested_ns", 1_501_000_000_001, "DURATION.OVERSHOOT"),
+        ("stop_requested_ns", 1_501_000_000_001, "DURATION.STOP_REQUEST"),
         ("video_enabled", True, "PROTOCOL.VIDEO_ENABLED"),
         ("camera_fps", 29, "PROTOCOL.CAMERA_FPS"),
     ],
@@ -179,6 +179,13 @@ def test_load_bearing_duration_and_protocol_mutations_block(
     record[field] = value
     issues = _codes(record)
     assert code in issues
+
+
+def test_observed_capture_span_beyond_the_one_second_allowance_blocks() -> None:
+    record = _valid_record()
+    record["actual_capture_span_ns"] = 1_501_000_000_001
+
+    assert "DURATION.OVERSHOOT" in _codes(record)
 
 
 def test_missing_scalar_temperature_is_blocking_and_never_defaults() -> None:

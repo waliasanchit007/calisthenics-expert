@@ -329,6 +329,62 @@ class LiveCameraCompositionTest {
     }
 
     @Test
+    fun everyAcquiredOwnedYuvCopyRecordsItsReleaseBeforePipelineProcessing() {
+        withHarness(Harness()) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+
+            harness.source.emit(frame(timestampNs = 1_000_002_000L))
+            harness.inference.completeSuccess()
+            harness.composition.stop()
+
+            val ownership = harness.telemetryRecords.filterIsInstance<PipelineStageEvent>()
+                .filter { it.stage == PipelineStage.YUV_OWNERSHIP }
+                .map { it.disposition }
+            assertEquals(
+                listOf(PipelineDisposition.ACQUIRED, PipelineDisposition.RELEASED),
+                ownership,
+            )
+        }
+    }
+
+    @Test
+    fun sustainedModeRetainsOnlyABoundedLatencyHistogram() {
+        withHarness(Harness()) { harness ->
+            assertIs<LiveCameraStartResult.Started>(
+                harness.start(10, recordingMode = PipelineTelemetryRecordingMode.SUSTAINED),
+            )
+            harness.source.emit(frame(timestampNs = 1_000_002_000L))
+            harness.inference.completeSuccess()
+            harness.composition.stop()
+
+            val latency = assertNotNull(harness.composition.sustainedLatencySummary())
+            assertEquals(1L, latency.count)
+            assertEquals(1L, latency.bucketCounts.sum())
+            assertEquals(14, latency.bucketCounts.size)
+        }
+    }
+
+    @Test
+    fun sustainedStageAccountingBindsRunnerAppendToExporterPublication() {
+        withHarness(Harness()) { harness ->
+            assertIs<LiveCameraStartResult.Started>(
+                harness.start(10, recordingMode = PipelineTelemetryRecordingMode.SUSTAINED),
+            )
+            harness.source.emit(frame(timestampNs = 1_000_002_000L))
+            harness.inference.completeSuccess()
+            harness.composition.stop()
+
+            val stages = assertNotNull(harness.composition.sustainedStageAccounting())
+            assertEquals(1L, stages.cameraCallbacksReceived)
+            assertEquals(1L, stages.yuvFramesAcquired)
+            assertEquals(1L, stages.yuvFramesReleased)
+            assertEquals(1L, stages.inferenceCompleted)
+            assertEquals(1L, stages.poseRecordsAppended)
+            assertEquals(1L, stages.poseRecordsDurable)
+        }
+    }
+
+    @Test
     fun liveManifestDoesNotEmitACallerSelectedParticipantIdentity() {
         withHarness(Harness()) { harness ->
             assertIs<LiveCameraStartResult.Started>(harness.start(10))
@@ -1805,11 +1861,14 @@ class LiveCameraCompositionTest {
                         com.calisthenics.diagnostic.session.SessionAborter,
                         com.calisthenics.diagnostic.export.DeferredSessionAbort,
                         com.calisthenics.diagnostic.export.DurableAdmissionHost,
+                        com.calisthenics.diagnostic.export.DurablePublishedEvidenceHost,
                         com.calisthenics.diagnostic.session.EmittedRecordSink,
                         TelemetrySink {
                         override val durableAdmissionWriter: com.calisthenics.diagnostic.export.DurableSessionWriter
                             get() = checkNotNull(admissionWriter)
                         private var pendingAbort = false
+                        override var publishedPoseRecordCount: Long? = null
+                            private set
                         override fun appendPose(record: RawPoseFrame) {
                             emittedRecord = record
                         }
@@ -1852,6 +1911,7 @@ class LiveCameraCompositionTest {
                                 manifestCallbackInvoked = true
                                 manifestCallbackInvokedLatch.countDown()
                             }
+                            publishedPoseRecordCount = snapshot.counts.inferenceRecordsEmitted
                             return FinalizationResult.Published(snapshot)
                         }
                     }

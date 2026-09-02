@@ -113,13 +113,14 @@ def _check_duration(record: Mapping[str, object], path: str, issues: list[Valida
                 "stop must be requested exactly at 1,500 seconds",
             )
         )
-    if isinstance(stop, int) and stop > _MAX_STOP_REQUEST_NS:
+    span = record.get("actual_capture_span_ns")
+    if isinstance(span, int) and span > _MAX_STOP_REQUEST_NS:
         issues.append(
             _issue(
                 path,
                 "DURATION.OVERSHOOT",
-                "/stop_requested_ns",
-                "stop request exceeds the one-second bound",
+                "/actual_capture_span_ns",
+                "capture completion exceeds the one-second stop allowance",
             )
         )
     if record.get("boundary_events") != _BOUNDARY_EVENTS:

@@ -34,6 +34,11 @@ interface DurableAdmissionHost {
     val durableAdmissionWriter: DurableSessionWriter
 }
 
+/** Bounded publication evidence exposed without leaking the staging attempt or filesystem paths. */
+interface DurablePublishedEvidenceHost {
+    val publishedPoseRecordCount: Long?
+}
+
 /** Publishes one sealed session using the fixed crash-consistent commit sequence. */
 /**
  * The container transform this session observed, measured after the muxer finalized.
@@ -78,13 +83,15 @@ class SessionExporter(
     private val admissionFence: SessionAdmissionFence = SessionAdmissionFence { _, _ -> SessionAdmissionDecision.Admitted },
     private val deferAbortUntilFence: Boolean = false,
 ) : SessionFinalizer, SessionAborter, EmittedRecordSink, TelemetrySink, DeferredSessionAbort,
-    DurableAdmissionHost {
+    DurableAdmissionHost, DurablePublishedEvidenceHost {
     private var finalizationResult: FinalizationResult? = null
     private var pendingAbort: Pair<SealedSessionSnapshot, String>? = null
     private var nextTelemetrySequence = 0L
     private var lastFixedTelemetrySequence: Long? = null
     private var firstPoseCaptureTimestampNs: Long? = null
     private var lastPoseCaptureTimestampNs: Long? = null
+    override var publishedPoseRecordCount: Long? = null
+        private set
     private val telemetryMutex = Mutex()
     private val writerOpenAdmission = checkAdmission(SessionAdmissionPhase.WRITER_OPEN)
 
@@ -283,6 +290,7 @@ class SessionExporter(
             renamed = true
             try {
                 storage.fsyncDirectory(storage.roots.exportsRoot)
+                publishedPoseRecordCount = poseReconciliation.recordCount
                 FinalizationResult.Published(snapshot)
             } catch (_: Throwable) {
                 FinalizationResult.Failed(

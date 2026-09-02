@@ -27,6 +27,7 @@ import com.calisthenics.diagnostic.export.AndroidStoragePort
 import com.calisthenics.diagnostic.export.AndroidStorageRoots
 import com.calisthenics.diagnostic.export.DeferredSessionAbort
 import com.calisthenics.diagnostic.export.DurableAdmissionHost
+import com.calisthenics.diagnostic.export.DurablePublishedEvidenceHost
 import com.calisthenics.diagnostic.export.DurableArtifact
 import com.calisthenics.diagnostic.export.DurableReconciliationException
 import com.calisthenics.diagnostic.export.DurableSessionWriter
@@ -78,6 +79,10 @@ import com.calisthenics.diagnostic.telemetry.PipelineDisposition
 import com.calisthenics.diagnostic.telemetry.PipelineStage
 import com.calisthenics.diagnostic.telemetry.PipelineStageRecorder
 import com.calisthenics.diagnostic.telemetry.PipelineTelemetryRecordingMode
+import com.calisthenics.diagnostic.study.M05BSustainedLatencySummary
+import com.calisthenics.diagnostic.study.M05BSustainedStageAccounting
+import com.calisthenics.diagnostic.study.SustainedLatencyHistogram
+import com.calisthenics.diagnostic.study.deriveM05BSustainedStageAccounting
 import com.calisthenics.diagnostic.telemetry.TelemetrySink
 import com.calisthenics.diagnostic.telemetry.pipelineTerminalEvent
 import com.calisthenics.diagnostic.telemetry.AndroidFixedTelemetryProbe
@@ -439,8 +444,14 @@ class LiveCameraComposition internal constructor(
     private val deliveredCallbacks = DeliveredCallbackLedger()
     private var callbacksForwardedToRunner = 0L
     private var lastDeliveredTimestampNs: Long? = null
-    private data class PendingInferenceCallback(val submissionIndex: Long, val frameIndex: Long)
+    private data class PendingInferenceCallback(
+        val submissionIndex: Long,
+        val frameIndex: Long,
+        val inferenceStartNs: Long,
+    )
     private var pendingInferenceCallback: PendingInferenceCallback? = null
+    private var telemetryRecordingMode = PipelineTelemetryRecordingMode.SHORT_ATTRIBUTION
+    private val sustainedLatencyHistogram = SustainedLatencyHistogram()
     private var nextExpectedSubmissionIndex = 0L
     private var finalizationFenceCompleted = false
     private data class SourceGeometry(
@@ -499,6 +510,7 @@ class LiveCameraComposition internal constructor(
             if (sessionId != null) {
                 return LiveCameraStartResult.Unavailable(LiveUnavailableReason.Initialization("live_session_already_started"))
             }
+            telemetryRecordingMode = recordingMode
             if (!operatorAttestedNoPerson) {
                 return LiveCameraStartResult.Unavailable(LiveUnavailableReason.OperatorAttestationRequired)
             }
@@ -814,6 +826,11 @@ class LiveCameraComposition internal constructor(
         admittedCallbackCadence.observedSpanNs()
     }
 
+    /** Session-relative clock used by the fixed-duration sustained controller. */
+    fun sessionElapsedNs(): Long? = synchronized(monitor) {
+        if (sessionId == null || resourcesReleased) null else relativeNowNs()
+    }
+
     fun latestThermalObservation(): LiveThermalObservation? = synchronized(monitor) {
         thermalProbe?.observations()?.lastOrNull()
     }
@@ -919,6 +936,10 @@ class LiveCameraComposition internal constructor(
             }
             observeDeliveredTimestampLocked(rebasedCaptureNs)
             stageRecorder?.record(index, PipelineStage.YUV_OWNERSHIP, PipelineDisposition.ACQUIRED)
+            // CameraX ownership has already been copied into OwnedYuvFrame and the ImageProxy was
+            // closed before this callback. Record that release independently of all downstream
+            // geometry, preprocessing, cadence, and inference outcomes.
+            stageRecorder?.record(index, PipelineStage.YUV_OWNERSHIP, PipelineDisposition.RELEASED)
             val negotiated = negotiatedSourceResolution
             if (negotiated == null || frame.width != negotiated.width || frame.height != negotiated.height) {
                 return@synchronized FrameWork(
@@ -1021,7 +1042,11 @@ class LiveCameraComposition internal constructor(
                 val inferenceStartNs = relativeNowNs()
                 synchronized(monitor) {
                     check(pendingInferenceCallback == null) { "an inference callback is already pending" }
-                    pendingInferenceCallback = PendingInferenceCallback(nextExpectedSubmissionIndex, work.index)
+                    pendingInferenceCallback = PendingInferenceCallback(
+                        nextExpectedSubmissionIndex,
+                        work.index,
+                        inferenceStartNs,
+                    )
                     callbacksForwardedToRunner += 1L
                     stageRecorder?.record(work.index, PipelineStage.INFERENCE, PipelineDisposition.SUBMITTED)
                 }
@@ -1145,6 +1170,26 @@ class LiveCameraComposition internal constructor(
         deliveredCallbacks.snapshot()
     }
 
+    internal fun sustainedLatencySummary(): M05BSustainedLatencySummary? = synchronized(monitor) {
+        if (telemetryRecordingMode != PipelineTelemetryRecordingMode.SUSTAINED) null
+        else sustainedLatencyHistogram.snapshot()
+    }
+
+    internal fun sustainedStageAccounting(): M05BSustainedStageAccounting? = synchronized(monitor) {
+        if (telemetryRecordingMode != PipelineTelemetryRecordingMode.SUSTAINED) return@synchronized null
+        val finished = completion ?: return@synchronized null
+        deriveM05BSustainedStageAccounting(
+            pipelineCounts = checkNotNull(stageRecorder).counts,
+            finalCounts = finished.snapshot.counts,
+            reconciledPoseRecordCount = (sessionFinalizer as? DurablePublishedEvidenceHost)
+                ?.publishedPoseRecordCount,
+            sourceFailures = if (sourceFailure == null) 0L else 1L,
+            processFailures = if (finished.finalization is FinalizationResult.Published &&
+                telemetryFailure == null && !stalled
+            ) 0L else 1L,
+        )
+    }
+
     /** Lazily constructed per run, and only when this run records video. */
     private var videoWriter: com.calisthenics.diagnostic.video.LiveVideoWriter? = null
     private var videoWriterFinished = false
@@ -1256,6 +1301,11 @@ class LiveCameraComposition internal constructor(
             }
             check(pending.submissionIndex == submissionIndex) {
                 "inference result does not match its originating delivered callback"
+            }
+            if (telemetryRecordingMode == PipelineTelemetryRecordingMode.SUSTAINED &&
+                result is InferenceResult.Success
+            ) {
+                sustainedLatencyHistogram.record(result.inferenceEndNs - pending.inferenceStartNs)
             }
             closeDeliveredCallbackLocked(
                 pending.frameIndex,

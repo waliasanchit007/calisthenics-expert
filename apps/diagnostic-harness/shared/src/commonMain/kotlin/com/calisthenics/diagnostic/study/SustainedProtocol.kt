@@ -38,6 +38,8 @@ class SustainedLatencyHistogram {
 
     fun bucketCounts(): List<Long> = counts.toList()
 
+    fun snapshot(): M05BSustainedLatencySummary = M05BSustainedLatencySummary(bucketCounts())
+
     fun percentileBounds(percentile: Int): LatencyBucketBounds {
         require(percentile in setOf(50, 95, 99)) { "only frozen percentile ranks are supported" }
         check(count > 0L) { "cannot derive percentile from an empty histogram" }
