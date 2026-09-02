@@ -37,6 +37,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 /**
@@ -47,6 +48,23 @@ import kotlin.test.assertTrue
  * [FakeStorage] and the real `AndroidStoragePort`.
  */
 class SessionExporterTest {
+    @Test
+    fun durableAdmissionHostExposesTheExactWriterThatTheExporterWillSeal() {
+        val storage = FakeStorage()
+        val template = manifest()
+        val writer = DefaultDurableSessionWriter(storage, template.sessionId)
+
+        val exporter = SessionExporter(
+            storage = storage,
+            manifestTemplate = template,
+            monotonicNowNs = { 0L },
+            writer = writer,
+        )
+
+        assertSame(writer, assertIs<DurableAdmissionHost>(exporter).durableAdmissionWriter)
+        assertEquals(1, storage.attempts.size, "one exporter must open exactly one staging attempt")
+    }
+
     @Test
     fun tombstoneFenceRefusesWithoutOpeningWriterAndRechecksImmediatelyBeforePublishRename() {
         val refusedStorage = FakeStorage()

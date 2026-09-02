@@ -29,6 +29,11 @@ fun interface DeferredSessionAbort {
     fun completePendingAbort()
 }
 
+/** Narrow authority used by a pre-capture admission gate that must commit into this session. */
+interface DurableAdmissionHost {
+    val durableAdmissionWriter: DurableSessionWriter
+}
+
 /** Publishes one sealed session using the fixed crash-consistent commit sequence. */
 /**
  * The container transform this session observed, measured after the muxer finalized.
@@ -72,7 +77,8 @@ class SessionExporter(
     ),
     private val admissionFence: SessionAdmissionFence = SessionAdmissionFence { _, _ -> SessionAdmissionDecision.Admitted },
     private val deferAbortUntilFence: Boolean = false,
-) : SessionFinalizer, SessionAborter, EmittedRecordSink, TelemetrySink, DeferredSessionAbort {
+) : SessionFinalizer, SessionAborter, EmittedRecordSink, TelemetrySink, DeferredSessionAbort,
+    DurableAdmissionHost {
     private var finalizationResult: FinalizationResult? = null
     private var pendingAbort: Pair<SealedSessionSnapshot, String>? = null
     private var nextTelemetrySequence = 0L
@@ -93,6 +99,9 @@ class SessionExporter(
     /** The staging attempt this session is writing into, for platform sinks that own a file. */
     val openStagingAttempt: StagingAttempt?
         get() = writer.openStagingAttempt
+
+    override val durableAdmissionWriter: DurableSessionWriter
+        get() = writer
 
     /** Write this session's synchronization evidence into its own attempt. */
     fun appendSynchronizationEvidence(exactBytes: ByteArray) {

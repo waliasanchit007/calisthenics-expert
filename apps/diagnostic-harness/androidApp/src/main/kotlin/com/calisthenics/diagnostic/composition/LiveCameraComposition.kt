@@ -26,8 +26,10 @@ import com.calisthenics.diagnostic.contract.Uuid
 import com.calisthenics.diagnostic.export.AndroidStoragePort
 import com.calisthenics.diagnostic.export.AndroidStorageRoots
 import com.calisthenics.diagnostic.export.DeferredSessionAbort
+import com.calisthenics.diagnostic.export.DurableAdmissionHost
 import com.calisthenics.diagnostic.export.DurableArtifact
 import com.calisthenics.diagnostic.export.DurableReconciliationException
+import com.calisthenics.diagnostic.export.DurableSessionWriter
 import com.calisthenics.diagnostic.export.ObservedVideoSynchronization
 import com.calisthenics.diagnostic.export.SessionExporter
 import com.calisthenics.diagnostic.export.SESSION_VIDEO_ROLE
@@ -82,6 +84,12 @@ import com.calisthenics.diagnostic.telemetry.AndroidFixedTelemetryProbe
 import com.calisthenics.diagnostic.study.M05Admission
 import com.calisthenics.diagnostic.study.M05AdmissionEvidence
 import com.calisthenics.diagnostic.study.M05AdmissionResult
+import com.calisthenics.diagnostic.study.M05BBoundArtifact
+import com.calisthenics.diagnostic.study.M05BBoundAttemptEntry
+import com.calisthenics.diagnostic.study.M05BDurableAdmissionBoundary
+import com.calisthenics.diagnostic.study.M05BExecutionOrder
+import com.calisthenics.diagnostic.study.M05BObservedStart
+import com.calisthenics.diagnostic.study.M05BStartEnvelope
 import com.calisthenics.diagnostic.study.M05InputClass
 import com.calisthenics.diagnostic.study.SynchronizationArtifacts
 import com.calisthenics.diagnostic.study.SynchronizationCounts
@@ -138,6 +146,49 @@ sealed interface LiveCameraStartResult {
     data class Unavailable(val reason: LiveUnavailableReason) : LiveCameraStartResult
 }
 
+sealed interface LiveStartAdmissionDecision {
+    data object Admitted : LiveStartAdmissionDecision
+
+    data class Blocked(val blockingCodes: List<String>) : LiveStartAdmissionDecision {
+        init {
+            require(blockingCodes.isNotEmpty()) { "a blocked start admission requires at least one code" }
+        }
+    }
+}
+
+/** Owns the sole thunk that can start telemetry and the physical camera source for a gated run. */
+fun interface LiveStartAdmission {
+    fun admit(writer: DurableSessionWriter, startCapture: () -> Unit): LiveStartAdmissionDecision
+}
+
+/** Exact Task 7 inputs consumed by one Task 8 live attempt. */
+data class M05BLiveRunAdmission(
+    val envelopeArtifact: M05BBoundArtifact<M05BStartEnvelope>,
+    val orderArtifact: M05BBoundArtifact<M05BExecutionOrder>,
+    val observedStart: M05BObservedStart,
+    val attemptHistory: List<M05BBoundAttemptEntry>,
+    val inputClass: String = "empty_scene",
+    val operatorAttestedNoPerson: Boolean = true,
+)
+
+internal fun M05BLiveRunAdmission.asLiveStartAdmission(): LiveStartAdmission =
+    LiveStartAdmission { writer, startCapture ->
+        val outcome = M05BDurableAdmissionBoundary(writer).admitAndStart(
+            envelopeArtifact = envelopeArtifact,
+            orderArtifact = orderArtifact,
+            observedStart = observedStart,
+            attemptHistory = attemptHistory,
+            inputClass = inputClass,
+            operatorAttestedNoPerson = operatorAttestedNoPerson,
+            startCapture = startCapture,
+        )
+        if (outcome.result.admitted) {
+            LiveStartAdmissionDecision.Admitted
+        } else {
+            LiveStartAdmissionDecision.Blocked(outcome.result.blockingCodes)
+        }
+    }
+
 sealed interface LiveUnavailableReason {
     val code: String
 
@@ -159,6 +210,10 @@ sealed interface LiveUnavailableReason {
 
     data class Initialization(val detail: String) : LiveUnavailableReason {
         override val code: String = "live_initialization_failed"
+    }
+
+    data class RunAdmissionBlocked(val blockingCodes: List<String>) : LiveUnavailableReason {
+        override val code: String = "m05b_run_admission_blocked"
     }
 }
 
@@ -344,7 +399,7 @@ class LiveCameraComposition internal constructor(
         val registerRunner: (SessionRunner) -> SessionRunnerRegistrationResult = {
             SessionRunnerRegistrationResult.ACCEPTED
         },
-        val beforeSourceStart: () -> Unit = {},
+        val startAdmission: LiveStartAdmission? = null,
         val onCompletion: (LiveCameraCompletion) -> Unit = {},
         val wallClockUtc: () -> String = { Instant.now().toString() },
     ) {
@@ -476,14 +531,16 @@ class LiveCameraComposition internal constructor(
                 releasePlan = captureResourceReleasePlanLocked(abandonRunner = true)
                 return@synchronized
             }
-            try {
-                liveThermalProbe.start(::relativeNowNs)
-            } catch (error: Throwable) {
-                unavailable = LiveCameraStartResult.Unavailable(
-                    LiveUnavailableReason.ThermalApi(error.message ?: "thermal_api_unavailable"),
-                )
-                releasePlan = captureResourceReleasePlanLocked(abandonRunner = true)
-                return@synchronized
+            if (dependencies.startAdmission == null) {
+                try {
+                    liveThermalProbe.start(::relativeNowNs)
+                } catch (error: Throwable) {
+                    unavailable = LiveCameraStartResult.Unavailable(
+                        LiveUnavailableReason.ThermalApi(error.message ?: "thermal_api_unavailable"),
+                    )
+                    releasePlan = captureResourceReleasePlanLocked(abandonRunner = true)
+                    return@synchronized
+                }
             }
             val id = dependencies.sessionIdProvider()
             sessionId = id
@@ -594,8 +651,6 @@ class LiveCameraComposition internal constructor(
                     source = liveSource
                     sourceLifecycle.set(SourceLifecycle.PUBLISHED)
                     admission = LiveFrameAdmission(configuredInferenceFps)
-                    checkNotNull(telemetryController).start()
-                    telemetryStarted = true
                     null
                 } catch (error: Throwable) {
                     sourceFailure = LiveCameraStartResult.Unavailable(
@@ -609,32 +664,47 @@ class LiveCameraComposition internal constructor(
         sourceFailure?.let { return it }
 
         val startedSource = checkNotNull(liveSource)
-        try {
-            dependencies.beforeSourceStart()
-        } catch (error: Throwable) {
-            val startPlan = synchronized(monitor) {
-                val result = LiveCameraStartResult.Unavailable(
-                    LiveUnavailableReason.Initialization(error.message ?: "live_source_start_failed"),
-                )
-                unavailable = result
-                captureResourceReleasePlanLocked(abandonRunner = true)
+        val captureInvoked = AtomicBoolean(false)
+        val startCapture = {
+            check(captureInvoked.compareAndSet(false, true)) { "capture start thunk was invoked more than once" }
+            check(sourceLifecycle.compareAndSet(SourceLifecycle.PUBLISHED, SourceLifecycle.STARTING)) {
+                "live_session_closed"
             }
-            performRelease(startPlan)
-            return checkNotNull(unavailable)
+            var sourceStartEntered = false
+            try {
+                if (dependencies.startAdmission != null) {
+                    // The admitted capture owns t0. Setup and durable admission do not consume the
+                    // fixed 1,500-second observation window.
+                    sessionStartNs = dependencies.clock.nowNs()
+                    checkNotNull(thermalProbe).start(::relativeNowNs)
+                }
+                checkNotNull(telemetryController).start()
+                synchronized(monitor) { telemetryStarted = true }
+                sourceStartEntered = true
+                startedSource.start(
+                    onSourceStarted = ::handleSourceStarted,
+                    onFrame = { frame -> handleFrame(frame, onProgress) },
+                    onFrameRejected = { timestampNs -> handleRejectedFrame(timestampNs, onProgress) },
+                    onFailure = { failure -> handleSourceFailure(failure, onProgress) },
+                )
+            } finally {
+                if (sourceStartEntered) {
+                    sourceLifecycle.compareAndSet(SourceLifecycle.STARTING, SourceLifecycle.STARTED)
+                } else {
+                    sourceLifecycle.compareAndSet(SourceLifecycle.STARTING, SourceLifecycle.PUBLISHED)
+                }
+                sourceStartFinished.countDown()
+            }
         }
-        if (!sourceLifecycle.compareAndSet(SourceLifecycle.PUBLISHED, SourceLifecycle.STARTING)) {
-            return LiveCameraStartResult.Unavailable(LiveUnavailableReason.Initialization("live_session_closed"))
-        }
+        var admissionDecision: LiveStartAdmissionDecision? = null
         val startError = runCatching {
-            startedSource.start(
-                onSourceStarted = ::handleSourceStarted,
-                onFrame = { frame -> handleFrame(frame, onProgress) },
-                onFrameRejected = { timestampNs -> handleRejectedFrame(timestampNs, onProgress) },
-                onFailure = { failure -> handleSourceFailure(failure, onProgress) },
-            )
+            admissionDecision = dependencies.startAdmission?.let { gate ->
+                val host = checkNotNull(sessionFinalizer as? DurableAdmissionHost) {
+                    "gated live finalizer does not expose its durable admission writer"
+                }
+                gate.admit(host.durableAdmissionWriter, startCapture)
+            } ?: LiveStartAdmissionDecision.Admitted.also { startCapture() }
         }.exceptionOrNull()
-        sourceLifecycle.compareAndSet(SourceLifecycle.STARTING, SourceLifecycle.STARTED)
-        sourceStartFinished.countDown()
         if (startError != null) {
             val startPlan = synchronized(monitor) {
                 val result = LiveCameraStartResult.Unavailable(
@@ -645,6 +715,28 @@ class LiveCameraComposition internal constructor(
             }
             performRelease(startPlan)
             return checkNotNull(unavailable)
+        }
+        when (val decision = checkNotNull(admissionDecision)) {
+            LiveStartAdmissionDecision.Admitted -> if (!captureInvoked.get()) {
+                val startPlan = synchronized(monitor) {
+                    unavailable = LiveCameraStartResult.Unavailable(
+                        LiveUnavailableReason.Initialization("admission_gate_did_not_start_capture"),
+                    )
+                    captureResourceReleasePlanLocked(abandonRunner = true)
+                }
+                performRelease(startPlan)
+                return checkNotNull(unavailable)
+            }
+            is LiveStartAdmissionDecision.Blocked -> {
+                val startPlan = synchronized(monitor) {
+                    unavailable = LiveCameraStartResult.Unavailable(
+                        LiveUnavailableReason.RunAdmissionBlocked(decision.blockingCodes),
+                    )
+                    captureResourceReleasePlanLocked(abandonRunner = true)
+                }
+                performRelease(startPlan)
+                return checkNotNull(unavailable)
+            }
         }
         if (sourceLifecycle.get() == SourceLifecycle.TEARDOWN_REQUESTED) {
             return LiveCameraStartResult.Unavailable(LiveUnavailableReason.Initialization("live_session_closed"))
@@ -1670,6 +1762,8 @@ class LiveCameraComposition internal constructor(
              * records `video_enabled=false`.
              */
             recordVideo: Boolean = false,
+            /** Exact Task 7 admission inputs for a Task 8 sustained run; null for ordinary live mode. */
+            m05bRunAdmission: M05BLiveRunAdmission? = null,
         ): LiveCameraComposition {
             val roots = when (val result = AndroidStorageRoots.from(context)) {
                 is StorageRootsResult.Ready -> result.roots
@@ -1917,6 +2011,7 @@ class LiveCameraComposition internal constructor(
                         ),
                     ),
                     registerRunner = onSessionRunnerCreated,
+                    startAdmission = m05bRunAdmission?.asLiveStartAdmission(),
                     onCompletion = onCompletion,
                 ),
             )

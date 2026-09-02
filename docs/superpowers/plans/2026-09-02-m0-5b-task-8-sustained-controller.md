@@ -17,15 +17,15 @@ controller to admitted capture startup rather than construction/setup time.
 
 ## Task 1: Structural admission/start boundary
 
-- [ ] Add RED composition tests for one staging attempt, referential writer identity, exact admission
+- [x] Add RED composition tests for one staging attempt, referential writer identity, exact admission
   bytes in the sealed attempt, admission fsync before telemetry and source start, blocked admission
   never starting capture, a gate that does not invoke its thunk being unable to bypass admission,
   and source-start failure producing a non-completed attempt.
-- [ ] Expose the exporter-owned writer through a narrow admission-host interface.
-- [ ] Replace `beforeSourceStart` with a typed `LiveStartAdmission` gate whose decision is admitted or
+- [x] Expose the exporter-owned writer through a narrow admission-host interface.
+- [x] Replace `beforeSourceStart` with a typed `LiveStartAdmission` gate whose decision is admitted or
   blocked with exact codes. Move the sole source-start call and telemetry startup into its thunk.
-- [ ] Preserve the existing abandon/start race fence and all non-M0.5B default behavior.
-- [ ] Mutation-check a direct source-start bypass and a different-writer substitution.
+- [x] Preserve the existing abandon/start race fence and all non-M0.5B default behavior.
+- [x] Mutation-check a direct source-start bypass and a different-writer substitution.
 
 ## Task 2: Sustained record and controller
 

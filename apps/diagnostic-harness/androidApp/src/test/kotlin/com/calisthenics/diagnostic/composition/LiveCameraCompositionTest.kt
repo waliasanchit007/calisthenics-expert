@@ -46,6 +46,7 @@ import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlin.test.fail
 import org.junit.Test
@@ -56,6 +57,79 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.system.measureTimeMillis
 
 class LiveCameraCompositionTest {
+
+    @Test
+    fun startAdmissionReceivesTheFinalizerWriterAndOwnsTheOnlySourceStart() {
+        lateinit var observedWriter: com.calisthenics.diagnostic.export.DurableSessionWriter
+        lateinit var harness: Harness
+        harness = Harness(
+            startAdmission = LiveStartAdmission { writer, startCapture ->
+                observedWriter = writer
+                harness.events += "admission.fsync"
+                startCapture()
+                LiveStartAdmissionDecision.Admitted
+            },
+        )
+        try {
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+
+            assertSame(harness.admissionWriter, observedWriter)
+            assertEquals(1, harness.source.startCount)
+            assertTrue(harness.events.indexOf("admission.fsync") < harness.events.indexOf("telemetry.sample"))
+            assertTrue(harness.events.indexOf("telemetry.sample") < harness.events.indexOf("source.start.entered"))
+        } finally {
+            harness.composition.abandon()
+        }
+    }
+
+    @Test
+    fun blockedStartAdmissionPreservesExactCodesAndStartsNeitherTelemetryNorSource() {
+        val codes = listOf("POWER.SOURCE_NOT_BATTERY", "THERMAL.RANGE")
+        val harness = Harness(
+            startAdmission = LiveStartAdmission { _, _ -> LiveStartAdmissionDecision.Blocked(codes) },
+        )
+
+        val unavailable = assertIs<LiveCameraStartResult.Unavailable>(harness.start(10))
+
+        assertEquals(codes, assertIs<LiveUnavailableReason.RunAdmissionBlocked>(unavailable.reason).blockingCodes)
+        assertEquals(0, harness.source.startCount)
+        assertTrue(harness.telemetryRecords.isEmpty())
+    }
+
+    @Test
+    fun anAdmittedGateThatNeverInvokesItsThunkCannotBypassCaptureAdmission() {
+        val harness = Harness(
+            startAdmission = LiveStartAdmission { _, _ -> LiveStartAdmissionDecision.Admitted },
+        )
+
+        val unavailable = assertIs<LiveCameraStartResult.Unavailable>(harness.start(10))
+
+        assertEquals(
+            "admission_gate_did_not_start_capture",
+            assertIs<LiveUnavailableReason.Initialization>(unavailable.reason).detail,
+        )
+        assertEquals(0, harness.source.startCount)
+        assertTrue(harness.telemetryRecords.isEmpty())
+    }
+
+    @Test
+    fun sourceStartFailureInsideAnAdmittedThunkAbortsInsteadOfCompletingTheAttempt() {
+        val harness = Harness(
+            sourceStartFailure = IllegalStateException("source start failed"),
+            startAdmission = LiveStartAdmission { _, startCapture ->
+                startCapture()
+                LiveStartAdmissionDecision.Admitted
+            },
+        )
+
+        val unavailable = assertIs<LiveCameraStartResult.Unavailable>(harness.start(10))
+
+        assertEquals("source start failed", assertIs<LiveUnavailableReason.Initialization>(unavailable.reason).detail)
+        assertEquals(1, harness.source.startCount)
+        assertEquals(1, harness.source.stopCount)
+        assertEquals(1, harness.abortRequests)
+        assertEquals(0, harness.finalizerCalls)
+    }
 
     // --- Task 4: synchronized video fan-out ---------------------------------------------------
 
@@ -1371,9 +1445,11 @@ class LiveCameraCompositionTest {
         val sourceStartGateEntered = CountDownLatch(1)
         val allowSourceStart = CountDownLatch(1)
         val harness = Harness(
-            beforeSourceStart = {
+            startAdmission = LiveStartAdmission { _, startCapture ->
                 sourceStartGateEntered.countDown()
                 check(allowSourceStart.await(1, TimeUnit.SECONDS))
+                startCapture()
+                LiveStartAdmissionDecision.Admitted
             },
         )
         val startResult = AtomicReference<LiveCameraStartResult?>(null)
@@ -1612,7 +1688,7 @@ class LiveCameraCompositionTest {
         sourceStartFailure: Throwable? = null,
         invokeManifestAtFinalization: Boolean = false,
         wallClockUtc: () -> String = { "test-time" },
-        beforeSourceStart: () -> Unit = {},
+        startAdmission: LiveStartAdmission? = null,
         blockSourceStart: Boolean = false,
         runNonPositiveSchedulerActions: Boolean = true,
         sourceResolution: LiveSourceResolution = LiveSourceResolution(2, 2),
@@ -1659,6 +1735,8 @@ class LiveCameraCompositionTest {
         var emittedRecord: RawPoseFrame? = null
         lateinit var manifest: com.calisthenics.diagnostic.contract.SessionManifest
         var finalizedManifest: com.calisthenics.diagnostic.contract.SessionManifest? = null
+        var admissionWriter: com.calisthenics.diagnostic.export.DurableSessionWriter? = null
+            private set
         private var started = false
 
         val composition = LiveCameraComposition(
@@ -1722,11 +1800,15 @@ class LiveCameraCompositionTest {
                     events += "writer.open"
                     manifest = template
                     durableWriterClock = monotonicNowNs
+                    admissionWriter = RecordingDurableAdmissionWriter(template.sessionId, events)
                     object : SessionFinalizer,
                         com.calisthenics.diagnostic.session.SessionAborter,
                         com.calisthenics.diagnostic.export.DeferredSessionAbort,
+                        com.calisthenics.diagnostic.export.DurableAdmissionHost,
                         com.calisthenics.diagnostic.session.EmittedRecordSink,
                         TelemetrySink {
+                        override val durableAdmissionWriter: com.calisthenics.diagnostic.export.DurableSessionWriter
+                            get() = checkNotNull(admissionWriter)
                         private var pendingAbort = false
                         override fun appendPose(record: RawPoseFrame) {
                             emittedRecord = record
@@ -1777,7 +1859,7 @@ class LiveCameraCompositionTest {
                 drainTimeoutNs = drainTimeoutNs,
                 wallClockUtc = wallClockUtc,
                 registerRunner = { registrationResult },
-                beforeSourceStart = beforeSourceStart,
+                startAdmission = startAdmission,
             ),
         )
 
@@ -1801,6 +1883,33 @@ class LiveCameraCompositionTest {
                 composition.stop()
             }
             started = false
+        }
+    }
+
+    private class RecordingDurableAdmissionWriter(
+        override val sessionId: com.calisthenics.diagnostic.contract.Uuid,
+        private val events: MutableList<String>,
+    ) : com.calisthenics.diagnostic.export.DurableSessionWriter {
+        override val state: com.calisthenics.diagnostic.export.DurableWriterState
+            get() = com.calisthenics.diagnostic.export.DurableWriterState.OPEN
+        override val openStagingAttempt: com.calisthenics.diagnostic.export.StagingAttempt? = null
+
+        override fun open() = Unit
+        override fun appendPose(record: RawPoseFrame) = Unit
+        override fun appendTelemetry(encodedRecord: String) = Unit
+        override fun appendAdmissionArtifact(exactBytes: ByteArray) {
+            events += "admission.append"
+        }
+        override fun appendSynchronizationEvidence(exactBytes: ByteArray) = Unit
+        override fun seal(
+            finalAggregates: com.calisthenics.diagnostic.export.FinalSessionAggregates,
+            synchronizationEvidence: ((
+                video: com.calisthenics.diagnostic.export.ArtifactReconciliation,
+                pose: com.calisthenics.diagnostic.export.ArtifactReconciliation,
+            ) -> ByteArray)?,
+        ): com.calisthenics.diagnostic.export.SealedArtifacts = error("not used by the composition harness")
+        override fun abort(reason: String, counts: com.calisthenics.diagnostic.contract.Counts) {
+            events += "admission.abort"
         }
     }
 
