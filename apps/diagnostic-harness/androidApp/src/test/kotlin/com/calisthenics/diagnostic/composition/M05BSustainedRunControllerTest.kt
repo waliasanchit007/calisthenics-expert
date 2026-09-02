@@ -2,6 +2,13 @@ package com.calisthenics.diagnostic.composition
 
 import com.calisthenics.diagnostic.contract.Uuid
 import com.calisthenics.diagnostic.session.Disposable
+import com.calisthenics.diagnostic.study.M05BSustainedBatterySummary
+import com.calisthenics.diagnostic.study.M05BSustainedLatencySummary
+import com.calisthenics.diagnostic.study.M05BSustainedProcessOutcome
+import com.calisthenics.diagnostic.study.M05BSustainedRuntimeEvidence
+import com.calisthenics.diagnostic.study.M05BSustainedSourceOutcome
+import com.calisthenics.diagnostic.study.M05BSustainedStageAccounting
+import com.calisthenics.diagnostic.study.M05BSustainedTelemetrySummary
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
@@ -25,6 +32,7 @@ class M05BSustainedRunControllerTest {
         assertEquals(1_500_000_000_000L, observations.single().requestedAtNs)
         assertEquals(1_500_000_000_000L, observations.single().invokedAtNs)
         assertEquals(emptyList(), observations.single().blockingCodes)
+        assertEquals(run.stopEvidence, observations.single().runtimeEvidence)
     }
 
     @Test
@@ -67,6 +75,7 @@ class M05BSustainedRunControllerTest {
             Uuid("00000000-0000-4000-8000-000000000010"),
         ),
     ) : M05BSustainedLiveRun {
+        val stopEvidence = runtimeEvidence()
         var stopCount = 0
         var startedCadence: Int? = null
 
@@ -75,11 +84,24 @@ class M05BSustainedRunControllerTest {
             return startResult
         }
 
-        override fun stop() {
+        override fun stop(): M05BSustainedRuntimeEvidence {
             stopCount++
+            return stopEvidence
         }
 
         override fun elapsedNs(): Long = elapsedNs
+    }
+
+    companion object {
+        private fun runtimeEvidence() = M05BSustainedRuntimeEvidence(
+            actualCaptureSpanNs = 1_500_000_000_000L,
+            stages = M05BSustainedStageAccounting(1, 1, 1, 1, 1, 1, 0, 1, 1, 0, 1, 1, 0, 0),
+            latency = M05BSustainedLatencySummary(listOf(1L) + List(13) { 0L }),
+            telemetry = M05BSustainedTelemetrySummary(1_502, 0, 1_500_000_000_000L, 1_000_000_000L, true),
+            battery = M05BSustainedBatterySummary(32.0, 33.0, 1.0),
+            sourceOutcome = M05BSustainedSourceOutcome.COMPLETED,
+            processOutcome = M05BSustainedProcessOutcome.COMPLETED,
+        )
     }
 
     private class CapturingScheduler : LiveScheduler {

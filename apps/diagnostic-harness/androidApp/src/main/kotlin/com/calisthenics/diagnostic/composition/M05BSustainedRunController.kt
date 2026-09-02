@@ -2,12 +2,13 @@ package com.calisthenics.diagnostic.composition
 
 import com.calisthenics.diagnostic.session.Disposable
 import com.calisthenics.diagnostic.study.M05BSustainedProtocol
+import com.calisthenics.diagnostic.study.M05BSustainedRuntimeEvidence
 import com.calisthenics.diagnostic.telemetry.PipelineTelemetryRecordingMode
 
 /** Narrow live-run authority used by the fixed-duration controller and its deterministic tests. */
 interface M05BSustainedLiveRun {
     fun start(cadenceFps: Int): LiveCameraStartResult
-    fun stop()
+    fun stop(): M05BSustainedRuntimeEvidence
     fun elapsedNs(): Long
 }
 
@@ -15,6 +16,7 @@ data class M05BSustainedStopObservation(
     val requestedAtNs: Long,
     val invokedAtNs: Long,
     val blockingCodes: List<String>,
+    val runtimeEvidence: M05BSustainedRuntimeEvidence,
 )
 
 /** Requests exactly one stop at the frozen duration and reports scheduler delay honestly. */
@@ -43,12 +45,13 @@ class M05BSustainedRunController(
         val blocking = buildList {
             if (invokedAtNs > M05BSustainedProtocol.MAX_STOP_REQUEST_NS) add("DURATION.OVERSHOOT")
         }
-        run.stop()
+        val runtimeEvidence = run.stop()
         onStopped(
             M05BSustainedStopObservation(
                 requestedAtNs = M05BSustainedProtocol.TARGET_DURATION_NS,
                 invokedAtNs = invokedAtNs,
                 blockingCodes = blocking,
+                runtimeEvidence = runtimeEvidence,
             ),
         )
     }
@@ -71,8 +74,11 @@ class M05BSustainedRunController(
                     recordingMode = PipelineTelemetryRecordingMode.SUSTAINED,
                 )
 
-                override fun stop() {
+                override fun stop(): M05BSustainedRuntimeEvidence {
                     composition.stop()
+                    return checkNotNull(composition.sustainedRuntimeEvidence()) {
+                        "sustained completion did not expose runtime evidence"
+                    }
                 }
 
                 override fun elapsedNs(): Long = checkNotNull(composition.sessionElapsedNs()) {

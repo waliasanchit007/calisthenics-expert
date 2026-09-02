@@ -80,7 +80,12 @@ import com.calisthenics.diagnostic.telemetry.PipelineStage
 import com.calisthenics.diagnostic.telemetry.PipelineStageRecorder
 import com.calisthenics.diagnostic.telemetry.PipelineTelemetryRecordingMode
 import com.calisthenics.diagnostic.study.M05BSustainedLatencySummary
+import com.calisthenics.diagnostic.study.M05BSustainedBatterySummary
+import com.calisthenics.diagnostic.study.M05BSustainedProcessOutcome
+import com.calisthenics.diagnostic.study.M05BSustainedRuntimeEvidence
+import com.calisthenics.diagnostic.study.M05BSustainedSourceOutcome
 import com.calisthenics.diagnostic.study.M05BSustainedStageAccounting
+import com.calisthenics.diagnostic.study.M05BSustainedTelemetrySummary
 import com.calisthenics.diagnostic.study.SustainedLatencyHistogram
 import com.calisthenics.diagnostic.study.deriveM05BSustainedStageAccounting
 import com.calisthenics.diagnostic.telemetry.TelemetrySink
@@ -1178,15 +1183,67 @@ class LiveCameraComposition internal constructor(
     internal fun sustainedStageAccounting(): M05BSustainedStageAccounting? = synchronized(monitor) {
         if (telemetryRecordingMode != PipelineTelemetryRecordingMode.SUSTAINED) return@synchronized null
         val finished = completion ?: return@synchronized null
+        val sourceLosses = checkNotNull(stageRecorder).counts[
+            PipelineStage.YUV_OWNERSHIP to PipelineDisposition.SOURCE_LOSS
+        ] ?: 0L
         deriveM05BSustainedStageAccounting(
             pipelineCounts = checkNotNull(stageRecorder).counts,
             finalCounts = finished.snapshot.counts,
             reconciledPoseRecordCount = (sessionFinalizer as? DurablePublishedEvidenceHost)
                 ?.publishedPoseRecordCount,
-            sourceFailures = if (sourceFailure == null) 0L else 1L,
+            sourceFailures = sourceLosses + if (sourceFailure == null) 0L else 1L,
             processFailures = if (finished.finalization is FinalizationResult.Published &&
                 telemetryFailure == null && !stalled
             ) 0L else 1L,
+        )
+    }
+
+    internal fun sustainedRuntimeEvidence(): M05BSustainedRuntimeEvidence? = synchronized(monitor) {
+        if (telemetryRecordingMode != PipelineTelemetryRecordingMode.SUSTAINED) return@synchronized null
+        val finished = completion ?: return@synchronized null
+        val recorder = stageRecorder ?: return@synchronized null
+        val fixed = recorder.sustainedTelemetrySummary()
+        val startTemperature = fixed.startBatteryTemperatureC
+        val endTemperature = fixed.endBatteryTemperatureC
+        val sourceLosses = recorder.counts[
+            PipelineStage.YUV_OWNERSHIP to PipelineDisposition.SOURCE_LOSS
+        ] ?: 0L
+        val sourceResult = when {
+            sourceFailure != null -> M05BSustainedSourceOutcome.FAILED
+            sourceLosses > 0L -> M05BSustainedSourceOutcome.LOST
+            else -> M05BSustainedSourceOutcome.COMPLETED
+        }
+        val processResult = when (finished.finalization) {
+            is FinalizationResult.Published -> if (telemetryFailure == null && !stalled) {
+                M05BSustainedProcessOutcome.COMPLETED
+            } else {
+                M05BSustainedProcessOutcome.FAILED
+            }
+            is FinalizationResult.Cancelled -> M05BSustainedProcessOutcome.ABORTED
+            is FinalizationResult.Failed -> M05BSustainedProcessOutcome.FAILED
+        }
+        M05BSustainedRuntimeEvidence(
+            actualCaptureSpanNs = admittedCallbackCadence.observedSpanNs() ?: 0L,
+            stages = checkNotNull(sustainedStageAccounting()),
+            latency = sustainedLatencyHistogram.snapshot(),
+            telemetry = M05BSustainedTelemetrySummary(
+                fixedSampleCount = fixed.fixedSampleCount,
+                firstTSessionNs = fixed.firstTSessionNs,
+                lastTSessionNs = fixed.lastTSessionNs,
+                maxInterSampleGapNs = fixed.maxInterSampleGapNs,
+                terminalSample = fixed.terminalSample,
+            ),
+            battery = M05BSustainedBatterySummary(
+                startTemperatureC = startTemperature,
+                endTemperatureC = endTemperature,
+                deltaTemperatureC = if (startTemperature != null && endTemperature != null) {
+                    endTemperature - startTemperature
+                } else {
+                    null
+                },
+            ),
+            sourceOutcome = sourceResult,
+            processOutcome = processResult,
         )
     }
 

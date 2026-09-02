@@ -29,19 +29,19 @@ controller to admitted capture startup rather than construction/setup time.
 
 ## Task 2: Sustained record and controller
 
-- [ ] Add RED common tests for the exact 1,500-second stop request, one-second hard overshoot bound,
+- [x] Add RED common tests for the exact 1,500-second stop request, one-second hard overshoot bound,
   video disabled, camera request 30 FPS, frozen cadence/order identity, immutable attempt-chain
   derivation, scalar battery temperatures with no defaults, stage equations, fixed latency histogram,
   and telemetry start/gap/end coverage.
-- [ ] Add a typed sustained observation and renderer. All verdicts and blocking codes are derived;
+- [x] Add a typed sustained observation and renderer. All verdicts and blocking codes are derived;
   callers cannot supply an admitted boolean.
-- [ ] Add a bounded controller that consumes exact envelope/order bytes and history, performs cooldown
+- [x] Add a bounded controller that consumes exact envelope/order bytes and history, performs cooldown
   and observed-start admission, starts the real composition through the structural gate, requests
   stop from the admitted session clock at exactly 1,500,000,000,000 ns, and records the actual request
   time without normalizing overshoot.
-- [ ] Build stage, latency, telemetry, battery, source, and process results from durable session
+- [x] Build stage, latency, telemetry, battery, source, and process results from durable session
   artifacts plus completion state; never retain per-frame sustained telemetry in memory.
-- [ ] Mutation-check the target duration, overshoot, video/camera constants, artifact identities,
+- [x] Mutation-check the target duration, overshoot, video/camera constants, artifact identities,
   each stage equation, telemetry coverage, and a caller-forged blocker list.
 
 ## Task 3: Host/device gate software

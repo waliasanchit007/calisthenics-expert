@@ -107,6 +107,17 @@ data class M05BSustainedBatterySummary(
     val deltaTemperatureC: Double?,
 )
 
+/** Post-completion, constant-memory evidence owned by the live run rather than the device gate. */
+data class M05BSustainedRuntimeEvidence(
+    val actualCaptureSpanNs: Long,
+    val stages: M05BSustainedStageAccounting,
+    val latency: M05BSustainedLatencySummary,
+    val telemetry: M05BSustainedTelemetrySummary,
+    val battery: M05BSustainedBatterySummary,
+    val sourceOutcome: M05BSustainedSourceOutcome,
+    val processOutcome: M05BSustainedProcessOutcome,
+)
+
 enum class M05BSustainedSourceOutcome(val wireValue: String) {
     COMPLETED("completed"), FAILED("failed"), LOST("lost")
 }

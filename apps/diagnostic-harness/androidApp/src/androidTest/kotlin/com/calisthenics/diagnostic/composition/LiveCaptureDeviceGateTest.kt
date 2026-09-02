@@ -78,6 +78,8 @@ class LiveCaptureDeviceGateTest {
                             sanitizeLiveCaptureFailureDetail(reason.detail)
                         is LiveUnavailableReason.CameraCapability ->
                             reason.blockingReasons.joinToString(",")
+                        is LiveUnavailableReason.RunAdmissionBlocked ->
+                            reason.blockingCodes.joinToString(",")
                         LiveUnavailableReason.CameraPermissionDenied -> null
                         LiveUnavailableReason.OperatorAttestationRequired -> null
                         is LiveUnavailableReason.ThermalApi -> sanitizeLiveCaptureFailureDetail(reason.detail)

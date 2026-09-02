@@ -385,6 +385,36 @@ class LiveCameraCompositionTest {
     }
 
     @Test
+    fun sustainedRuntimeEvidenceComesFromTheCompletedLiveRun() {
+        withHarness(Harness()) { harness ->
+            assertIs<LiveCameraStartResult.Started>(
+                harness.start(10, recordingMode = PipelineTelemetryRecordingMode.SUSTAINED),
+            )
+            harness.source.emit(frame(timestampNs = 1_000_002_000L))
+            harness.inference.completeSuccess()
+            harness.composition.stop()
+
+            val evidence = assertNotNull(harness.composition.sustainedRuntimeEvidence())
+            assertEquals(0L, evidence.actualCaptureSpanNs)
+            assertEquals(harness.composition.sustainedStageAccounting(), evidence.stages)
+            assertEquals(1L, evidence.latency.count)
+            assertEquals(2L, evidence.telemetry.fixedSampleCount)
+            assertTrue(evidence.telemetry.terminalSample)
+            assertEquals(null, evidence.battery.startTemperatureC)
+            assertEquals(null, evidence.battery.endTemperatureC)
+            assertEquals(null, evidence.battery.deltaTemperatureC)
+            assertEquals(
+                com.calisthenics.diagnostic.study.M05BSustainedSourceOutcome.COMPLETED,
+                evidence.sourceOutcome,
+            )
+            assertEquals(
+                com.calisthenics.diagnostic.study.M05BSustainedProcessOutcome.COMPLETED,
+                evidence.processOutcome,
+            )
+        }
+    }
+
+    @Test
     fun liveManifestDoesNotEmitACallerSelectedParticipantIdentity() {
         withHarness(Harness()) { harness ->
             assertIs<LiveCameraStartResult.Started>(harness.start(10))
