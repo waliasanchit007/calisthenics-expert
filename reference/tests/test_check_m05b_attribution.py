@@ -167,6 +167,40 @@ def test_checker_requires_candidate_identity_in_every_manifest(tmp_path: Path) -
         )
 
 
+def test_checker_binds_runtime_version_to_device_os_not_pose_pipeline(
+    tmp_path: Path,
+) -> None:
+    record, paths = make_fixture_tree(tmp_path)
+    for index, path_set in enumerate(paths):
+        manifest = json.loads(path_set["manifest"].read_text(encoding="utf-8"))
+        manifest["pose_pipeline"].pop("runtime_version")
+        manifest["device"]["os_version"] = IDENTITY["runtime_version"]
+        path_set["manifest"].write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+        record["sessions"][index]["manifest_sha256"] = sha(path_set["manifest"])
+
+    result = check_attribution(
+        transcript(record), tmp_path, subprocess_exit_code=0, prepared_identity=IDENTITY
+    )
+
+    assert result["satisfies_s25_attribution_gate"] is True
+
+
+def test_checker_rejects_device_os_that_differs_from_prepared_runtime(
+    tmp_path: Path,
+) -> None:
+    record, paths = make_fixture_tree(tmp_path)
+    manifest = json.loads(paths[0]["manifest"].read_text(encoding="utf-8"))
+    manifest["pose_pipeline"].pop("runtime_version")
+    manifest["device"]["os_version"] = "15"
+    paths[0]["manifest"].write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+    record["sessions"][0]["manifest_sha256"] = sha(paths[0]["manifest"])
+
+    with pytest.raises(AttributionCheckError, match="runtime identity"):
+        check_attribution(
+            transcript(record), tmp_path, subprocess_exit_code=0, prepared_identity=IDENTITY
+        )
+
+
 def test_checker_accepts_the_live_composition_study_context_identity_binding(
     tmp_path: Path,
 ) -> None:
@@ -517,6 +551,7 @@ def manifest_for(session_id: str, fps: int, admitted: int, delivered: int) -> di
     manifest["cadence"]["configured_inference_fps"] = fps
     manifest["camera"]["requested_camera_fps"] = 30
     manifest["device"]["device_model"] = "SM-S938B"
+    manifest["device"]["os_version"] = IDENTITY["runtime_version"]
     manifest["harness_git_sha"] = IDENTITY["app_git_sha"]
     manifest["build_identity"] = dict(IDENTITY)
     manifest["pose_pipeline"]["model_asset_sha256"] = IDENTITY["model_sha256"]

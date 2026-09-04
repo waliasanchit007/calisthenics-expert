@@ -563,7 +563,7 @@ def _check_export(
             "probe_git_sha": str(identity["probe_git_sha"]),
             "apk_sha256": str(identity["apk_sha256"]),
             "model_sha256": str(manifest["pose_pipeline"]["model_asset_sha256"]),
-            "runtime_version": str(manifest["pose_pipeline"]["runtime_version"]),
+            "runtime_version": str(manifest["device"]["os_version"]),
             "backend_version": str(manifest["pose_pipeline"]["backend_version"]),
             "delegate": str(manifest["pose_pipeline"]["delegate"]),
         },
@@ -731,6 +731,14 @@ def _bind_manifest(
         raise AttributionCheckError(
             f"manifest device identity mismatch for {session_id}"
         )
+    if not (
+        manifest_device.get("os_version")
+        == device.get("android_release")
+        == identity.get("runtime_version")
+    ):
+        raise AttributionCheckError(
+            f"manifest runtime identity mismatch for {session_id}"
+        )
     build_identity = _manifest_build_identity(manifest, session_id)
     if manifest.get("harness_git_sha") != identity.get("app_git_sha"):
         raise AttributionCheckError(
@@ -756,7 +764,6 @@ def _bind_manifest(
         )
     if (
         pipeline.get("model_asset_sha256") != identity.get("model_sha256")
-        or pipeline.get("runtime_version") != identity.get("runtime_version")
         or pipeline.get("backend_version") != identity.get("backend_version")
         or pipeline.get("delegate") != identity.get("delegate")
         or not isinstance(pipeline.get("model_asset_sha256"), str)
