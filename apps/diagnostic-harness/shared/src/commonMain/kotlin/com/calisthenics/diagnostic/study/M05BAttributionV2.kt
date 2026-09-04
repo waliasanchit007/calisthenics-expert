@@ -117,7 +117,7 @@ fun validateAttributionV2(evidence: M05BAttributionV2Evidence?): M05BAttribution
         validateSource(evidence.sourceArm, this)
         validateBackend(evidence.backendArm, this)
         validateSelector(evidence.selectorArm, this)
-        evidence.callbackArm?.let { validateCallbackArm(it, this) }
+        evidence.callbackArm?.let { addAll(attributionV2CallbackBlockers(it)) }
         if (evidence.selectorArm != null &&
             (evidence.sourceArm == null || evidence.backendArm == null || evidence.replicates.isEmpty())
         ) add("ATTRIBUTION.SELECTOR_ONLY")
@@ -168,7 +168,7 @@ private fun validateSelector(arm: AttributionV2SelectorArm?, blockers: MutableLi
     ) blockers += "ATTRIBUTION.SELECTOR_DIVERGENCE"
 }
 
-private fun validateCallbackArm(arm: AttributionV2CallbackArm, blockers: MutableList<String>) {
+internal fun attributionV2CallbackBlockers(arm: AttributionV2CallbackArm): List<String> = buildList {
     val delivered = arm.deliveredCallbackIds
     val terminalIds = arm.terminalCallbacks.filter {
         it.terminalClass in CONSERVATION_TERMINALS
@@ -180,14 +180,14 @@ private fun validateCallbackArm(arm: AttributionV2CallbackArm, blockers: Mutable
     if (delivered.size != delivered.distinct().size || terminalIds.size != terminalIds.distinct().size ||
         delivered.toSet() != terminalIds.toSet() || arm.submittedInferenceIds.toSet() != admittedIds.toSet() ||
         arm.pendingInferenceIds.isNotEmpty()
-    ) blockers += "ATTRIBUTION.TERMINAL_CLOSURE"
-    if (arm.terminalCallbacks.size != delivered.size) blockers += "ATTRIBUTION.CALLBACK_CONSERVATION"
+    ) add("ATTRIBUTION.TERMINAL_CLOSURE")
+    if (arm.terminalCallbacks.size != delivered.size) add("ATTRIBUTION.CALLBACK_CONSERVATION")
     arm.terminalCallbacks.forEach { callback ->
         if (callback.terminalClass == AttributionV2TerminalClass.ADMISSION_STATE_DIVERGENCE ||
             !terminalMatchesPredicates(callback)
-        ) blockers += "ATTRIBUTION.ADMISSION_STATE_DIVERGENCE"
+        ) add("ATTRIBUTION.ADMISSION_STATE_DIVERGENCE")
     }
-}
+}.distinct().sorted()
 
 private fun terminalMatchesPredicates(callback: AttributionV2Callback): Boolean = when (callback.terminalClass) {
     AttributionV2TerminalClass.ADMITTED_COMPLETED,

@@ -13,8 +13,8 @@
     "non_participant_observation": {"const": true},
     "device": {"$ref": "#/$defs/device"},
     "identity": {"$ref": "#/$defs/identity"},
-    "source_arm": {"$ref": "#/$defs/arm"},
-    "backend_arm": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/arm"}]},
+    "source_arm": {"$ref": "#/$defs/source_arm"},
+    "backend_arm": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/backend_arm"}]},
     "selector_arm": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/selector_arm"}]},
     "end_to_end_replicates": {"type": "array", "maxItems": 2, "items": {"$ref": "#/$defs/replicate"}},
     "blocking_codes": {"$ref": "#/$defs/blocking_codes"}
@@ -52,18 +52,32 @@
         "delegate": {"type": "string", "minLength": 1}
       }
     },
-    "arm": {
+    "source_arm": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["status", "blocking_codes"],
+      "required": ["status", "blocking_codes", "warmup_count", "measured_count", "timestamps_ns", "observed_ae_target_fps", "thermal_status"],
       "properties": {
         "status": {"enum": ["recorded", "blocked"]},
         "blocking_codes": {"$ref": "#/$defs/blocking_codes"},
         "warmup_count": {"type": "integer", "minimum": 0},
         "measured_count": {"type": "integer", "minimum": 0},
         "timestamps_ns": {"type": "array", "maxItems": 300, "items": {"type": "integer", "minimum": 0}},
-        "service_durations_ns": {"type": "array", "maxItems": 100, "items": {"type": "integer", "minimum": 0}},
         "observed_ae_target_fps": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/fps_range"}]},
+        "thermal_status": {"type": "integer", "minimum": 0}
+      }
+    },
+    "backend_arm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "blocking_codes", "warmup_count", "warmup_elapsed_ns", "measured_count", "service_durations_ns", "inference_failures", "thermal_status"],
+      "properties": {
+        "status": {"enum": ["recorded", "blocked"]},
+        "blocking_codes": {"$ref": "#/$defs/blocking_codes"},
+        "warmup_count": {"type": "integer", "minimum": 0},
+        "warmup_elapsed_ns": {"type": "integer", "minimum": 0},
+        "measured_count": {"type": "integer", "minimum": 0},
+        "service_durations_ns": {"type": "array", "maxItems": 100, "items": {"type": "integer", "minimum": 0}},
+        "inference_failures": {"type": "integer", "minimum": 0},
         "thermal_status": {"type": "integer", "minimum": 0}
       }
     },
@@ -87,20 +101,52 @@
     "selector_run": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["cadence_fps", "selected_timestamps_ns"],
+      "required": ["cadence_fps", "production_selected_timestamps_ns", "host_selected_timestamps_ns"],
       "properties": {
         "cadence_fps": {"enum": [10, 15, 30]},
-        "selected_timestamps_ns": {"type": "array", "maxItems": 300, "items": {"type": "integer", "minimum": 0}}
+        "production_selected_timestamps_ns": {"type": "array", "maxItems": 300, "items": {"type": "integer", "minimum": 0}},
+        "host_selected_timestamps_ns": {"type": "array", "maxItems": 300, "items": {"type": "integer", "minimum": 0}}
       }
     },
     "replicate": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["order", "status", "blocking_codes"],
+      "required": ["order", "status", "blocking_codes", "cooldown_thermal_statuses", "runs"],
       "properties": {
         "order": {"enum": [[10, 15, 30], [30, 15, 10]]},
         "status": {"enum": ["recorded", "blocked"]},
-        "blocking_codes": {"$ref": "#/$defs/blocking_codes"}
+        "blocking_codes": {"$ref": "#/$defs/blocking_codes"},
+        "cooldown_thermal_statuses": {"type": "array", "maxItems": 601, "items": {"type": "integer", "minimum": 0}},
+        "runs": {"type": "array", "maxItems": 3, "items": {"$ref": "#/$defs/end_to_end_run"}}
+      }
+    },
+    "end_to_end_run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cadence_fps", "session_reference", "initial_thermal_status", "final_thermal_status", "measured_span_ns", "delivered_callback_ids", "terminal_callbacks", "submitted_inference_ids", "pending_inference_ids"],
+      "properties": {
+        "cadence_fps": {"enum": [10, 15, 30]},
+        "session_reference": {"type": "string", "pattern": "^(?!/)(?![A-Za-z]:[\\\\/])(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._/-]+$"},
+        "initial_thermal_status": {"type": "integer", "minimum": 0},
+        "final_thermal_status": {"type": "integer", "minimum": 0},
+        "measured_span_ns": {"type": "integer", "minimum": 0},
+        "delivered_callback_ids": {"type": "array", "maxItems": 300, "uniqueItems": true, "items": {"type": "integer", "minimum": 0}},
+        "terminal_callbacks": {"type": "array", "maxItems": 300, "items": {"$ref": "#/$defs/callback"}},
+        "submitted_inference_ids": {"type": "array", "maxItems": 300, "uniqueItems": true, "items": {"type": "integer", "minimum": 0}},
+        "pending_inference_ids": {"type": "array", "maxItems": 300, "uniqueItems": true, "items": {"type": "integer", "minimum": 0}}
+      }
+    },
+    "callback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["callback_id", "capture_timestamp_ns", "production_classification", "cadence_due", "slot_available", "terminal_class"],
+      "properties": {
+        "callback_id": {"type": "integer", "minimum": 0},
+        "capture_timestamp_ns": {"type": "integer", "minimum": 0},
+        "production_classification": {"enum": ["submit", "cadence_selection", "backpressure", "preprocessing_failed", "session_stopping"]},
+        "cadence_due": {"type": "boolean"},
+        "slot_available": {"type": "boolean"},
+        "terminal_class": {"enum": ["admitted_completed", "admitted_inference_failed", "cadence_only", "backpressure_only", "cadence_and_backpressure", "preprocessing_failed", "session_stopping", "admission_state_divergence"]}
       }
     }
   }

@@ -539,8 +539,10 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
 ### Task 4: Build bounded Android protocol arms and reference-only output
 
 **Files:**
+- Modify: `contracts/tooling/m05b_attribution_observation.v2.schema.json`
+- Modify: `reference/tests/test_m05b_attribution_v2_contract.py`
 - Create: `apps/diagnostic-harness/androidApp/src/androidTest/kotlin/com/calisthenics/diagnostic/composition/M05BAttributionV2DeviceGateTest.kt`
-- Create: `apps/diagnostic-harness/androidApp/src/androidTest/kotlin/com/calisthenics/diagnostic/composition/M05BAttributionV2Runner.kt`
+- Create: `apps/diagnostic-harness/androidApp/src/main/kotlin/com/calisthenics/diagnostic/composition/M05BAttributionV2Runner.kt`
 - Create: `apps/diagnostic-harness/androidApp/src/test/kotlin/com/calisthenics/diagnostic/composition/M05BAttributionV2RunnerTest.kt`
 - Create: `apps/diagnostic-harness/shared/src/commonMain/kotlin/com/calisthenics/diagnostic/study/M05BAttributionV2Json.kt`
 - Create: `apps/diagnostic-harness/shared/src/commonTest/kotlin/com/calisthenics/diagnostic/study/M05BAttributionV2JsonTest.kt`
@@ -548,23 +550,30 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
 **Interfaces:**
 - Consumes: protocol constants, `CameraXFrameSource`, live composition, single-flight test policy,
   production selector, thermal probe, exact candidate identity, app-private storage.
-- Produces: `renderM05BAttributionV2Evidence(M05BAttributionV2Evidence): String`, one bounded
+- Produces: `renderM05BAttributionV2Evidence(M05BAttributionV2DeviceObservation): String`, one bounded
   `m05b_attribution_v2_device_observation` artifact, and exactly one status record under the key
   `M05BAttributionV2Evidence`.
 
-- [ ] **Step 1: Write RED evidence-renderer tests**
+- [x] **Step 1: Write RED evidence-renderer tests**
+
+  Implementation correction: Task 2 already uses `M05BAttributionV2Evidence` as the normalized
+  pure-validation input, and Android unit tests cannot see an `androidTest` runner. Preserve that
+  single derivation type, name the serialized DTO `M05BAttributionV2DeviceObservation`, and place
+  the runner in `main` with all construction restricted to the internal device-gate path. The
+  observation schema must carry every raw callback, terminal, thermal, and replicate input that
+  Task 5 independently recomputes; a summary-only device record is not admissible.
 
   Require an immutable record with these top-level fields:
 
   ```kotlin
-  data class M05BAttributionV2Evidence(
+  data class M05BAttributionV2DeviceObservation(
       val protocolSha256: String,
-      val device: AttributionEvidenceSource,
-      val identity: AttributionRunIdentity,
-      val sourceArm: AttributionV2SourceArm,
-      val backendArm: AttributionV2BackendArm,
-      val selectorArm: AttributionV2SelectorArm?,
-      val endToEndReplicates: List<AttributionV2Replicate>,
+      val device: AttributionV2DeviceSource,
+      val identity: AttributionV2RunIdentity,
+      val sourceArm: AttributionV2SourceObservation,
+      val backendArm: AttributionV2BackendObservation?,
+      val selectorArm: AttributionV2SelectorObservation?,
+      val endToEndReplicates: List<AttributionV2ReplicateObservation>,
       val blockingCodes: List<String>,
   )
   ```
@@ -574,7 +583,7 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
   refuses absolute paths, device serials, wall-clock fields, participant fields, image bytes, or
   landmark coordinates.
 
-- [ ] **Step 2: Run evidence RED**
+- [x] **Step 2: Run evidence RED**
 
   ```bash
   cd apps/diagnostic-harness
@@ -583,7 +592,7 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
 
   Expected: compilation failure for the absent evidence model.
 
-- [ ] **Step 3: Implement the minimum closed renderer**
+- [x] **Step 3: Implement the minimum closed renderer**
 
   Use `kotlinx.serialization.json.buildJsonObject`; do not accept a success Boolean. Include exact
   source timestamps, backend service durations, selector-selected timestamps, per-callback terminal

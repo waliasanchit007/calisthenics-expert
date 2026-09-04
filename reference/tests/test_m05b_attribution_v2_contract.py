@@ -135,16 +135,62 @@ def test_observation_schema_is_closed_and_requires_non_participant_sanitization(
             "delegate": "cpu",
         },
         "source_arm": {
-            "status": "blocked",
-            "blocking_codes": ["ATTRIBUTION.SOURCE_SAMPLE_INSUFFICIENT"],
+            "status": "recorded",
+            "blocking_codes": [],
+            "warmup_count": 30,
+            "measured_count": 300,
+            "timestamps_ns": [index * 33_333_333 for index in range(300)],
+            "observed_ae_target_fps": {"lower": 30, "upper": 30},
+            "thermal_status": 0,
         },
         "backend_arm": None,
         "selector_arm": None,
-        "end_to_end_replicates": [],
-        "blocking_codes": ["ATTRIBUTION.SOURCE_SAMPLE_INSUFFICIENT"],
+        "end_to_end_replicates": [
+            {
+                "order": [10, 15, 30],
+                "status": "blocked",
+                "blocking_codes": ["ATTRIBUTION.REPLICATE_DISAGREEMENT"],
+                "cooldown_thermal_statuses": [0],
+                "runs": [
+                    {
+                        "cadence_fps": 10,
+                        "session_reference": "exports/00000000-0000-4000-8000-000000000001",
+                        "initial_thermal_status": 0,
+                        "final_thermal_status": 0,
+                        "measured_span_ns": 1_000_000_000,
+                        "delivered_callback_ids": [7],
+                        "terminal_callbacks": [
+                            {
+                                "callback_id": 7,
+                                "capture_timestamp_ns": 123_000_000,
+                                "production_classification": "cadence_selection",
+                                "cadence_due": False,
+                                "slot_available": True,
+                                "terminal_class": "cadence_only",
+                            }
+                        ],
+                        "submitted_inference_ids": [],
+                        "pending_inference_ids": [],
+                    }
+                ],
+            }
+        ],
+        "blocking_codes": [
+            "ATTRIBUTION.BACKEND_SAMPLE_INSUFFICIENT",
+            "ATTRIBUTION.REPLICATE_DISAGREEMENT",
+            "ATTRIBUTION.SELECTOR_DIVERGENCE",
+        ],
     }
 
     assert list(validator.iter_errors(observation)) == []
+    missing_terminals = deepcopy(observation)
+    del missing_terminals["end_to_end_replicates"][0]["runs"][0]["terminal_callbacks"]
+    assert list(validator.iter_errors(missing_terminals))
+    absolute_reference = deepcopy(observation)
+    absolute_reference["end_to_end_replicates"][0]["runs"][0]["session_reference"] = (
+        "/data/user/0/private"
+    )
+    assert list(validator.iter_errors(absolute_reference))
     observation["participant_id"] = "forbidden"
     assert list(validator.iter_errors(observation))
     del observation["participant_id"]
