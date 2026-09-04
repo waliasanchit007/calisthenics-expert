@@ -37,6 +37,7 @@ import com.calisthenics.diagnostic.export.SESSION_VIDEO_ROLE
 import com.calisthenics.diagnostic.export.StorageRootsResult
 import com.calisthenics.diagnostic.hash.Sha256Digest
 import com.calisthenics.diagnostic.live.LiveFrameAdmission
+import com.calisthenics.diagnostic.live.LiveFrameAdmissionPort
 import com.calisthenics.diagnostic.live.LiveCaptureCadenceAccumulator
 import com.calisthenics.diagnostic.live.LiveCaptureCadenceDiagnostics
 import com.calisthenics.diagnostic.live.LiveCaptureThermalObservation
@@ -150,6 +151,7 @@ private const val VIDEO_BIT_RATE = 8_000_000
 private const val TASK3_PROBE_CODEC = "c2.qti.avc.encoder"
 private const val TASK3_PROBE_CONTAINER = "video/mp4"
 private val LIVE_M05_INPUT_CLASS = M05InputClass.EMPTY_SCENE
+internal val DEFAULT_LIVE_FRAME_ADMISSION_FACTORY: (Int) -> LiveFrameAdmissionPort = ::LiveFrameAdmission
 
 sealed interface LiveCameraStartResult {
     data class Started(val sessionId: Uuid) : LiveCameraStartResult
@@ -411,6 +413,8 @@ class LiveCameraComposition internal constructor(
             SessionRunnerRegistrationResult.ACCEPTED
         },
         val startAdmission: LiveStartAdmission? = null,
+        val frameAdmissionFactory: (Int) -> LiveFrameAdmissionPort = DEFAULT_LIVE_FRAME_ADMISSION_FACTORY,
+        val attributionV2Observer: AttributionV2CallbackObserver? = null,
         val onCompletion: (LiveCameraCompletion) -> Unit = {},
         val wallClockUtc: () -> String = { Instant.now().toString() },
     ) {
@@ -435,7 +439,7 @@ class LiveCameraComposition internal constructor(
     private val monitor = java.lang.Object()
     private var sessionId: Uuid? = null
     private var sessionStartNs = 0L
-    private var admission: LiveFrameAdmission? = null
+    private var admission: LiveFrameAdmissionPort? = null
     private var source: LiveFrameSource? = null
     private var runner: SessionRunner? = null
     private var inference: LiveInference? = null
@@ -668,7 +672,7 @@ class LiveCameraComposition internal constructor(
                     liveSource = dependencies.sourceFactory()
                     source = liveSource
                     sourceLifecycle.set(SourceLifecycle.PUBLISHED)
-                    admission = LiveFrameAdmission(configuredInferenceFps)
+                    admission = dependencies.frameAdmissionFactory(configuredInferenceFps)
                     null
                 } catch (error: Throwable) {
                     sourceFailure = LiveCameraStartResult.Unavailable(
@@ -920,6 +924,12 @@ class LiveCameraComposition internal constructor(
             if (stopping) {
                 val terminalTimestamp = maxOf(previousTimestamp ?: 0L, rebasedCaptureNs.coerceAtLeast(0L))
                 observeDeliveredTimestampLocked(terminalTimestamp)
+                observeAttributionAdmissionLocked(
+                    index,
+                    terminalTimestamp,
+                    com.calisthenics.diagnostic.live.LiveFrameClassification.SESSION_STOPPING,
+                    currentAdmission,
+                )
                 return@synchronized FrameWork(
                     runner = currentRunner,
                     index = index,
@@ -930,7 +940,14 @@ class LiveCameraComposition internal constructor(
                 )
             }
             if (rebasedCaptureNs < 0L || previousTimestamp?.let { rebasedCaptureNs < it } == true) {
-                observeDeliveredTimestampLocked(previousTimestamp ?: 0L)
+                val terminalTimestamp = previousTimestamp ?: 0L
+                observeDeliveredTimestampLocked(terminalTimestamp)
+                observeAttributionAdmissionLocked(
+                    index,
+                    terminalTimestamp,
+                    com.calisthenics.diagnostic.live.LiveFrameClassification.PREPROCESSING_FAILED,
+                    currentAdmission,
+                )
                 return@synchronized FrameWork(
                     runner = currentRunner,
                     index = index,
@@ -948,6 +965,12 @@ class LiveCameraComposition internal constructor(
             stageRecorder?.record(index, PipelineStage.YUV_OWNERSHIP, PipelineDisposition.RELEASED)
             val negotiated = negotiatedSourceResolution
             if (negotiated == null || frame.width != negotiated.width || frame.height != negotiated.height) {
+                observeAttributionAdmissionLocked(
+                    index,
+                    rebasedCaptureNs,
+                    com.calisthenics.diagnostic.live.LiveFrameClassification.PREPROCESSING_FAILED,
+                    currentAdmission,
+                )
                 return@synchronized FrameWork(
                     currentRunner,
                     index,
@@ -960,6 +983,12 @@ class LiveCameraComposition internal constructor(
             val geometry = SourceGeometry(frame.width, frame.height, frame.rotation, frame.mirrored)
             val previousGeometry = observedSourceGeometry
             if (previousGeometry != null && previousGeometry != geometry) {
+                observeAttributionAdmissionLocked(
+                    index,
+                    rebasedCaptureNs,
+                    com.calisthenics.diagnostic.live.LiveFrameClassification.PREPROCESSING_FAILED,
+                    currentAdmission,
+                )
                 return@synchronized FrameWork(
                     currentRunner,
                     index,
@@ -984,7 +1013,16 @@ class LiveCameraComposition internal constructor(
                     mirrored = geometry.mirrored,
                 ),
             )
-            when (val classification = currentAdmission.reserve(rebasedCaptureNs)) {
+            val productionPredicates = currentAdmission.predicates(rebasedCaptureNs)
+            val classification = currentAdmission.reserve(rebasedCaptureNs)
+            observeAttributionAdmissionLocked(
+                index,
+                rebasedCaptureNs,
+                classification,
+                currentAdmission,
+                productionPredicates,
+            )
+            when (classification) {
                 com.calisthenics.diagnostic.live.LiveFrameClassification.SUBMIT ->
                     ReservedFrame(currentRunner, index, rebasedCaptureNs, frame)
 
@@ -1135,6 +1173,12 @@ class LiveCameraComposition internal constructor(
             } else {
                 CallbackTerminalDisposition.SOURCE_LOSS
             }
+            observeAttributionAdmissionLocked(
+                index,
+                timestamp,
+                com.calisthenics.diagnostic.live.LiveFrameClassification.PREPROCESSING_FAILED,
+                currentAdmission,
+            )
             closeDeliveredCallbackLocked(index, disposition)
             callbacksForwardedToRunner += 1L
             FrameWork(
@@ -1163,10 +1207,28 @@ class LiveCameraComposition internal constructor(
         lastDeliveredTimestampNs = observedTimestamp
     }
 
+    private fun observeAttributionAdmissionLocked(
+        callbackId: Long,
+        captureTimestampNs: Long,
+        classification: com.calisthenics.diagnostic.live.LiveFrameClassification,
+        currentAdmission: LiveFrameAdmissionPort,
+        predicates: com.calisthenics.diagnostic.live.LiveAdmissionPredicates =
+            currentAdmission.predicates(captureTimestampNs),
+    ) {
+        dependencies.attributionV2Observer?.onAdmission(
+            callbackId = callbackId,
+            captureTimestampNs = captureTimestampNs,
+            observedSessionNs = relativeNowNs(),
+            productionClassification = classification,
+            productionPredicates = predicates,
+        )
+    }
+
     private fun closeDeliveredCallbackLocked(
         index: Long,
         disposition: CallbackTerminalDisposition,
     ) {
+        dependencies.attributionV2Observer?.onTerminal(index, disposition, relativeNowNs())
         deliveredCallbacks.close(index, disposition)
         val terminal = disposition.pipelineTerminalEvent()
         stageRecorder?.record(index, terminal.stage, terminal.disposition)

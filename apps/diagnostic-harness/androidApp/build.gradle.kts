@@ -180,6 +180,7 @@ dependencies {
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.camera2.pipe)
     implementation(libs.androidx.camera.core)
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.kotlinx.serialization.json)

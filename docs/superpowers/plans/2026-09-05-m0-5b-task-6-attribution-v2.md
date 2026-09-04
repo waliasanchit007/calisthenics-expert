@@ -402,7 +402,7 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
   `AttributionV2CallbackObserver`, captured Camera2 AE target FPS metadata, and an injectable
   admission factory whose default is unchanged.
 
-- [ ] **Step 1: Write RED admission-port tests**
+- [x] **Step 1: Write RED admission-port tests**
 
   Pin these interfaces:
 
@@ -421,7 +421,7 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
   Require `predicates` to be read-only: calling it repeatedly cannot change the next `reserve`
   result. Require the existing class to preserve backpressure-before-cadence ordering.
 
-- [ ] **Step 2: Run admission RED**
+- [x] **Step 2: Run admission RED**
 
   ```bash
   cd apps/diagnostic-harness
@@ -430,7 +430,7 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
 
   Expected: compilation failure for the absent interface and predicate snapshot.
 
-- [ ] **Step 3: Implement the port without changing default behavior**
+- [x] **Step 3: Implement the port without changing default behavior**
 
   Make `LiveFrameAdmission` implement the interface. `predicates` computes:
 
@@ -445,7 +445,7 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
   Preserve every existing `reserve`, commit, completion, and stop branch byte-for-byte except the
   interface annotations needed to compile.
 
-- [ ] **Step 4: Write RED composition-observer tests**
+- [x] **Step 4: Write RED composition-observer tests**
 
   Pin this optional interface:
 
@@ -473,7 +473,7 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
   inference completion may close out of callback order; stop/preprocessing/source-loss paths close;
   and an observer exception fails the session rather than changing admission silently.
 
-- [ ] **Step 5: Expose observed AE target FPS at the owned-frame boundary**
+- [x] **Step 5: Expose observed AE target FPS at the owned-frame boundary**
 
   Add the closed value type below and a nullable field to `OwnedYuvFrame` and `OwnedImage`:
 
@@ -490,7 +490,7 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
   when Camera2 supplies no value; never substitute the requested range. Tests require 30/30 to
   survive the owned copy, null to remain null, and a changed value to remain observable.
 
-- [ ] **Step 6: Run composition RED**
+- [x] **Step 6: Run composition RED**
 
   ```bash
   cd apps/diagnostic-harness
@@ -502,7 +502,7 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
 
   Expected: compilation failure for the absent dependencies and observer callbacks.
 
-- [ ] **Step 7: Wire the observer at the single admission boundary**
+- [x] **Step 7: Wire the observer at the single admission boundary**
 
   Snapshot production predicates immediately before `reserve`, record the returned production
   classification, and include `relativeNowNs()` as `observedSessionNs`. Emit the terminal only from
@@ -511,20 +511,20 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
   preprocessing plus MediaPipe. Do not create a second admission decision or let the observer mutate
   the production object.
 
-- [ ] **Step 8: Add the test-only backend admission policy**
+- [x] **Step 8: Add the test-only backend admission policy**
 
   Define `SingleFlightAttributionAdmission` in the Android test source set. It implements
   `LiveFrameAdmissionPort`, always reports `cadenceDue=true`, and preserves only stop, candidate,
   and one-in-flight semantics. Production construction cannot select it; only the v2 device gate's
   internal test factory may inject it.
 
-- [ ] **Step 9: Prove seam mutations**
+- [x] **Step 9: Prove seam mutations**
 
   Remove the default `::LiveFrameAdmission` and require the byte-identical default trace test to
   fail. Move the predicate snapshot after `reserve` and require the reserved-slot predicate test to
   fail. Omit an async terminal and require conservation/closure to fail. Restore each mutation.
 
-- [ ] **Step 10: Run GREEN gates and commit**
+- [x] **Step 10: Run GREEN gates and commit**
 
   ```bash
   cd apps/diagnostic-harness

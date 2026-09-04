@@ -8,7 +8,17 @@ enum class LiveFrameClassification {
     SUBMIT,
 }
 
-class LiveFrameAdmission(configuredFps: Int) {
+data class LiveAdmissionPredicates(val cadenceDue: Boolean, val slotAvailable: Boolean)
+
+interface LiveFrameAdmissionPort {
+    fun predicates(captureTimestampNs: Long): LiveAdmissionPredicates
+    fun reserve(captureTimestampNs: Long): LiveFrameClassification
+    fun commitCandidate(preprocessingSucceeded: Boolean): LiveFrameClassification
+    fun completeSubmission()
+    fun stop()
+}
+
+class LiveFrameAdmission(configuredFps: Int) : LiveFrameAdmissionPort {
     init {
         require(configuredFps == 10 || configuredFps == 15 || configuredFps == 30) {
             "configuredFps must be exactly 10, 15, or 30"
@@ -21,8 +31,17 @@ class LiveFrameAdmission(configuredFps: Int) {
     private var candidateTimestampNs: Long? = null
     private var stopping = false
 
+    override fun predicates(captureTimestampNs: Long): LiveAdmissionPredicates {
+        require(captureTimestampNs >= 0L) { "captureTimestampNs must be non-negative" }
+        val previous = lastSelectedTimestampNs
+        return LiveAdmissionPredicates(
+            cadenceDue = previous == null || captureTimestampNs - previous >= minimumIntervalNs,
+            slotAvailable = !stopping && !submissionInFlight && candidateTimestampNs == null,
+        )
+    }
+
     /** Cheaply reserves the sole prospective inference slot before preprocessing. */
-    fun reserve(captureTimestampNs: Long): LiveFrameClassification {
+    override fun reserve(captureTimestampNs: Long): LiveFrameClassification {
         require(captureTimestampNs >= 0L) { "captureTimestampNs must be non-negative" }
         if (stopping) return LiveFrameClassification.SESSION_STOPPING
         if (submissionInFlight || candidateTimestampNs != null) return LiveFrameClassification.BACKPRESSURE
@@ -36,7 +55,7 @@ class LiveFrameAdmission(configuredFps: Int) {
     }
 
     /** Commits a reserved candidate after preprocessing, or releases it with one terminal skip. */
-    fun commitCandidate(preprocessingSucceeded: Boolean): LiveFrameClassification {
+    override fun commitCandidate(preprocessingSucceeded: Boolean): LiveFrameClassification {
         val timestamp = checkNotNull(candidateTimestampNs) { "no candidate is reserved" }
         candidateTimestampNs = null
         if (stopping) return LiveFrameClassification.SESSION_STOPPING
@@ -51,12 +70,12 @@ class LiveFrameAdmission(configuredFps: Int) {
         return if (reservation == LiveFrameClassification.SUBMIT) commitCandidate(preprocessingSucceeded) else reservation
     }
 
-    fun completeSubmission() {
+    override fun completeSubmission() {
         check(submissionInFlight) { "no submission is in flight" }
         submissionInFlight = false
     }
 
-    fun stop() {
+    override fun stop() {
         stopping = true
     }
 }

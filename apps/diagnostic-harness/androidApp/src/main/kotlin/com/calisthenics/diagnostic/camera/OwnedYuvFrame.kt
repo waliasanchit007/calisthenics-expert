@@ -17,6 +17,12 @@ class OwnedYuvPlane(bytes: ByteArray, val rowStride: Int, val pixelStride: Int) 
         get() = storage.copyOf()
 }
 
+data class SourceFpsRange(val lower: Int, val upper: Int) {
+    init {
+        require(lower > 0 && upper >= lower)
+    }
+}
+
 class OwnedYuvFrame(
     yBytes: ByteArray,
     yRowStride: Int,
@@ -35,6 +41,7 @@ class OwnedYuvFrame(
     val colorStandard: YuvColorStandard,
     val colorRange: YuvColorRange,
     val timestampNs: Long,
+    val observedAeTargetFpsRange: SourceFpsRange? = null,
 ) {
     val y = OwnedYuvPlane(yBytes, yRowStride, yPixelStride)
     val u = OwnedYuvPlane(uBytes, uRowStride, uPixelStride)
@@ -72,6 +79,7 @@ internal interface OwnedImage {
     val colorStandard: YuvColorStandard
     val colorRange: YuvColorRange
     val timestampNs: Long
+    val observedAeTargetFpsRange: SourceFpsRange?
     fun close()
 }
 
@@ -96,6 +104,7 @@ internal fun captureOwnedYuvFrame(source: OwnedImage, onFrame: (OwnedYuvFrame) -
             colorStandard = source.colorStandard,
             colorRange = source.colorRange,
             timestampNs = source.timestampNs,
+            observedAeTargetFpsRange = source.observedAeTargetFpsRange,
         )
     } finally {
         source.close()

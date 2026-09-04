@@ -117,6 +117,7 @@ class CameraXFrameSourceOwnershipTest {
         override val colorStandard = YuvColorStandard.BT601
         override val colorRange = YuvColorRange.FULL
         override val timestampNs = 0L
+        override val observedAeTargetFpsRange: SourceFpsRange? = null
         var closeCount = 0
 
         override fun close() {

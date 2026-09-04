@@ -39,6 +39,21 @@ class LiveFrameAdmissionTest {
     }
 
     @Test
+    fun predicateSnapshotIsReadOnlyAndPreservesBackpressureBeforeCadence() {
+        val admission: LiveFrameAdmissionPort = LiveFrameAdmission(30)
+
+        assertEquals(LiveAdmissionPredicates(cadenceDue = true, slotAvailable = true), admission.predicates(0L))
+        assertEquals(LiveAdmissionPredicates(cadenceDue = true, slotAvailable = true), admission.predicates(0L))
+        assertEquals(LiveFrameClassification.SUBMIT, admission.reserve(0L))
+        assertEquals(LiveFrameClassification.SUBMIT, admission.commitCandidate(preprocessingSucceeded = true))
+        assertEquals(
+            LiveAdmissionPredicates(cadenceDue = false, slotAvailable = false),
+            admission.predicates(1L),
+        )
+        assertEquals(LiveFrameClassification.BACKPRESSURE, admission.reserve(1L))
+    }
+
+    @Test
     fun preprocessingFailureIsClassifiedAfterCadenceAndSlotAdmission() {
         val admission = LiveFrameAdmission(30)
 

@@ -2,6 +2,10 @@ package com.calisthenics.diagnostic.composition
 
 import com.calisthenics.diagnostic.liveCaptureFailureCodeOr
 import com.calisthenics.diagnostic.toLivePhase
+import com.calisthenics.diagnostic.live.LiveAdmissionPredicates
+import com.calisthenics.diagnostic.live.LiveFrameAdmission
+import com.calisthenics.diagnostic.live.LiveFrameAdmissionPort
+import com.calisthenics.diagnostic.live.LiveFrameClassification
 import com.calisthenics.diagnostic.camera.OwnedYuvFrame
 import com.calisthenics.diagnostic.camera.CameraXFrameSource
 import com.calisthenics.diagnostic.contract.Landmark
@@ -58,6 +62,105 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.system.measureTimeMillis
 
 class LiveCameraCompositionTest {
+
+    @Test
+    fun attributionV2ObservesPredicatesBeforeProductionReservationAndOneTerminal() {
+        val observer = RecordingAttributionV2Observer()
+        withHarness(Harness(attributionV2Observer = observer)) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(30))
+
+            harness.source.emit(frame(timestampNs = 1_000_002_000L))
+
+            assertEquals(1, observer.admissions.size)
+            assertEquals(LiveAdmissionPredicates(cadenceDue = true, slotAvailable = true), observer.admissions.single().predicates)
+            assertEquals(LiveFrameClassification.SUBMIT, observer.admissions.single().classification)
+            assertTrue(observer.terminals.isEmpty())
+
+            harness.inference.completeSuccess()
+
+            assertEquals(listOf(0L), observer.terminals.map { it.callbackId })
+            assertEquals(CallbackTerminalDisposition.INFERENCE_COMPLETED, observer.terminals.single().terminal)
+            assertEquals(listOf("admission:0", "terminal:0"), observer.order)
+        }
+    }
+
+    @Test
+    fun attributionV2ReservedSlotPredicateRemainsObservableBeforeBackpressureDecision() {
+        val observer = RecordingAttributionV2Observer()
+        withHarness(Harness(attributionV2Observer = observer)) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(30))
+            harness.source.emit(frame(timestampNs = 1_000_002_000L))
+            harness.source.emit(frame(timestampNs = 1_100_002_000L))
+
+            assertEquals(
+                LiveAdmissionPredicates(cadenceDue = true, slotAvailable = false),
+                observer.admissions[1].predicates,
+            )
+            assertEquals(LiveFrameClassification.BACKPRESSURE, observer.admissions[1].classification)
+            assertEquals(CallbackTerminalDisposition.BACKPRESSURE, observer.terminals.single().terminal)
+        }
+    }
+
+    @Test
+    fun attributionV2BackendPolicyDisablesOnlyCadenceAndPreservesSingleFlight() {
+        val observer = RecordingAttributionV2Observer()
+        withHarness(
+            Harness(
+                attributionV2Observer = observer,
+                frameAdmissionFactory = { SingleFlightAttributionAdmission() },
+            ),
+        ) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(10))
+            harness.source.emit(frame(timestampNs = 1_000_002_000L))
+            harness.source.emit(frame(timestampNs = 1_000_003_000L))
+
+            assertEquals(LiveFrameClassification.SUBMIT, observer.admissions[0].classification)
+            assertEquals(LiveAdmissionPredicates(true, false), observer.admissions[1].predicates)
+            assertEquals(LiveFrameClassification.BACKPRESSURE, observer.admissions[1].classification)
+        }
+    }
+
+    @Test
+    fun attributionV2SourceLossStillHasOneAdmissionAndOneTerminalClosure() {
+        val observer = RecordingAttributionV2Observer()
+        withHarness(Harness(attributionV2Observer = observer)) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(30))
+
+            harness.source.rejectDeliveredFrame()
+
+            assertEquals(listOf(0L), observer.admissions.map { it.callbackId })
+            assertEquals(LiveFrameClassification.PREPROCESSING_FAILED, observer.admissions.single().classification)
+            assertEquals(listOf(0L), observer.terminals.map { it.callbackId })
+            assertEquals(CallbackTerminalDisposition.SOURCE_LOSS, observer.terminals.single().terminal)
+        }
+    }
+
+    @Test
+    fun attributionV2ObserverFailureFailsTheSessionInsteadOfChangingAdmissionSilently() {
+        val observer = object : AttributionV2CallbackObserver {
+            override fun onAdmission(
+                callbackId: Long,
+                captureTimestampNs: Long,
+                observedSessionNs: Long,
+                productionClassification: LiveFrameClassification,
+                productionPredicates: LiveAdmissionPredicates,
+            ) = error("observer failed")
+
+            override fun onTerminal(
+                callbackId: Long,
+                terminal: CallbackTerminalDisposition,
+                completedNs: Long,
+            ) = Unit
+        }
+        withHarness(Harness(attributionV2Observer = observer)) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(30))
+
+            harness.source.emit(frame(timestampNs = 1_000_002_000L))
+
+            assertNotNull(harness.composition.internalFailure)
+            assertTrue(harness.source.stopped)
+        }
+    }
 
     @Test
     fun startAdmissionReceivesTheFinalizerWriterAndOwnsTheOnlySourceStart() {
@@ -1794,6 +1897,8 @@ class LiveCameraCompositionTest {
         releaseDurableStageAppend: CountDownLatch = CountDownLatch(0),
         val recordingVideoWriter: RecordingVideoWriter? = null,
         observeFinalizedVideo: Boolean = false,
+        frameAdmissionFactory: (Int) -> LiveFrameAdmissionPort = DEFAULT_LIVE_FRAME_ADMISSION_FACTORY,
+        attributionV2Observer: AttributionV2CallbackObserver? = null,
     ) {
         val events = mutableListOf<String>()
         val inference = FakeInference(events)
@@ -1955,6 +2060,8 @@ class LiveCameraCompositionTest {
                 wallClockUtc = wallClockUtc,
                 registerRunner = { registrationResult },
                 startAdmission = startAdmission,
+                frameAdmissionFactory = frameAdmissionFactory,
+                attributionV2Observer = attributionV2Observer,
             ),
         )
 
@@ -1978,6 +2085,36 @@ class LiveCameraCompositionTest {
                 composition.stop()
             }
             started = false
+        }
+    }
+
+    private class RecordingAttributionV2Observer : AttributionV2CallbackObserver {
+        data class Admission(
+            val callbackId: Long,
+            val classification: LiveFrameClassification,
+            val predicates: LiveAdmissionPredicates,
+        )
+
+        data class Terminal(val callbackId: Long, val terminal: CallbackTerminalDisposition)
+
+        val admissions = mutableListOf<Admission>()
+        val terminals = mutableListOf<Terminal>()
+        val order = mutableListOf<String>()
+
+        override fun onAdmission(
+            callbackId: Long,
+            captureTimestampNs: Long,
+            observedSessionNs: Long,
+            productionClassification: LiveFrameClassification,
+            productionPredicates: LiveAdmissionPredicates,
+        ) {
+            admissions += Admission(callbackId, productionClassification, productionPredicates)
+            order += "admission:$callbackId"
+        }
+
+        override fun onTerminal(callbackId: Long, terminal: CallbackTerminalDisposition, completedNs: Long) {
+            terminals += Terminal(callbackId, terminal)
+            order += "terminal:$callbackId"
         }
     }
 

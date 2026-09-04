@@ -28,6 +28,7 @@ class OwnedYuvFrameTest {
             colorStandard = YuvColorStandard.BT601,
             colorRange = YuvColorRange.FULL,
             timestampNs = 123_456_789L,
+            observedAeTargetFpsRange = SourceFpsRange(30, 30),
         )
 
         var callbackSawClosed = false
@@ -52,6 +53,7 @@ class OwnedYuvFrameTest {
         assertEquals(YuvColorStandard.BT601, frame.colorStandard)
         assertEquals(YuvColorRange.FULL, frame.colorRange)
         assertEquals(123_456_789L, frame.timestampNs)
+        assertEquals(SourceFpsRange(30, 30), frame.observedAeTargetFpsRange)
         assertTrue(source.closed)
         assertTrue(callbackSawClosed)
     }
@@ -76,7 +78,21 @@ class OwnedYuvFrameTest {
         assertEquals(1, source.closeCount)
     }
 
-    private fun validImage() = FakeImage(
+    @Test
+    fun absentObservedAeRangeRemainsAbsentRatherThanUsingTheRequestedRange() {
+        val frame = captureOwnedYuvFrame(validImage()) {}
+
+        assertEquals(null, frame.observedAeTargetFpsRange)
+    }
+
+    @Test
+    fun changedObservedAeRangeRemainsObservable() {
+        val frame = captureOwnedYuvFrame(validImage(SourceFpsRange(24, 30))) {}
+
+        assertEquals(SourceFpsRange(24, 30), frame.observedAeTargetFpsRange)
+    }
+
+    private fun validImage(observedAeTargetFpsRange: SourceFpsRange? = null) = FakeImage(
         planes = listOf(
             FakePlane(byteArrayOf(1), rowStride = 1, pixelStride = 1),
             FakePlane(byteArrayOf(2), rowStride = 1, pixelStride = 1),
@@ -90,6 +106,7 @@ class OwnedYuvFrameTest {
         colorStandard = YuvColorStandard.BT601,
         colorRange = YuvColorRange.FULL,
         timestampNs = 0L,
+        observedAeTargetFpsRange = observedAeTargetFpsRange,
     )
 
     private class FakeImage(
@@ -102,6 +119,7 @@ class OwnedYuvFrameTest {
         override val colorStandard: YuvColorStandard,
         override val colorRange: YuvColorRange,
         override val timestampNs: Long,
+        override val observedAeTargetFpsRange: SourceFpsRange? = null,
     ) : OwnedImage {
         var closed = false
         var closeCount = 0

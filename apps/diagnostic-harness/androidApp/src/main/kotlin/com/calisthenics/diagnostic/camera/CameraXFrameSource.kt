@@ -7,10 +7,12 @@ import android.util.Range
 import android.util.Size
 import androidx.annotation.OptIn
 import androidx.camera.camera2.interop.Camera2CameraInfo
+import androidx.camera.camera2.adapter.CaptureResultAdapter
 import androidx.camera.camera2.interop.Camera2Interop
 import androidx.camera.core.ExperimentalGetImage
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
+import androidx.camera.core.impl.CameraCaptureResults
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
@@ -23,6 +25,7 @@ import com.calisthenics.diagnostic.probe.AndroidCameraLifecycleDispatcher
 import java.util.concurrent.Executors
 import java.util.concurrent.Executor
 import android.hardware.camera2.CaptureRequest
+import android.hardware.camera2.CaptureResult
 
 class CameraXFrameSource(
     private val context: android.content.Context,
@@ -374,6 +377,11 @@ private class CameraXOwnedImage(
         else -> error("unsupported DataSpace colour range")
     }
     override val timestampNs = proxy.imageInfo.timestamp
+    override val observedAeTargetFpsRange = (CameraCaptureResults
+        .retrieveCameraCaptureResult(proxy.imageInfo) as? CaptureResultAdapter)
+        ?.captureResult
+        ?.get(CaptureResult.CONTROL_AE_TARGET_FPS_RANGE)
+        ?.let { range -> SourceFpsRange(range.lower, range.upper) }
 
     override fun close() {
         proxy.close()
