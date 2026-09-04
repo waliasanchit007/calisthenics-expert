@@ -364,11 +364,18 @@ def test_s25_live_capture_ledger_reports_pending_or_verifies_recorded_content() 
         assert verified["live_admission"] == "admitted"
 
 
-def test_s25_m05b_attribution_ledger_reports_pending_or_verifies_recorded_content() -> None:
+def test_s25_m05b_attribution_ledger_reports_pending_or_verifies_a_physical_verdict() -> None:
     import check_m05b_attribution
 
     verified = check_m05b_attribution.verify_recorded_ledger(ROOT, M05B_ATTRIBUTION_LEDGER)
-    assert verified["status"] == "pending" or verified["satisfies_s25_attribution_gate"] is True
+    if verified.get("status") == "pending":
+        assert verified["missing_precondition"]
+        return
+
+    assert verified["physical_evidence_status"] in {"recorded", "blocked"}
+    assert verified["satisfies_s25_attribution_gate"] is (
+        verified["physical_evidence_status"] == "recorded"
+    )
 
 
 def test_s25_m05b_physical_purge_ledger_is_pending_or_reopens_recorded_evidence() -> None:

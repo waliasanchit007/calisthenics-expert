@@ -1,12 +1,27 @@
 {
+  "android_release": "16",
+  "api_level": 36,
+  "app_git_sha": "b03bb71dd91914940b08bdd141c580bd1db6a83f",
+  "apk_sha256": "0a60447a0dbe106de246d66b4d9d2a6c377678b434cbb67ee63494936eeb347a",
+  "backend_version": "1.0.0",
+  "blocking_codes": [
+    "TELEMETRY.CADENCE_ADMISSION_NOT_DISTINCT"
+  ],
+  "delegate": "cpu",
+  "device_identity": "samsung/SM-S938B/pa3q/pa3qxins",
+  "evidence_file": "docs/evidence/m05b-attribution/s25-ultra-SM-S938B-api36-short-attribution-blocked.json",
+  "evidence_sha256": "a5c9fb4b31d7b75ef24305f7df3c7eeaf3adf11fbd2e83c6876f957c73d1ebdb",
   "ledger_schema_version": "1.0.0",
-  "status": "pending",
-  "scope": "M0.5B bounded non-participant short attribution at 10/15/30 inference FPS on one authorized Samsung Galaxy S25 Ultra",
-  "missing_precondition": "exact final candidate and authorized physical Samsung Galaxy S25 Ultra over Wi-Fi ADB are required; no physical attribution run has been recorded",
-  "device_status": "absent",
+  "model_sha256": "5134a3aad27a58b93da0088d431f366da362b44e3ccfbe3462b3827a839011b1",
   "non_claims": [
-    "no physical attribution observation has been recorded",
+    "the short cadence attribution gate was not admitted",
     "no sustained M0.5B envelope run has been admitted",
     "no participant capture or reliability claim is authorized"
-  ]
+  ],
+  "probe_git_sha": "b03bb71dd91914940b08bdd141c580bd1db6a83f",
+  "record_kind": "s25_short_cadence_attribution_observation",
+  "recorded_on_utc_date": "2026-09-04",
+  "runtime_version": "16",
+  "scope": "M0.5B bounded non-participant short attribution at 10/15/30 inference FPS on one authorized Samsung Galaxy S25 Ultra",
+  "status": "blocked"
 }

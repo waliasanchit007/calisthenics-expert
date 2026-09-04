@@ -53,9 +53,14 @@ def test_attribution_producer_is_bounded_fresh_and_reference_only() -> None:
     assert source.count("CADENCES") >= 2
 
 
-def test_pending_attribution_ledger_is_explicit_and_recorded_verifier_opens_evidence() -> None:
+def test_attribution_ledger_is_pending_or_reopens_a_derived_physical_verdict() -> None:
     ledger = ROOT / "docs/evidence/m05b-attribution/s25-short-attribution-ledger.json"
-    assert (
-        check_m05b_attribution.verify_recorded_ledger(ROOT, str(ledger.relative_to(ROOT)))["status"]
-        == "pending"
+    verified = check_m05b_attribution.verify_recorded_ledger(ROOT, str(ledger.relative_to(ROOT)))
+    if verified.get("status") == "pending":
+        assert verified["missing_precondition"]
+        return
+
+    assert verified["physical_evidence_status"] in {"recorded", "blocked"}
+    assert verified["satisfies_s25_attribution_gate"] is (
+        verified["physical_evidence_status"] == "recorded"
     )

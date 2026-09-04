@@ -282,7 +282,7 @@ def check_attribution(
 
 
 def verify_recorded_ledger(root: Path, ledger_relative: str) -> dict[str, Any]:
-    """Open and validate a committed pending/recorded attribution ledger.
+    """Open and validate a committed pending/recorded/blocked attribution ledger.
 
     A recorded ledger is never trusted merely because it names an evidence file: the referenced
     bytes, sanitized result, device authorization, cadence order, and derived rate verdict are all
@@ -295,6 +295,7 @@ def verify_recorded_ledger(root: Path, ledger_relative: str) -> dict[str, Any]:
     if not isinstance(ledger, Mapping) or ledger.get("status") not in {
         "pending",
         "recorded",
+        "blocked",
     }:
         raise AttributionCheckError("attribution ledger has an invalid status")
     if ledger["status"] == "pending":

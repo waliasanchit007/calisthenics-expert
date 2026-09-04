@@ -480,6 +480,39 @@ def test_recorded_ledger_reopens_evidence_and_recomputes_verdict(tmp_path: Path)
         check_m05b_attribution.verify_recorded_ledger(tmp_path, "ledger.json")
 
 
+def test_blocked_ledger_reopens_evidence_and_recomputes_blocking_verdict(
+    tmp_path: Path,
+) -> None:
+    record, _ = make_fixture_tree(tmp_path / "exports")
+    evidence = check_attribution(
+        transcript(record),
+        tmp_path / "exports",
+        subprocess_exit_code=0,
+        prepared_identity=IDENTITY,
+    )
+    evidence["runs"][2]["admitted_callbacks"] = 2
+    evidence["blocking_codes"] = ["TELEMETRY.CADENCE_ADMISSION_NOT_DISTINCT"]
+    evidence["physical_evidence_status"] = "blocked"
+    evidence["satisfies_s25_attribution_gate"] = False
+    evidence_path = tmp_path / "blocked-evidence.json"
+    evidence_path.write_text(json.dumps(evidence, sort_keys=True) + "\n", encoding="utf-8")
+    ledger = {
+        "status": "blocked",
+        "evidence_file": "blocked-evidence.json",
+        "evidence_sha256": sha(evidence_path),
+        "device_identity": S25["device_identity"],
+        "api_level": S25["api_level"],
+        "android_release": S25["android_release"],
+        **IDENTITY,
+    }
+    (tmp_path / "ledger.json").write_text(json.dumps(ledger), encoding="utf-8")
+
+    verified = check_m05b_attribution.verify_recorded_ledger(tmp_path, "ledger.json")
+
+    assert verified["physical_evidence_status"] == "blocked"
+    assert verified["satisfies_s25_attribution_gate"] is False
+
+
 def transcript(record: dict) -> str:
     return "\n".join(
         [
