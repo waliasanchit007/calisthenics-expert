@@ -1,8 +1,7 @@
 # M0.5B Task 6 Attribution Protocol v2 Design
 
-**Status:** Draft for written review. The design direction was approved on 2026-09-05 after an
-independent `claude-work` review using Claude Opus 5; implementation remains unapproved until this
-written specification is accepted.
+**Status:** Accepted on 2026-09-05. The design direction was independently reviewed through
+`claude-work` using Claude Opus 5, corrected through self-review, and accepted by the release owner.
 
 **Parent design:**
 `docs/superpowers/specs/2026-08-24-m0-5b-instrument-prerequisites-design.md`
@@ -110,6 +109,7 @@ Before any v2 physical run, commit a canonical protocol record containing:
 - backend completion minimum `100`;
 - warm-up minimum `20` completed inferences and minimum elapsed time `2_000_000_000 ns`;
 - per-arm maximum elapsed time `60_000_000_000 ns`;
+- cooldown maximum elapsed time `600_000_000_000 ns` and sampling interval `1_000_000_000 ns`;
 - replicate orders `[10, 15, 30]` and `[30, 15, 10]`;
 - one monotonic clock and timestamp field used for every interval/rate calculation;
 - terminal accounting vocabulary and exact verdict predicates;
@@ -148,9 +148,11 @@ Each arm records Android thermal status, battery temperature/level, power source
 screen/keep-awake state, negotiated CameraX FPS range, delivered image dimensions/format, and the
 arm's boundary timestamps.
 
-The first arm establishes the boundary thermal-status class. Before every later measured arm, the
-device must return to that same class. If it does not return within the existing bounded cooldown
-period, v2 records a thermal-state blocker and stops. No temperature threshold is invented here.
+The first arm establishes the exact Android boundary thermal-status value. Before every later
+measured arm, the device must return to that same value. Cooldown samples once per
+`1_000_000_000 ns` for at most `600_000_000_000 ns`, reusing the released M0.5B schedule. If the
+status does not return within that period, v2 records a thermal-state blocker and stops. No battery-
+temperature threshold is invented here.
 
 No rebuild, reinstall, package clear, model replacement, configuration change, or evidence-file
 edit may occur between the first physical arm and the final verdict.
