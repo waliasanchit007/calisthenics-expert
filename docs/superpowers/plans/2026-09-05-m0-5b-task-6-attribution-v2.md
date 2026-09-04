@@ -68,6 +68,7 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
 - Create: `docs/protocols/m05b-attribution-v2.protocol.json`
 - Create: `docs/evidence/m05b-attribution-v2/s25-attribution-v2-ledger.json`
 - Modify: `reference/src/observation_contracts/schema_loader.py`
+- Create: `reference/src/observation_contracts/m05b_attribution_v2_codes.py`
 - Modify: `reference/src/observation_contracts/validator_codes.py`
 - Create: `reference/tests/test_m05b_attribution_v2_contract.py`
 - Modify: `reference/tests/test_validator_code_emission.py`
@@ -78,7 +79,7 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
   `load_m05b_attribution_observation_v2_schema()`; canonical protocol bytes; the finalized v2 code
   vocabulary classified as draft until Task 5 supplies behavioral oracles; a pending v2 ledger.
 
-- [ ] **Step 1: Write RED schema-loader and canonical-protocol tests**
+- [x] **Step 1: Write RED schema-loader and canonical-protocol tests**
 
   Add tests that import both new loaders, run `Draft202012Validator.check_schema`, validate the
   canonical protocol, and pin these exact values:
@@ -101,7 +102,7 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
   Require `terminal_classes` to equal the closed set from the design, including
   `admission_state_divergence`, and require the canonical compact UTF-8 bytes to end with LF.
 
-- [ ] **Step 2: Run the focused test and capture RED**
+- [x] **Step 2: Run the focused test and capture RED**
 
   Run:
 
@@ -111,7 +112,7 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
 
   Expected: import failure for the absent loader functions and absent schema/protocol files.
 
-- [ ] **Step 3: Add the two closed schemas and loader functions**
+- [x] **Step 3: Add the two closed schemas and loader functions**
 
   Add exact path/load functions following the existing tooling pattern:
 
@@ -128,7 +129,7 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
   enums, non-negative integer nanoseconds, lowercase SHA-256 patterns, reserved synthetic UUIDs,
   relative paths, and `const` for protocol/evidence versions and non-participant/sanitized flags.
 
-- [ ] **Step 4: Commit the canonical protocol and pending ledger**
+- [x] **Step 4: Commit the canonical protocol and pending ledger**
 
   Canonicalize with `json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"`. Construct
   the pending ledger from the computed protocol bytes:
@@ -149,7 +150,7 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
 
   Serialize the ledger canonically with LF termination and commit its actual digest value.
 
-- [ ] **Step 5: Classify the finalized v2 blocker-code vocabulary as draft**
+- [x] **Step 5: Classify the finalized v2 blocker-code vocabulary as draft**
 
   Add the complete set below to `DRAFT_EMITTED_CODES`. It remains absent from the released registry
   until Task 5 adds every behavioral oracle and promotes the complete set atomically:
@@ -178,13 +179,13 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
   Extend the source-emission classification test so every new literal must appear in this draft set.
   Do not add a subset to the registry.
 
-- [ ] **Step 6: Mutation-check the closed protocol**
+- [x] **Step 6: Mutation-check the closed protocol**
 
   Change `measured_completions` from 100 to 99 and require
   `test_canonical_protocol_pins_all_preregistered_values` to fail. Restore byte-exactly. Add an
   unknown terminal class and require schema validation to fail.
 
-- [ ] **Step 7: Run focused GREEN checks**
+- [x] **Step 7: Run focused GREEN checks**
 
   Run:
 
@@ -196,7 +197,7 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
   .venv/bin/python -m mypy --config-file reference/pyproject.toml reference/src
   ```
 
-- [ ] **Step 8: Commit the contract increment**
+- [x] **Step 8: Commit the contract increment**
 
   ```bash
   git add contracts reference docs/protocols docs/evidence/m05b-attribution-v2

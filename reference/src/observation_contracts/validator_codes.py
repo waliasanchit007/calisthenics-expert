@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from observation_contracts.m05b_attribution_v2_codes import ATTRIBUTION_V2_DRAFT_CODES
+
 STABLE_EMITTED_CODES = frozenset(
     {
         "ADMISSION.CONJUNCT_SET",
@@ -154,8 +156,9 @@ STABLE_EMITTED_CODES = frozenset(
     }
 )
 
-# There is no guarded validator draft after the Task 8 stabilization release.
-DRAFT_EMITTED_CODES: frozenset[str] = frozenset()
+# Task 6 attribution-v2 codes remain draft until their complete behavioral oracle and host
+# admission surface land together. A partial registry release is prohibited.
+DRAFT_EMITTED_CODES = ATTRIBUTION_V2_DRAFT_CODES
 
 # These strings are released admission-conjunct identifiers, not validator error codes. They are
 # classified here because their dotted form is intentionally indistinguishable to a lexical audit.

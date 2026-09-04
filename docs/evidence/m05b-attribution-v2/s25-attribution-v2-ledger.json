@@ -1,0 +1,1 @@
+{"evidence_file":null,"evidence_sha256":null,"ledger_schema_version":"2.0.0","missing_precondition":"attribution_v2_physical_evidence_not_recorded","protocol_file":"docs/protocols/m05b-attribution-v2.protocol.json","protocol_sha256":"b2cd9efec89186806b0195db1dcbfa130450973ebbb25a256696c736eaf96707","record_kind":"s25_attribution_v2_ledger","status":"pending"}

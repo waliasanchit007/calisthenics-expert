@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://calisthenics-expert.local/contracts/tooling/m05b_attribution_observation.v2.schema.json",
+  "title": "M0.5B attribution v2 device observation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["evidence_schema_version", "record_kind", "protocol_sha256", "sanitized", "non_participant_observation", "device", "identity", "source_arm", "backend_arm", "selector_arm", "end_to_end_replicates", "blocking_codes"],
+  "properties": {
+    "evidence_schema_version": {"const": "2.0.0"},
+    "record_kind": {"const": "m05b_attribution_v2_device_observation"},
+    "protocol_sha256": {"$ref": "#/$defs/sha256"},
+    "sanitized": {"const": true},
+    "non_participant_observation": {"const": true},
+    "device": {"$ref": "#/$defs/device"},
+    "identity": {"$ref": "#/$defs/identity"},
+    "source_arm": {"$ref": "#/$defs/arm"},
+    "backend_arm": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/arm"}]},
+    "selector_arm": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/selector_arm"}]},
+    "end_to_end_replicates": {"type": "array", "maxItems": 2, "items": {"$ref": "#/$defs/replicate"}},
+    "blocking_codes": {"$ref": "#/$defs/blocking_codes"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "git_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "blocking_codes": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^ATTRIBUTION\\.[A-Z0-9_]+$"}},
+    "device": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["device_class", "device_identity", "manufacturer", "model", "api_level", "android_release", "os_build"],
+      "properties": {
+        "device_class": {"const": "physical_device"},
+        "device_identity": {"type": "string", "minLength": 1},
+        "manufacturer": {"type": "string", "minLength": 1},
+        "model": {"type": "string", "minLength": 1},
+        "api_level": {"type": "integer", "minimum": 1},
+        "android_release": {"type": "string", "minLength": 1},
+        "os_build": {"type": "string", "minLength": 1}
+      }
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["app_git_sha", "probe_git_sha", "app_apk_sha256", "test_apk_sha256", "model_sha256", "runtime_version", "backend_version", "delegate"],
+      "properties": {
+        "app_git_sha": {"$ref": "#/$defs/git_sha"},
+        "probe_git_sha": {"$ref": "#/$defs/git_sha"},
+        "app_apk_sha256": {"$ref": "#/$defs/sha256"},
+        "test_apk_sha256": {"$ref": "#/$defs/sha256"},
+        "model_sha256": {"$ref": "#/$defs/sha256"},
+        "runtime_version": {"type": "string", "minLength": 1},
+        "backend_version": {"type": "string", "minLength": 1},
+        "delegate": {"type": "string", "minLength": 1}
+      }
+    },
+    "arm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "blocking_codes"],
+      "properties": {
+        "status": {"enum": ["recorded", "blocked"]},
+        "blocking_codes": {"$ref": "#/$defs/blocking_codes"},
+        "warmup_count": {"type": "integer", "minimum": 0},
+        "measured_count": {"type": "integer", "minimum": 0},
+        "timestamps_ns": {"type": "array", "maxItems": 300, "items": {"type": "integer", "minimum": 0}},
+        "service_durations_ns": {"type": "array", "maxItems": 100, "items": {"type": "integer", "minimum": 0}},
+        "observed_ae_target_fps": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/fps_range"}]},
+        "thermal_status": {"type": "integer", "minimum": 0}
+      }
+    },
+    "fps_range": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lower", "upper"],
+      "properties": {"lower": {"type": "integer", "minimum": 1}, "upper": {"type": "integer", "minimum": 1}}
+    },
+    "selector_arm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "authoritative", "blocking_codes", "runs"],
+      "properties": {
+        "status": {"enum": ["recorded", "blocked"]},
+        "authoritative": {"const": false},
+        "blocking_codes": {"$ref": "#/$defs/blocking_codes"},
+        "runs": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"$ref": "#/$defs/selector_run"}}
+      }
+    },
+    "selector_run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cadence_fps", "selected_timestamps_ns"],
+      "properties": {
+        "cadence_fps": {"enum": [10, 15, 30]},
+        "selected_timestamps_ns": {"type": "array", "maxItems": 300, "items": {"type": "integer", "minimum": 0}}
+      }
+    },
+    "replicate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["order", "status", "blocking_codes"],
+      "properties": {
+        "order": {"enum": [[10, 15, 30], [30, 15, 10]]},
+        "status": {"enum": ["recorded", "blocked"]},
+        "blocking_codes": {"$ref": "#/$defs/blocking_codes"}
+      }
+    }
+  }
+}

@@ -118,6 +118,18 @@ def m05b_sustained_run_schema_path() -> Path:
     return repository_root() / "contracts" / "tooling" / "m05b_sustained_run.v1.schema.json"
 
 
+def m05b_attribution_protocol_v2_schema_path() -> Path:
+    """Return the M0.5B attribution-v2 protocol tooling schema."""
+    return repository_root() / "contracts" / "tooling" / "m05b_attribution_protocol.v2.schema.json"
+
+
+def m05b_attribution_observation_v2_schema_path() -> Path:
+    """Return the M0.5B attribution-v2 device-observation tooling schema."""
+    return (
+        repository_root() / "contracts" / "tooling" / "m05b_attribution_observation.v2.schema.json"
+    )
+
+
 @cache
 def load_schema(kind: ArtifactKind, major: int = SUPPORTED_MAJOR) -> Mapping[str, object]:
     """Return the parsed Draft 2020-12 schema for one artifact kind and major version."""
@@ -198,6 +210,18 @@ def load_m05b_attempt_entry_schema() -> Mapping[str, object]:
 def load_m05b_sustained_run_schema() -> Mapping[str, object]:
     """Return the parsed released M0.5B sustained-run schema."""
     return _load_tooling_schema(m05b_sustained_run_schema_path())
+
+
+@cache
+def load_m05b_attribution_protocol_v2_schema() -> Mapping[str, object]:
+    """Return the parsed M0.5B attribution-v2 protocol schema."""
+    return _load_tooling_schema(m05b_attribution_protocol_v2_schema_path())
+
+
+@cache
+def load_m05b_attribution_observation_v2_schema() -> Mapping[str, object]:
+    """Return the parsed M0.5B attribution-v2 device-observation schema."""
+    return _load_tooling_schema(m05b_attribution_observation_v2_schema_path())
 
 
 @cache

@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://calisthenics-expert.local/contracts/tooling/m05b_attribution_protocol.v2.schema.json",
+  "title": "M0.5B attribution protocol v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol_version", "record_kind", "target_cadences_fps", "source", "backend", "arm_cap_ns", "cooldown", "replicate_orders", "terminal_classes", "clock"],
+  "properties": {
+    "protocol_version": {"const": "2.0.0"},
+    "record_kind": {"const": "m05b_attribution_v2_protocol"},
+    "target_cadences_fps": {"const": [10, 15, 30]},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["warmup_callbacks", "measured_callbacks"],
+      "properties": {
+        "warmup_callbacks": {"const": 30},
+        "measured_callbacks": {"const": 300}
+      }
+    },
+    "backend": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["warmup_completed", "warmup_elapsed_ns", "measured_completions"],
+      "properties": {
+        "warmup_completed": {"const": 20},
+        "warmup_elapsed_ns": {"const": 2000000000},
+        "measured_completions": {"const": 100}
+      }
+    },
+    "arm_cap_ns": {"const": 60000000000},
+    "cooldown": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sampling_interval_ns", "maximum_duration_ns"],
+      "properties": {
+        "sampling_interval_ns": {"const": 1000000000},
+        "maximum_duration_ns": {"const": 600000000000}
+      }
+    },
+    "replicate_orders": {"const": [[10, 15, 30], [30, 15, 10]]},
+    "terminal_classes": {
+      "const": ["admitted_completed", "admitted_inference_failed", "cadence_only", "backpressure_only", "cadence_and_backpressure", "preprocessing_failed", "session_stopping", "admission_state_divergence"]
+    },
+    "clock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["domain", "unit"],
+      "properties": {
+        "domain": {"const": "session_relative_monotonic"},
+        "unit": {"const": "nanoseconds"}
+      }
+    }
+  }
+}
