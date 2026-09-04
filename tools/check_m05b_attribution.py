@@ -595,18 +595,27 @@ def _derive_telemetry(data: bytes, session_id: str) -> dict[str, Any]:
             raise AttributionCheckError(
                 f"telemetry line {line_number} is invalid for {session_id}: {error}"
             ) from error
-        if (
-            not isinstance(record, dict)
-            or record.get("record_type") != "pipeline_stage_event"
-        ):
+        if not isinstance(record, dict):
             raise AttributionCheckError(
-                f"telemetry line {line_number} is not a pipeline stage event"
+                f"telemetry line {line_number} must be an object"
             )
-        if record.get("schema_version") != "1.0.0":
+        record_type = record.get("record_type")
+        if record_type == "pipeline_stage_event":
+            if record.get("schema_version") != "1.0.0":
+                raise AttributionCheckError(
+                    f"telemetry line {line_number} has an unsupported schema version"
+                )
+            _validate_telemetry_event(record, line_number, session_id)
+        elif record_type == "fixed_telemetry_sample":
+            if record.get("schema_version") != "2.0.0":
+                raise AttributionCheckError(
+                    f"telemetry line {line_number} has an unsupported schema version"
+                )
+            _validate_fixed_telemetry_sample(record, line_number, session_id)
+        else:
             raise AttributionCheckError(
-                f"telemetry line {line_number} has an unsupported schema version"
+                f"telemetry line {line_number} has an unsupported record_type"
             )
-        _validate_telemetry_event(record, line_number, session_id)
         records.append(record)
     sequences = [record["sequence"] for record in records]
     times = [record["t_session_ns"] for record in records]
@@ -618,16 +627,19 @@ def _derive_telemetry(data: bytes, session_id: str) -> dict[str, Any]:
         raise AttributionCheckError(
             f"telemetry session time regressed for {session_id}"
         )
+    pipeline_records = [
+        record for record in records if record["record_type"] == "pipeline_stage_event"
+    ]
     callbacks = [
         record
-        for record in records
+        for record in pipeline_records
         if (record.get("stage"), record.get("disposition"))
         == ("CAMERA_CALLBACK", "RECEIVED")
     ]
     callback_frames = [record.get("frame_index") for record in callbacks]
     terminal = [
         record
-        for record in records
+        for record in pipeline_records
         if (record.get("stage"), record.get("disposition")) in _TERMINAL_EVENTS
     ]
     terminal_frames = [record.get("frame_index") for record in terminal]
@@ -645,7 +657,7 @@ def _derive_telemetry(data: bytes, session_id: str) -> dict[str, Any]:
         counts[name] = counts.get(name, 0) + 1
     submitted = sum(
         1
-        for record in records
+        for record in pipeline_records
         if (record.get("stage"), record.get("disposition"))
         == ("INFERENCE", "SUBMITTED")
     )
@@ -679,6 +691,21 @@ def _validate_telemetry_event(
     if not isinstance(disposition, str) or disposition not in PIPELINE_DISPOSITIONS:
         raise AttributionCheckError(
             f"telemetry line {line_number} has an invalid disposition"
+        )
+
+
+def _validate_fixed_telemetry_sample(
+    record: Mapping[str, Any], line_number: int, session_id: str
+) -> None:
+    for field in ("sequence", "t_session_ns"):
+        value = record.get(field)
+        if type(value) is not int or value < 0 or value > MAX_INT64:
+            raise AttributionCheckError(
+                f"telemetry line {line_number} has an invalid {field} for {session_id}"
+            )
+    if type(record.get("terminal")) is not bool:
+        raise AttributionCheckError(
+            f"telemetry line {line_number} has an invalid terminal flag for {session_id}"
         )
 
 

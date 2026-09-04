@@ -60,6 +60,54 @@ def test_checker_reconstructs_three_runs_from_durable_bytes(tmp_path: Path) -> N
     assert "landmark" not in json.dumps(result).lower()
 
 
+def test_checker_accepts_fixed_samples_interleaved_with_pipeline_events(
+    tmp_path: Path,
+) -> None:
+    record, paths = make_fixture_tree(tmp_path)
+    for index, path_set in enumerate(paths):
+        pipeline = [
+            json.loads(line)
+            for line in path_set["telemetry"].read_text(encoding="utf-8").splitlines()
+        ]
+        records = [fixed_sample(0, 0, terminal=False), *pipeline]
+        records.append(fixed_sample(len(records), len(records), terminal=True))
+        for sequence, item in enumerate(records):
+            item["sequence"] = sequence
+            item["t_session_ns"] = sequence
+        path_set["telemetry"].write_bytes(
+            b"".join(json.dumps(item, sort_keys=True).encode() + b"\n" for item in records)
+        )
+        record["sessions"][index]["telemetry_sha256"] = sha(path_set["telemetry"])
+
+    result = check_attribution(
+        transcript(record), tmp_path, subprocess_exit_code=0, prepared_identity=IDENTITY
+    )
+
+    assert result["satisfies_s25_attribution_gate"] is True
+    assert [run["admitted_callbacks"] for run in result["runs"]] == [1, 2, 5]
+
+
+def test_checker_rejects_unknown_interleaved_telemetry_record(tmp_path: Path) -> None:
+    record, paths = make_fixture_tree(tmp_path)
+    telemetry = [
+        json.loads(line) for line in paths[0]["telemetry"].read_text(encoding="utf-8").splitlines()
+    ]
+    telemetry.insert(0, fixed_sample(0, 0, terminal=False))
+    telemetry[0]["record_type"] = "unknown_telemetry_record"
+    for sequence, item in enumerate(telemetry):
+        item["sequence"] = sequence
+        item["t_session_ns"] = sequence
+    paths[0]["telemetry"].write_bytes(
+        b"".join(json.dumps(item, sort_keys=True).encode() + b"\n" for item in telemetry)
+    )
+    record["sessions"][0]["telemetry_sha256"] = sha(paths[0]["telemetry"])
+
+    with pytest.raises(AttributionCheckError, match="unsupported record_type"):
+        check_attribution(
+            transcript(record), tmp_path, subprocess_exit_code=0, prepared_identity=IDENTITY
+        )
+
+
 def test_checker_uses_transcript_status_not_caller_declared_exit_field(tmp_path: Path) -> None:
     record, _ = make_fixture_tree(tmp_path)
     record["instrumentation_exit_code"] = -1
@@ -488,6 +536,25 @@ def event(sequence: int, frame_index: int, stage: str, disposition: str) -> dict
         "frame_index": frame_index,
         "stage": stage,
         "disposition": disposition,
+    }
+
+
+def fixed_sample(sequence: int, t_session_ns: int, *, terminal: bool) -> dict:
+    return {
+        "record_type": "fixed_telemetry_sample",
+        "schema_version": "2.0.0",
+        "sequence": sequence,
+        "t_session_ns": t_session_ns,
+        "terminal": terminal,
+        "thermal": {"kind": "VALUE", "value": 1},
+        "battery_temperature": {"kind": "VALUE", "value": 360},
+        "battery_level_or_charge": {"kind": "VALUE", "unit": "percent", "value": 42},
+        "charging": {"kind": "VALUE", "value": False},
+        "power_source": {"kind": "VALUE", "value": "battery"},
+        "connectivity": {"kind": "VALUE", "transport": "wifi", "connected": True},
+        "keep_awake": {"kind": "UNAVAILABLE", "code": "keep_awake_unavailable"},
+        "brightness": {"kind": "UNAVAILABLE", "code": "brightness_unavailable"},
+        "lifecycle": {"kind": "VALUE", "value": "foreground"},
     }
 
 
