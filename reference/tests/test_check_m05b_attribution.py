@@ -87,6 +87,32 @@ def test_checker_accepts_fixed_samples_interleaved_with_pipeline_events(
     assert [run["admitted_callbacks"] for run in result["runs"]] == [1, 2, 5]
 
 
+def test_checker_accepts_unique_terminal_events_in_async_completion_order(
+    tmp_path: Path,
+) -> None:
+    record, paths = make_fixture_tree(tmp_path)
+    telemetry = [
+        json.loads(line) for line in paths[0]["telemetry"].read_text(encoding="utf-8").splitlines()
+    ]
+    completed = telemetry.pop(2)
+    telemetry.insert(4, completed)
+    for sequence, item in enumerate(telemetry):
+        item["sequence"] = sequence
+        item["t_session_ns"] = sequence
+    paths[0]["telemetry"].write_bytes(
+        b"".join(json.dumps(item, sort_keys=True).encode() + b"\n" for item in telemetry)
+    )
+    record["sessions"][0]["telemetry_sha256"] = sha(paths[0]["telemetry"])
+
+    result = check_attribution(
+        transcript(record), tmp_path, subprocess_exit_code=0, prepared_identity=IDENTITY
+    )
+
+    assert result["satisfies_s25_attribution_gate"] is True
+    assert result["runs"][0]["delivered_callbacks"] == 10
+    assert result["runs"][0]["admitted_callbacks"] == 1
+
+
 def test_checker_rejects_unknown_interleaved_telemetry_record(tmp_path: Path) -> None:
     record, paths = make_fixture_tree(tmp_path)
     telemetry = [

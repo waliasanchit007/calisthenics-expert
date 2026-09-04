@@ -646,7 +646,7 @@ def _derive_telemetry(data: bytes, session_id: str) -> dict[str, Any]:
     if (
         len(callback_frames) != len(set(callback_frames))
         or len(terminal_frames) != len(set(terminal_frames))
-        or callback_frames != terminal_frames
+        or set(callback_frames) != set(terminal_frames)
     ):
         raise AttributionCheckError(
             f"telemetry terminal disposition closure failed for {session_id}"
