@@ -222,7 +222,7 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
   conformance, callback conservation, replicate comparison, the derived final verdict, and a JVM
   proof that executable Kotlin constants equal the canonical protocol JSON.
 
-- [ ] **Step 1: Write RED Kotlin tests for exact integer derivations**
+- [x] **Step 1: Write RED Kotlin tests for exact integer derivations**
 
   Pin these public Kotlin types and calls:
 
@@ -276,7 +276,7 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
   nanosecond above it, selector threshold collapse, every terminal class, duplicate/missing IDs,
   non-zero inference failures, replicate disagreement, and selector-only evidence.
 
-- [ ] **Step 2: Run Kotlin RED**
+- [x] **Step 2: Run Kotlin RED**
 
   Run:
 
@@ -287,7 +287,7 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
 
   Expected: compilation failure because the v2 types and functions do not exist.
 
-- [ ] **Step 3: Implement the minimum pure Kotlin model**
+- [x] **Step 3: Implement the minimum pure Kotlin model**
 
   Use integer-only formulas:
 
@@ -314,7 +314,7 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
   the interval arithmetic. Validation derives sorted blockers and never accepts a caller-provided
   success Boolean.
 
-- [ ] **Step 4: Write and run Python RED parity tests**
+- [x] **Step 4: Write and run Python RED parity tests**
 
   Create table-driven fixtures shared as literal JSON-compatible values. Require Python to produce
   the same source/backend/selector/verdict outputs as Kotlin's pinned cases. Run:
@@ -325,14 +325,14 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
 
   Expected: import failure for `observation_contracts.m05b_attribution_v2`.
 
-- [ ] **Step 5: Add the canonical-protocol JVM parity test**
+- [x] **Step 5: Add the canonical-protocol JVM parity test**
 
   Follow `StorageLocationRegistryProjectionTest.repositoryRoot()` to locate
   `docs/protocols/m05b-attribution-v2.protocol.json`. Parse it strictly and assert every field above,
   including terminal classes and replicate orders, equals `M05BAttributionV2Protocol`. Mutating any
   executable constant without updating the canonical protocol must fail this test.
 
-- [ ] **Step 6: Implement the Python reference derivation**
+- [x] **Step 6: Implement the Python reference derivation**
 
   Expose these exact functions:
 
@@ -356,7 +356,7 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
   The Python selector independently applies the documented integer interval rule; it does not call
   or translate Kotlin output. This gives the host an independent oracle for Arm 1.
 
-- [ ] **Step 7: Prove focused mutations**
+- [x] **Step 7: Prove focused mutations**
 
   Mutation A changes source expectation from `>=` to `>` and must fail the exact-boundary source
   test. Mutation B changes backend acceptance from `<= interval` to `< interval` and must fail the
@@ -364,7 +364,7 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
   the corresponding sequence test. Mutation D drops `ADMISSION_STATE_DIVERGENCE` from conservation
   and must fail the exact callback-closure test. Restore byte-exactly after every mutation.
 
-- [ ] **Step 8: Run parity GREEN checks and commit**
+- [x] **Step 8: Run parity GREEN checks and commit**
 
   ```bash
   cd apps/diagnostic-harness
