@@ -5,6 +5,17 @@ import com.calisthenics.diagnostic.camera.AnalysisFrameTransform
 import com.calisthenics.diagnostic.viewer.ViewerGeometry
 import com.calisthenics.diagnostic.viewer.ViewerPoint
 
+/**
+ * CameraX 1.6.1 PreviewView's sensor matrix assumes front-camera mirroring even when Preview uses
+ * MIRROR_MODE_OFF. Undo that reflection in view space for this front-only, unmirrored viewer.
+ * Do not mirror model input or anatomical landmark identities. The CameraX-backed regression
+ * checks this assumption at the library boundary so an upgrade cannot silently double-flip it.
+ */
+internal fun unmirroredFrontPreviewTransform(sensorToView: Matrix?, viewWidth: Int): Matrix? {
+    if (sensorToView == null || viewWidth <= 0) return null
+    return Matrix(sensorToView).apply { postScale(-1f, 1f, viewWidth / 2f, 0f) }
+}
+
 /** Model pad -> upright full buffer -> raw buffer -> sensor -> current preview pixels. */
 internal fun mapPreviewPoint(x: Double, y: Double, source: AnalysisFrameTransform, sensorToView: Matrix?): ViewerPoint? {
     if (sensorToView == null) return null

@@ -59,7 +59,7 @@ class MovementViewerActivity : ComponentActivity() {
                 if (input == ViewerInput.SYNTHETIC) observation?.frame?.toBitmap()?.asImageBitmap() else null
             }
             val view = nativePreview
-            val target = view?.sensorToViewTransform
+            val target = view?.let { unmirroredFrontPreviewTransform(it.sensorToViewTransform, it.width) }
             val geometry = observation?.frame?.analysisTransform
             val livePoints = if (view != null && view.width > 0 && view.height > 0 && geometry != null) {
                 observation.landmarks.mapNotNull { landmark ->
