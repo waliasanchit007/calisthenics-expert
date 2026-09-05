@@ -29,12 +29,12 @@
       "required": ["device_class", "device_identity", "manufacturer", "model", "api_level", "android_release", "os_build"],
       "properties": {
         "device_class": {"const": "physical_device"},
-        "device_identity": {"type": "string", "minLength": 1},
-        "manufacturer": {"type": "string", "minLength": 1},
-        "model": {"type": "string", "minLength": 1},
+        "device_identity": {"type": "string", "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$"},
+        "manufacturer": {"type": "string", "pattern": "^[A-Za-z0-9._-]+$"},
+        "model": {"type": "string", "pattern": "^[A-Za-z0-9._-]+$"},
         "api_level": {"type": "integer", "minimum": 1},
-        "android_release": {"type": "string", "minLength": 1},
-        "os_build": {"type": "string", "minLength": 1}
+        "android_release": {"type": "string", "pattern": "^[A-Za-z0-9._-]+$"},
+        "os_build": {"type": "string", "pattern": "^[A-Za-z0-9._-]+$"}
       }
     },
     "identity": {
@@ -47,9 +47,9 @@
         "app_apk_sha256": {"$ref": "#/$defs/sha256"},
         "test_apk_sha256": {"$ref": "#/$defs/sha256"},
         "model_sha256": {"$ref": "#/$defs/sha256"},
-        "runtime_version": {"type": "string", "minLength": 1},
-        "backend_version": {"type": "string", "minLength": 1},
-        "delegate": {"type": "string", "minLength": 1}
+        "runtime_version": {"type": "string", "pattern": "^[A-Za-z0-9._+-]+$"},
+        "backend_version": {"type": "string", "pattern": "^[A-Za-z0-9._+-]+$"},
+        "delegate": {"enum": ["cpu", "gpu", "nnapi"]}
       }
     },
     "source_arm": {
@@ -143,10 +143,11 @@
     "end_to_end_run": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["cadence_fps", "session_reference", "initial_thermal_status", "final_thermal_status", "measured_span_ns", "delivered_callback_ids", "terminal_callbacks", "submitted_inference_ids", "pending_inference_ids"],
+      "required": ["cadence_fps", "session_reference", "arm_started_ns", "initial_thermal_status", "final_thermal_status", "measured_span_ns", "delivered_callback_ids", "terminal_callbacks", "submitted_inference_ids", "pending_inference_ids"],
       "properties": {
         "cadence_fps": {"enum": [10, 15, 30]},
-        "session_reference": {"type": "string", "pattern": "^(?!/)(?![A-Za-z]:[\\\\/])(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._/-]+$"},
+        "session_reference": {"type": "string", "pattern": "^exports/(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-f]{64})$"},
+        "arm_started_ns": {"type": "integer", "minimum": 0},
         "initial_thermal_status": {"type": "integer", "minimum": 0},
         "final_thermal_status": {"type": "integer", "minimum": 0},
         "measured_span_ns": {"type": "integer", "minimum": 0},

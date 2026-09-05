@@ -157,6 +157,7 @@ def test_observation_schema_is_closed_and_requires_non_participant_sanitization(
                     {
                         "cadence_fps": 10,
                         "session_reference": "exports/00000000-0000-4000-8000-000000000001",
+                        "arm_started_ns": 0,
                         "initial_thermal_status": 0,
                         "final_thermal_status": 0,
                         "measured_span_ns": 1_000_000_000,

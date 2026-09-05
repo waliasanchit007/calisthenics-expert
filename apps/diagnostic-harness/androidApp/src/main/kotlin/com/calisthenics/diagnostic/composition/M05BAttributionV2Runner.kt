@@ -783,6 +783,7 @@ internal class AndroidM05BAttributionV2Backend(
                     spec.cadenceFps ?: error("missing cadence"),
                     byId,
                     "exports/${checkNotNull(completion).sessionId.value}",
+                    startedAtNs,
                 )
             } else {
                 null
@@ -814,6 +815,7 @@ private fun List<AttributionV2ObservedAdmission>.toEndToEndRun(
     cadenceFps: Int,
     byId: Map<Long, AttributionV2ObservedAdmission>,
     sessionReference: String,
+    armStartedNs: Long,
 ): AttributionV2EndToEndRun {
     val terminalCallbacks = toRawCallbacks(terminals, cadenceFps, byId)
     val submitted = filter { it.productionClassification == LiveFrameClassification.SUBMIT }
@@ -822,13 +824,14 @@ private fun List<AttributionV2ObservedAdmission>.toEndToEndRun(
     return AttributionV2EndToEndRun(
         cadenceFps = cadenceFps,
         sessionReference = sessionReference,
+        armStartedNs = armStartedNs,
         initialThermalStatus = 0,
         finalThermalStatus = 0,
         deliveredCallbackIds = map { it.callbackId },
         terminalCallbacks = terminalCallbacks,
         submittedInferenceIds = submitted,
         pendingInferenceIds = submitted.filterNot(terminalIds::contains).toSet(),
-        measuredSpanNs = map { it.captureTimestampNs }.let { timestamps ->
+        measuredSpanNs = terminalCallbacks.map { it.captureTimestampNs }.let { timestamps ->
             if (timestamps.size < 2) 0L else timestamps.last() - timestamps.first()
         },
     )

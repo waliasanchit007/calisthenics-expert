@@ -12,6 +12,7 @@ import sys
 import tempfile
 from collections.abc import Mapping, Sequence
 from itertools import pairwise
+from math import lcm
 from pathlib import Path
 from typing import cast
 
@@ -42,6 +43,11 @@ GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 SAFE_RELATIVE = re.compile(
     r"^(?!/)(?![A-Za-z]:[\\/])(?!.*(?:^|/)\.\.(?:/|$))[A-Za-z0-9._/-]+$"
 )
+SESSION_REFERENCE = re.compile(
+    r"^exports/(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-f]{64})$"
+)
+IDENTITY_TOKEN = re.compile(r"^[A-Za-z0-9._+-]{1,128}$")
+DEVICE_TOKEN = re.compile(r"^[A-Za-z0-9._-]+$")
 REFERENCE_KEYS = {
     "record_kind",
     "protocol_sha256",
@@ -140,13 +146,23 @@ def validate_single_status_record(
 
 
 def transfer_reference(
-    serial: str, package: str, relative_path: str, destination: Path
+    serial: str,
+    package: str,
+    relative_path: str,
+    destination: Path,
+    *,
+    expected_length: int | None = None,
+    expected_sha256: str | None = None,
 ) -> None:
     """Pull exact app-private bytes with fixed argv and publish them atomically."""
     if not _safe_relative(relative_path):
         raise AttributionV2CheckError("reference path must be safe and relative")
     if not serial or not package:
         raise AttributionV2CheckError("serial and package are required")
+    if (expected_length is None) != (expected_sha256 is None):
+        raise AttributionV2CheckError(
+            "expected transfer length and digest must be paired"
+        )
     destination.parent.mkdir(parents=True, exist_ok=True)
     argv = ["adb", "-s", serial, "exec-out", "run-as", package, "cat", relative_path]
     try:
@@ -170,6 +186,13 @@ def transfer_reference(
             handle.write(completed.stdout)
             handle.flush()
             os.fsync(handle.fileno())
+        if expected_length is not None and expected_sha256 is not None:
+            transferred = temporary.read_bytes()
+            if (
+                len(transferred) != expected_length
+                or _sha256(transferred) != expected_sha256
+            ):
+                raise AttributionV2CheckError("exact-byte digest or length mismatch")
         os.replace(temporary, destination)
         _fsync_directory(destination.parent)
     finally:
@@ -193,7 +216,12 @@ def check_attribution_v2(
     with tempfile.TemporaryDirectory(prefix="m05b-attribution-v2-") as temporary:
         transferred = Path(temporary) / "observation.json"
         transfer_reference(
-            serial, package, str(reference["relative_path"]), transferred
+            serial,
+            package,
+            str(reference["relative_path"]),
+            transferred,
+            expected_length=cast(int, reference["length_bytes"]),
+            expected_sha256=cast(str, reference["sha256"]),
         )
         data = _read_exact_bytes(transferred, reference)
         try:
@@ -243,15 +271,16 @@ class AttributionV2HostCheck:
         if device_codes != sorted(set(device_codes)) or device_codes != sorted(codes):
             codes.add("BLOCKING_CODES.MISMATCH")
         sorted_codes = sorted(codes)
+        sanitized_observation = _sanitize_observation(observation, prepared_identity)
         result: dict[str, object] = {
             "evidence_schema_version": "2.0.0",
             "record_kind": HOST_EVIDENCE_KIND,
             "sanitized": True,
             "non_participant_observation": True,
             "protocol_sha256": protocol_sha256,
-            "device": dict(_mapping(observation, "device")),
-            "identity": dict(_mapping(observation, "identity")),
-            "observation": dict(observation),
+            "device": dict(_sanitize_device(_mapping(observation, "device"))),
+            "identity": dict(prepared_identity),
+            "observation": sanitized_observation,
             "blocking_codes": sorted_codes,
             "physical_evidence_status": "recorded" if not sorted_codes else "blocked",
             "satisfies_s25_attribution_v2_gate": not sorted_codes,
@@ -324,7 +353,15 @@ def verify_recorded_attribution_v2_ledger(
     if not isinstance(evidence, Mapping):
         raise AttributionV2CheckError("recorded v2 evidence must be an object")
     _validate_host_evidence(evidence)
+    if evidence.get("protocol_sha256") != protocol_sha256 or evidence.get(
+        "protocol_sha256"
+    ) != ledger.get("protocol_sha256"):
+        raise AttributionV2CheckError(
+            "recorded v2 evidence protocol binding is invalid"
+        )
     identity = _mapping(ledger, "identity")
+    _validate_identity(identity)
+    _validate_identity(_mapping(evidence, "identity"))
     if dict(identity) != dict(_mapping(evidence, "identity")):
         raise AttributionV2CheckError(
             "v2 ledger identity binding disagrees with evidence"
@@ -337,6 +374,8 @@ def verify_recorded_attribution_v2_ledger(
         )
     observation = _mapping(evidence, "observation")
     recomputed = AttributionV2HostCheck(root).classify(observation, identity)
+    if recomputed.get("protocol_sha256") != evidence.get("protocol_sha256"):
+        raise AttributionV2CheckError("recorded v2 protocol digest was not recomputed")
     if recomputed["blocking_codes"] != evidence.get("blocking_codes"):
         raise AttributionV2CheckError("recorded v2 blockers were not recomputed")
     if recomputed["physical_evidence_status"] != evidence.get(
@@ -441,7 +480,7 @@ def _derive_source(source: Mapping[str, object]) -> set[str]:
     fps = source.get("observed_ae_target_fps")
     if not isinstance(fps, Mapping) or fps.get("lower") != 30 or fps.get("upper") != 30:
         codes.add("ATTRIBUTION.SOURCE_CONFIGURATION")
-    if len(timestamps) == 300 and all(
+    if len(timestamps) == 300 and any(
         not source_supports(timestamps, cadence) for cadence in TARGET_CADENCES_FPS
     ):
         codes.add("ATTRIBUTION.SOURCE_LIMITED")
@@ -591,8 +630,8 @@ def _derive_replicates(
         if source_thermal is None or source_thermal not in cooldown:
             codes.add("ATTRIBUTION.THERMAL_STATE_MISMATCH")
         run_codes: set[str] = set()
-        completion_rates: dict[int, int] = {}
-        opportunity_rates: dict[int, int] = {}
+        completion_rates: dict[int, tuple[int, int]] = {}
+        opportunity_rates: dict[int, tuple[int, int]] = {}
         for run in runs:
             initial = _nonnegative_int(run.get("initial_thermal_status"))
             final = _nonnegative_int(run.get("final_thermal_status"))
@@ -610,61 +649,24 @@ def _derive_replicates(
                     False,
                 )
             )
-            for callback in callbacks:
-                if callback.get("phase") is None:
-                    run_codes.add("ATTRIBUTION.ADMISSION_STATE_DIVERGENCE")
-                if callback.get("terminal_class") in {
-                    "admitted_completed",
-                    "admitted_inference_failed",
-                }:
-                    admission = _nonnegative_int(
-                        callback.get("admission_observed_session_ns")
-                    )
-                    completion = _nonnegative_int(
-                        callback.get("completion_timestamp_ns")
-                    )
-                    if (
-                        admission is None
-                        or completion is None
-                        or completion < admission
-                    ):
-                        run_codes.add("ATTRIBUTION.ADMISSION_STATE_DIVERGENCE")
-            span = _nonnegative_int(run.get("measured_span_ns"))
-            if span is None or span <= 0:
+            run_codes_from_raw, completion_count, opportunity_count, span = (
+                _derive_end_to_end_run(run, source_thermal)
+            )
+            run_codes.update(run_codes_from_raw)
+            if run_codes_from_raw:
                 run_codes.add("ATTRIBUTION.END_TO_END_NOT_DISTINCT")
-                cadence = _nonnegative_int(run.get("cadence_fps")) or 0
-                completion_rates[cadence] = 0
-                opportunity_rates[cadence] = 0
-            else:
-                cadence = _nonnegative_int(run.get("cadence_fps")) or 0
-                completion_rates[cadence] = (
-                    sum(
-                        callback.get("terminal_class") == "admitted_completed"
-                        for callback in callbacks
-                    )
-                    * 1_000_000_000
-                    // span
-                )
-                opportunity_rates[cadence] = (
-                    sum(callback.get("cadence_due") is True for callback in callbacks)
-                    * 1_000_000_000
-                    // span
-                )
+            cadence = _nonnegative_int(run.get("cadence_fps")) or 0
+            completion_rates[cadence] = (completion_count, span)
+            opportunity_rates[cadence] = (opportunity_count, span)
         duration_assertion_failed = (
             backend is None
             or measured_durations != _integer_list(backend.get("service_durations_ns"))
         )
         if source_codes or backend_codes or selector_codes or duration_assertion_failed:
             run_codes.add("ATTRIBUTION.END_TO_END_NOT_DISTINCT")
-        ordered_completion = [
-            completion_rates.get(cadence, 0) for cadence in TARGET_CADENCES_FPS
-        ]
-        ordered_opportunity = [
-            opportunity_rates.get(cadence, 0) for cadence in TARGET_CADENCES_FPS
-        ]
-        if not all(a < b for a, b in pairwise(ordered_completion)) or not all(
-            a < b for a, b in pairwise(ordered_opportunity)
-        ):
+        if not _strictly_increasing_rates(
+            completion_rates
+        ) or not _strictly_increasing_rates(opportunity_rates):
             run_codes.add("ATTRIBUTION.END_TO_END_NOT_DISTINCT")
         if not run_codes and replicate.get("status") != "recorded":
             codes.add("BLOCKING_CODES.MISMATCH")
@@ -675,6 +677,140 @@ def _derive_replicates(
             codes.add("BLOCKING_CODES.MISMATCH")
         codes.update(run_codes)
     return codes
+
+
+def _derive_end_to_end_run(
+    run: Mapping[str, object], source_thermal: int | None
+) -> tuple[set[str], int, int, int]:
+    codes: set[str] = set()
+    callbacks = _mapping_list(run.get("terminal_callbacks"))
+    arm_started = _nonnegative_int(run.get("arm_started_ns"))
+    phases = _replay_arm_two_phases(callbacks, arm_started)
+    if len(phases) != len(callbacks):
+        codes.add("ATTRIBUTION.ADMISSION_STATE_DIVERGENCE")
+    if any(
+        callback.get("phase") != phase for callback, phase in zip(callbacks, phases)
+    ):
+        codes.add("ATTRIBUTION.ADMISSION_STATE_DIVERGENCE")
+    if any(not _valid_end_to_end_operands(callback) for callback in callbacks):
+        codes.add("ATTRIBUTION.ADMISSION_STATE_DIVERGENCE")
+
+    measured_callbacks = [
+        callback for callback, phase in zip(callbacks, phases) if phase == "measured"
+    ]
+    measured_completions = [
+        callback
+        for callback in measured_callbacks
+        if callback.get("terminal_class")
+        in {"admitted_completed", "admitted_inference_failed"}
+    ]
+    warmup_completions = [
+        callback
+        for callback, phase in zip(callbacks, phases)
+        if phase == "warmup"
+        and callback.get("terminal_class")
+        in {"admitted_completed", "admitted_inference_failed"}
+    ]
+    completion_times = [
+        _nonnegative_int(callback.get("completion_timestamp_ns"))
+        for callback in warmup_completions
+    ]
+    valid_completion_times = [value for value in completion_times if value is not None]
+    warmup_elapsed = (
+        max(valid_completion_times) - arm_started
+        if arm_started is not None and valid_completion_times
+        else 0
+    )
+    if (
+        len(warmup_completions) < 20
+        or warmup_elapsed < 2_000_000_000
+        or len(measured_completions) != 100
+    ):
+        codes.add("ATTRIBUTION.BACKEND_SAMPLE_INSUFFICIENT")
+    if any(
+        callback.get("terminal_class") == "admitted_inference_failed"
+        for callback in callbacks
+    ):
+        codes.add("ATTRIBUTION.INFERENCE_FAILURE")
+
+    captures = _integer_list(
+        [callback.get("capture_timestamp_ns") for callback in callbacks]
+    )
+    span = captures[-1] - captures[0] if len(captures) >= 2 else 0
+    if len(captures) != len(callbacks) or any(
+        second <= first for first, second in pairwise(captures)
+    ):
+        codes.add("ATTRIBUTION.END_TO_END_NOT_DISTINCT")
+    if _nonnegative_int(run.get("measured_span_ns")) != span:
+        codes.add("ATTRIBUTION.END_TO_END_NOT_DISTINCT")
+    initial = _nonnegative_int(run.get("initial_thermal_status"))
+    final = _nonnegative_int(run.get("final_thermal_status"))
+    if initial != final or initial != source_thermal:
+        codes.add("ATTRIBUTION.THERMAL_STATE_MISMATCH")
+    if initial != final:
+        codes.add("ATTRIBUTION.ENVIRONMENT_MISMATCH")
+    return (
+        codes,
+        sum(
+            callback.get("terminal_class") == "admitted_completed"
+            for callback in measured_completions
+        ),
+        sum(callback.get("cadence_due") is True for callback in measured_callbacks),
+        span,
+    )
+
+
+def _valid_end_to_end_operands(callback: Mapping[str, object]) -> bool:
+    admission = _nonnegative_int(callback.get("admission_observed_session_ns"))
+    completion = _nonnegative_int(callback.get("completion_timestamp_ns"))
+    return (
+        callback.get("phase") is not None
+        and admission is not None
+        and completion is not None
+        and completion >= admission
+    )
+
+
+def _replay_arm_two_phases(
+    callbacks: list[Mapping[str, object]], arm_started: int | None
+) -> list[str]:
+    phases: list[str] = []
+    completion_count = 0
+    boundary_reached = False
+    for callback in callbacks:
+        terminal = callback.get("terminal_class")
+        is_completion = terminal in {
+            "admitted_completed",
+            "admitted_inference_failed",
+        }
+        prior_completions = completion_count
+        if is_completion:
+            completion_count += 1
+        completion = _nonnegative_int(callback.get("completion_timestamp_ns"))
+        elapsed = (
+            completion - arm_started
+            if completion is not None and arm_started is not None
+            else -1
+        )
+        transition_ready = completion_count >= 20 and elapsed >= 2_000_000_000
+        boundary_completion = is_completion and prior_completions < 20
+        phases.append(
+            "warmup"
+            if not boundary_reached and (not transition_ready or boundary_completion)
+            else "measured"
+        )
+        if transition_ready:
+            boundary_reached = True
+    return phases
+
+
+def _strictly_increasing_rates(rates: Mapping[int, tuple[int, int]]) -> bool:
+    ordered = [rates.get(cadence, (0, 0)) for cadence in TARGET_CADENCES_FPS]
+    return all(
+        left[0] * right[1] < right[0] * left[1]
+        for left, right in pairwise(ordered)
+        if left[1] > 0 and right[1] > 0
+    ) and all(span > 0 for _, span in ordered)
 
 
 def _validation_adapter(
@@ -700,29 +836,8 @@ def _validation_adapter(
     adapter_replicates: list[dict[str, object]] = []
     for replicate in replicates:
         runs = _mapping_list(replicate.get("runs"))
-        admitted: dict[str, int] = {}
-        opportunities: dict[str, int] = {}
-        for run in runs:
-            callbacks = _mapping_list(run.get("terminal_callbacks"))
-            span = _nonnegative_int(run.get("measured_span_ns")) or 0
-            cadence = str(run.get("cadence_fps"))
-            admitted[cadence] = (
-                sum(
-                    callback.get("terminal_class") == "admitted_completed"
-                    for callback in callbacks
-                )
-                * 1_000_000_000
-                // span
-                if span
-                else 0
-            )
-            opportunities[cadence] = (
-                sum(callback.get("cadence_due") is True for callback in callbacks)
-                * 1_000_000_000
-                // span
-                if span
-                else 0
-            )
+        admitted = _exact_scaled_rate_values(runs, admitted=True)
+        opportunities = _exact_scaled_rate_values(runs, admitted=False)
         adapter_replicates.append(
             {
                 "cadence_order": _integer_list(replicate.get("order")),
@@ -774,6 +889,22 @@ def _validation_adapter(
             ),
         },
         "replicates": adapter_replicates,
+    }
+
+
+def _exact_scaled_rate_values(
+    runs: list[Mapping[str, object]], *, admitted: bool
+) -> dict[str, int]:
+    inputs: list[tuple[str, int, int]] = []
+    for run in runs:
+        _, completion_count, opportunity_count, span = _derive_end_to_end_run(run, None)
+        count = completion_count if admitted else opportunity_count
+        inputs.append((str(run.get("cadence_fps")), count, span))
+    positive_spans = [span for _, _, span in inputs if span > 0]
+    common_span = lcm(*positive_spans) if positive_spans else 1
+    return {
+        cadence: count * (common_span // span) if span > 0 else 0
+        for cadence, count, span in inputs
     }
 
 
@@ -853,6 +984,107 @@ def _validate_observation_schema(observation: Mapping[str, object]) -> None:
         raise AttributionV2CheckError("observation has the wrong record_kind")
 
 
+def _sanitize_observation(
+    observation: Mapping[str, object], prepared_identity: Mapping[str, object]
+) -> dict[str, object]:
+    projected = dict(observation)
+    projected["device"] = dict(_sanitize_device(_mapping(observation, "device")))
+    projected["identity"] = _sanitize_identity(
+        _mapping(observation, "identity"), prepared_identity
+    )
+    backend = observation.get("backend_arm")
+    if isinstance(backend, Mapping):
+        backend_projection = dict(backend)
+        backend_projection["terminal_callbacks"] = [
+            dict(callback)
+            for callback in _mapping_list(backend.get("terminal_callbacks"))
+        ]
+        projected["backend_arm"] = backend_projection
+    projected_replicates: list[dict[str, object]] = []
+    for replicate in _mapping_list(observation.get("end_to_end_replicates")):
+        replicate_projection = dict(replicate)
+        projected_runs: list[dict[str, object]] = []
+        for run in _mapping_list(replicate.get("runs")):
+            run_projection = dict(run)
+            run_projection["session_reference"] = _sanitize_session_reference(
+                run.get("session_reference")
+            )
+            run_projection["terminal_callbacks"] = [
+                dict(callback)
+                for callback in _mapping_list(run.get("terminal_callbacks"))
+            ]
+            projected_runs.append(run_projection)
+        replicate_projection["runs"] = projected_runs
+        projected_replicates.append(replicate_projection)
+    projected["end_to_end_replicates"] = projected_replicates
+    return projected
+
+
+def _sanitize_device(device: Mapping[str, object]) -> Mapping[str, object]:
+    identity = device.get("device_identity")
+    manufacturer = device.get("manufacturer")
+    model = device.get("model")
+    if (
+        isinstance(identity, str)
+        and _valid_device_identity(identity, manufacturer, model)
+        and _authorized_device(device)
+    ):
+        return dict(device)
+    return {
+        "device_class": "physical_device",
+        "device_identity": "invalid/invalid/invalid/invalid",
+        "manufacturer": "invalid",
+        "model": "invalid",
+        "api_level": 1,
+        "android_release": "invalid",
+        "os_build": "invalid",
+    }
+
+
+def _sanitize_identity(
+    identity: Mapping[str, object], prepared: Mapping[str, object]
+) -> dict[str, object]:
+    projected: dict[str, object] = {}
+    for key in IDENTITY_KEYS:
+        if identity.get(key) == prepared.get(key):
+            projected[key] = prepared[key]
+        elif key in {"app_git_sha", "probe_git_sha"}:
+            projected[key] = "0" * 40 if prepared.get(key) != "0" * 40 else "1" * 40
+        elif key in {"app_apk_sha256", "test_apk_sha256", "model_sha256"}:
+            projected[key] = "0" * 64 if prepared.get(key) != "0" * 64 else "1" * 64
+        elif key == "delegate":
+            projected[key] = next(
+                value for value in ("cpu", "gpu", "nnapi") if value != prepared.get(key)
+            )
+        else:
+            projected[key] = "untrusted"
+    return projected
+
+
+def _sanitize_session_reference(value: object) -> str:
+    if not isinstance(value, str) or not SESSION_REFERENCE.fullmatch(value):
+        return "exports/" + "0" * 64
+    if re.fullmatch(r"exports/[0-9a-f]{64}", value):
+        return value
+    return "exports/" + _sha256(value.encode("utf-8"))
+
+
+def _valid_device_identity(
+    device_identity: object, manufacturer: object, model: object
+) -> bool:
+    if not isinstance(device_identity, str):
+        return False
+    parts = device_identity.split("/")
+    return (
+        len(parts) == 4
+        and all(DEVICE_TOKEN.fullmatch(part) for part in parts)
+        and isinstance(manufacturer, str)
+        and isinstance(model, str)
+        and parts[0].lower() == manufacturer.lower()
+        and parts[1] == model
+    )
+
+
 def _validate_host_evidence(evidence: Mapping[str, object]) -> None:
     required = {
         "evidence_schema_version",
@@ -880,6 +1112,24 @@ def _validate_host_evidence(evidence: Mapping[str, object]) -> None:
         raise AttributionV2CheckError(
             "host evidence must be sanitized non-participant evidence"
         )
+    if not isinstance(evidence.get("protocol_sha256"), str) or not SHA256.fullmatch(
+        cast(str, evidence["protocol_sha256"])
+    ):
+        raise AttributionV2CheckError("host evidence protocol digest is invalid")
+    device = _mapping(evidence, "device")
+    if set(device) != {
+        "device_class",
+        "device_identity",
+        "manufacturer",
+        "model",
+        "api_level",
+        "android_release",
+        "os_build",
+    } or (
+        dict(device) != dict(_sanitize_device({})) and not _authorized_device(device)
+    ):
+        raise AttributionV2CheckError("host evidence device binding is invalid")
+    _validate_identity(_mapping(evidence, "identity"))
     _validate_observation_schema(_mapping(evidence, "observation"))
     if _string_list(evidence.get("blocking_codes")) != sorted(
         set(_string_list(evidence.get("blocking_codes")))
@@ -929,8 +1179,12 @@ def _validate_identity(identity: Mapping[str, object]) -> None:
         ):
             raise AttributionV2CheckError("prepared binary identity is malformed")
     for key in ("runtime_version", "backend_version", "delegate"):
-        if not isinstance(identity.get(key), str) or not cast(str, identity[key]):
+        if not isinstance(identity.get(key), str) or not IDENTITY_TOKEN.fullmatch(
+            cast(str, identity[key])
+        ):
             raise AttributionV2CheckError("prepared runtime identity is malformed")
+    if identity.get("delegate") not in {"cpu", "gpu", "nnapi"}:
+        raise AttributionV2CheckError("prepared delegate is unsupported")
 
 
 def _authorized_device(device: Mapping[str, object]) -> bool:
@@ -941,9 +1195,13 @@ def _authorized_device(device: Mapping[str, object]) -> bool:
         and isinstance(model, str)
         and model.upper().startswith("SM-S938")
         and device.get("api_level") == 36
-        and bool(device.get("device_identity"))
-        and bool(device.get("android_release"))
-        and bool(device.get("os_build"))
+        and _valid_device_identity(
+            device.get("device_identity", ""), device.get("manufacturer"), model
+        )
+        and isinstance(device.get("android_release"), str)
+        and DEVICE_TOKEN.fullmatch(cast(str, device["android_release"])) is not None
+        and isinstance(device.get("os_build"), str)
+        and DEVICE_TOKEN.fullmatch(cast(str, device["os_build"])) is not None
     )
 
 

@@ -104,6 +104,7 @@ class M05BAttributionV2JsonTest {
         assertContains(rendered, "\"terminal_callbacks\"")
         assertContains(rendered, "\"phase\"")
         assertContains(rendered, "\"warmup_predicates\"")
+        assertContains(rendered, "\"arm_started_ns\":123000000")
     }
 
     @Test
@@ -268,6 +269,7 @@ class M05BAttributionV2JsonTest {
             terminalCallbacks = listOf(callback),
             submittedInferenceIds = emptyList(),
             pendingInferenceIds = emptySet(),
+            armStartedNs = 123_000_000L,
             measuredSpanNs = 1_000_000_000,
         )
         return M05BAttributionV2DeviceObservation(

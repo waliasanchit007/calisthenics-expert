@@ -422,11 +422,62 @@ def test_attribution_v2_ledger_reopens_recorded_host_evidence(tmp_path: Path) ->
     assert verified["physical_evidence_status"] == "recorded"
     assert verified["blocking_codes"] == []
 
+    forged_device = deepcopy(evidence)
+    forged_device["device"] = dict(evidence["device"])
+    forged_device["device"]["device_identity"] = "SERIAL-PRIVATE/SM-S938B/participant/media"
+    evidence_path.write_text(json.dumps(forged_device) + "\n", encoding="utf-8")
+    forged_device_ledger = deepcopy(ledger)
+    forged_device_ledger["device"] = forged_device["device"]
+    forged_device_ledger["evidence_sha256"] = hashlib.sha256(evidence_path.read_bytes()).hexdigest()
+    ledger_path.write_text(json.dumps(forged_device_ledger) + "\n", encoding="utf-8")
+    with pytest.raises(
+        check_m05b_attribution_v2.AttributionV2CheckError,
+        match="host evidence device binding is invalid",
+    ):
+        check_m05b_attribution_v2.verify_recorded_attribution_v2_ledger(
+            tmp_path, ATTRIBUTION_V2_LEDGER
+        )
+
+    forged_protocol = deepcopy(evidence)
+    forged_protocol["protocol_sha256"] = "0" * 64
+    evidence_path.write_text(json.dumps(forged_protocol) + "\n", encoding="utf-8")
+    forged_protocol_ledger = deepcopy(ledger)
+    forged_protocol_ledger["evidence_sha256"] = hashlib.sha256(
+        evidence_path.read_bytes()
+    ).hexdigest()
+    ledger_path.write_text(json.dumps(forged_protocol_ledger) + "\n", encoding="utf-8")
+    with pytest.raises(
+        check_m05b_attribution_v2.AttributionV2CheckError,
+        match="evidence protocol binding is invalid",
+    ):
+        check_m05b_attribution_v2.verify_recorded_attribution_v2_ledger(
+            tmp_path, ATTRIBUTION_V2_LEDGER
+        )
+
+    evidence_path.write_text(json.dumps(evidence, sort_keys=True) + "\n", encoding="utf-8")
     forged = deepcopy(ledger)
     forged["status"] = "recorded"
     forged["evidence_sha256"] = "0" * 64
     ledger_path.write_text(json.dumps(forged) + "\n", encoding="utf-8")
     with pytest.raises(check_m05b_attribution_v2.AttributionV2CheckError, match="sha256"):
+        check_m05b_attribution_v2.verify_recorded_attribution_v2_ledger(
+            tmp_path, ATTRIBUTION_V2_LEDGER
+        )
+
+    forged_identity = deepcopy(evidence)
+    forged_identity["identity"] = dict(evidence["identity"])
+    forged_identity["identity"]["backend_version"] = "private/path"
+    evidence_path.write_text(json.dumps(forged_identity) + "\n", encoding="utf-8")
+    forged_identity_ledger = deepcopy(ledger)
+    forged_identity_ledger["identity"] = forged_identity["identity"]
+    forged_identity_ledger["evidence_sha256"] = hashlib.sha256(
+        evidence_path.read_bytes()
+    ).hexdigest()
+    ledger_path.write_text(json.dumps(forged_identity_ledger) + "\n", encoding="utf-8")
+    with pytest.raises(
+        check_m05b_attribution_v2.AttributionV2CheckError,
+        match="prepared runtime identity is malformed",
+    ):
         check_m05b_attribution_v2.verify_recorded_attribution_v2_ledger(
             tmp_path, ATTRIBUTION_V2_LEDGER
         )

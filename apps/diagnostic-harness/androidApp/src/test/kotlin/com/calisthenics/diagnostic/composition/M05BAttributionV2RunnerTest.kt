@@ -550,7 +550,7 @@ private fun successfulBackendRun(
 
 private fun validEndToEndRun() = AttributionV2EndToEndRun(
     cadenceFps = 10,
-    sessionReference = "exports/run",
+    sessionReference = "exports/00000000-0000-4000-8000-000000000099",
     initialThermalStatus = 0,
     finalThermalStatus = 0,
     deliveredCallbackIds = listOf(0),
@@ -566,5 +566,6 @@ private fun validEndToEndRun() = AttributionV2EndToEndRun(
     ),
     submittedInferenceIds = listOf(0),
     pendingInferenceIds = emptySet(),
+    armStartedNs = 7_000_000_000L,
     measuredSpanNs = 1_000_000_000L,
 )

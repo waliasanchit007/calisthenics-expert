@@ -13,7 +13,9 @@ import kotlinx.serialization.json.putJsonObject
 
 private val V2_SHA256 = Regex("\\A[0-9a-f]{64}\\z")
 private val V2_GIT_SHA = Regex("\\A[0-9a-f]{40}\\z")
-private val V2_SAFE_REFERENCE = Regex("\\A(?!/)(?![A-Za-z]:[\\\\/])(?!.*(?:\\A|/)\\.\\.(?:/|\\z))[A-Za-z0-9._/-]+\\z")
+private val V2_SAFE_REFERENCE = Regex(
+    "\\Aexports/(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-f]{64})\\z",
+)
 
 enum class AttributionV2ArmStatus(val wireValue: String) {
     RECORDED("recorded"),
@@ -85,6 +87,7 @@ data class AttributionV2SelectorObservation(
 data class AttributionV2EndToEndRun(
     val cadenceFps: Int,
     val sessionReference: String,
+    val armStartedNs: Long,
     val initialThermalStatus: Int,
     val finalThermalStatus: Int,
     val deliveredCallbackIds: List<Long>,
@@ -227,20 +230,8 @@ private fun M05BAttributionV2DeviceObservation.toValidationEvidence(): M05BAttri
         replicates = endToEndReplicates.map { replicate ->
             AttributionV2Replicate(
                 cadenceOrder = replicate.order,
-                admittedCompletionRates = replicate.runs.associate { run ->
-                    run.cadenceFps to ratePerSecond(
-                        run.terminalCallbacks.count {
-                            it.terminalClass == AttributionV2TerminalClass.ADMITTED_COMPLETED
-                        }.toLong(),
-                        run.measuredSpanNs,
-                    )
-                },
-                cadenceOpportunityRates = replicate.runs.associate { run ->
-                    run.cadenceFps to ratePerSecond(
-                        run.terminalCallbacks.count { it.cadenceDue }.toLong(),
-                        run.measuredSpanNs,
-                    )
-                },
+                admittedCompletionRates = attributionV2ExactRateOrderValues(replicate.runs, admitted = true),
+                cadenceOpportunityRates = attributionV2ExactRateOrderValues(replicate.runs, admitted = false),
                 sourceSupported = M05BAttributionV2Protocol.TARGET_CADENCES_FPS.associateWith {
                     sourceSupports(sourceArm.measuredTimestampsNs, it)
                 },
@@ -316,8 +307,31 @@ private fun attributionV2BackendRawBlockers(value: AttributionV2BackendObservati
     }
 }
 
-private fun ratePerSecond(count: Long, spanNs: Long): Long =
-    if (spanNs <= 0L) 0L else (count * 1_000_000_000L) / spanNs
+internal fun attributionV2ExactRateOrderValues(
+    runs: List<AttributionV2EndToEndRun>,
+    admitted: Boolean,
+): Map<Int, Long> {
+    data class Rate(val count: Long, val spanNs: Long)
+
+    val rates = runs.associate { run ->
+        val measured = run.terminalCallbacks.filter { it.phase == AttributionV2CallbackPhase.MEASURED }
+        run.cadenceFps to Rate(
+            count = if (admitted) {
+                measured.count { it.terminalClass == AttributionV2TerminalClass.ADMITTED_COMPLETED }.toLong()
+            } else {
+                measured.count { it.cadenceDue }.toLong()
+            },
+            spanNs = run.measuredSpanNs,
+        )
+    }
+    return M05BAttributionV2Protocol.TARGET_CADENCES_FPS.associateWith { cadence ->
+        val current = rates[cadence] ?: Rate(0L, 0L)
+        rates.values.count { other ->
+            current.spanNs > 0L && other.spanNs > 0L &&
+                other.count * current.spanNs < current.count * other.spanNs
+        }.toLong()
+    }
+}
 
 private fun renderDevice(value: AttributionV2DeviceSource): JsonObject = buildJsonObject {
     put("device_class", value.deviceClass)
@@ -413,6 +427,7 @@ private fun renderReplicate(value: AttributionV2ReplicateObservation): JsonObjec
 private fun renderRun(value: AttributionV2EndToEndRun): JsonObject = buildJsonObject {
     put("cadence_fps", value.cadenceFps)
     put("session_reference", value.sessionReference)
+    put("arm_started_ns", value.armStartedNs)
     put("initial_thermal_status", value.initialThermalStatus)
     put("final_thermal_status", value.finalThermalStatus)
     put("measured_span_ns", value.measuredSpanNs)

@@ -95,3 +95,98 @@ Additional promotion-contract verification:
 - Device-declared status, blockers, summaries, durations, counts, rates, and predicates are assertions checked against host recomputation.
 - The existing v2 pending ledger remains pending; this task does not manufacture physical evidence or promote it to recorded.
 - The promotion-contract test was updated because the approved Task 5 plan explicitly requires the complete v2 family to move from draft to stable in registry 1.6.0.
+
+## Fix round: review findings
+
+Fix base: `a636d87f72ca5e0c2e7c631fa03389e782672323`. This bounded round addressed the substantiated review findings only; Task 6 was not started.
+
+### Regression-first RED evidence
+
+Focused Python regressions were added before implementation. The initial command
+
+```text
+.venv/bin/python -m pytest -q reference/tests/test_check_m05b_attribution_v2.py -k 'undersampled_arm_two or arm_two_phase or structurally_sanitized or non_export_session or fractional_rate_ordering or verifies_expected_bytes or wrong'
+```
+
+exited `1` with seven intended failures: undersampled Arm 2 was admitted, phase replay was not enforced, raw sanitized strings leaked, a non-export session reference was accepted, fractional rate ordering collapsed, and the transfer interface lacked expected byte arguments. The raw Arm 2 inference-failure regression also exited `1` because `ATTRIBUTION.INFERENCE_FAILURE` was absent. The ledger protocol-field regression exited `1` because a forged `0*64` evidence digest was not rejected. The top-level forged identity/device regressions each exited `1` before their validation was implemented.
+
+Producer regressions were RED before the model change:
+
+```text
+./gradlew --no-daemon :shared:jvmTest --tests '*M05BAttributionV2JsonTest*' :androidApp:testDebugUnitTest --tests '*M05BAttributionV2RunnerTest*'
+exit 1: No parameter with name 'armStartedNs' found
+
+./gradlew --no-daemon :shared:jvmTest --tests '*M05BAttributionV2Test.exactRateOrderingUsesCrossProductsWhenIntegerFloorsCollide'
+exit 1: unresolved reference: attributionV2ExactRateOrderValues
+```
+
+### Implemented fix
+
+- Arm 2 synthetic runs now contain 120 ordered raw terminal callbacks: 20 warm-up completions followed by exactly 100 measured completed/failed terminals, with raw `arm_started_ns`, phase, admission, completion, terminal class, and capture timestamps. The producer records arm start and recomputes measured span from ordered terminal captures.
+- The host replays the dual warm-up boundary from `arm_started_ns`, requires the two warm-up predicates, compares every declared phase, rejects null/invalid operands, requires exact measured completion/failure cardinality, zero raw inference failures, closure, and exact raw capture span. Run and replicate summaries remain assertions only; every verdict and replicate status is recomputed.
+- Sanitized host evidence now uses a closed structural projection. Device identity is copied only for an authorized four-token Build tuple with manufacturer/model agreement; invalid identities become a fixed placeholder. Prepared identity fields are validated formats/enums and are not copied from observation alternatives. Session references are UUIDv4-derived export references or deterministic SHA references. Adversarial coverage includes serial-like identity, private/absolute paths, participant/media/landmark text, forged top-level identity, and forged top-level device fields.
+- Ledger reopening validates the evidence protocol SHA and requires equality with the canonical protocol digest, ledger digest, and recomputed result. Pending, recorded, and blocked paths remain independently checked.
+- Completion and opportunity rates use exact cross-products. The validator adapter uses common-denominator scaled integers, avoiding integer-floor ties.
+- Transfer writes and fsyncs a temporary file, validates expected length/SHA before `os.replace`, then fsyncs the destination directory. Corrupt bytes never reach the final destination; transport loss remains `awaiting_recovery`.
+- `_derive_source` now follows the pure validator's any-target `SOURCE_LIMITED` rule.
+
+### Fix-round GREEN evidence
+
+```text
+.venv/bin/python -m pytest -q reference/tests/test_check_m05b_attribution_v2.py reference/tests/test_device_evidence_ledger.py reference/tests/test_m05b_attribution_v2.py reference/tests/test_validator_code_emission.py
+84 passed in 2.32s
+
+.venv/bin/python -m pytest -q reference/tests/test_check_m05b_attribution_v2.py reference/tests/test_device_evidence_ledger.py reference/tests/test_m05b_attribution_v2.py reference/tests/test_validator_code_emission.py reference/tests/test_m05b_attribution_v2_contract.py
+91 passed in 2.26s
+
+.venv/bin/python -m ruff format --check reference tools/check_m05b_attribution_v2.py
+71 files already formatted
+
+.venv/bin/python -m ruff check reference tools/check_m05b_attribution_v2.py
+All checks passed!
+
+MYPYPATH=reference/src .venv/bin/python -m mypy --strict tools/check_m05b_attribution_v2.py
+Success: no issues found in 1 source file
+
+./gradlew --no-daemon :shared:jvmTest --tests '*M05BAttributionV2JsonTest*' --tests '*M05BAttributionV2Test*' :androidApp:testDebugUnitTest --tests '*M05BAttributionV2RunnerTest*'
+BUILD SUCCESSFUL in 18s; 48 actionable tasks
+
+git diff --check
+success
+```
+
+The Gradle run emitted only the existing Kotlin hierarchy-template warnings. No adb or physical-device tests were run.
+
+### Fix-round mutation proof
+
+Each mutation was run against its named focused test, exited `1` for the expected missing behavior, and was restored before continuing. The direct implementation hash after each restore was `9459e5f99e380b789af76e6076acfa8510149e4e`; the final formatter-only production hash is `2aaeedd26e4ccfc43acef12076d656990afe3f32`.
+
+| Mutation | Focused command and named failure | Restored |
+| --- | --- | --- |
+| Remove exact 100 measured-terminal check | `-k exactly_one_hundred`; expected `ATTRIBUTION.BACKEND_SAMPLE_INSUFFICIENT` absent | yes |
+| Remove Arm 2 phase replay comparison | `-k arm_two_phase`; expected `ATTRIBUTION.ADMISSION_STATE_DIVERGENCE` absent | yes |
+| Remove raw capture-span equality | `-k measured_span`; expected `ATTRIBUTION.END_TO_END_NOT_DISTINCT` absent | yes |
+| Ignore raw Arm 2 inference failure | `-k any_arm_two_inference_failure`; expected `ATTRIBUTION.INFERENCE_FAILURE` absent | yes |
+| Replace sanitized observation with raw observation | `-k structurally_sanitized`; serial-like raw string present | yes |
+| Disable evidence protocol binding | `-k attribution_v2_ledger_reopens_recorded_host_evidence`; forged `0*64` protocol field was not rejected | yes |
+| Floor fractional adapter rates | `-k fractional_rate_ordering`; exact ordering regression emitted `ATTRIBUTION.END_TO_END_NOT_DISTINCT` | yes |
+| Rename before expected-byte verification | `-k 'verifies_expected_bytes or wrong'`; final rename occurred before validation / temp disappeared | yes |
+| Skip reopened prepared-identity validation | `-k attribution_v2_ledger_reopens_recorded_host_evidence`; forged private identity reached blocker recomputation | yes |
+| Skip reopened device projection validation | same focused ledger test; forged serial-like device identity did not raise | yes |
+
+### Fix-round changed files
+
+- `tools/check_m05b_attribution_v2.py`
+- `reference/tests/test_check_m05b_attribution_v2.py`
+- `reference/tests/test_device_evidence_ledger.py`
+- `reference/tests/test_m05b_attribution_v2_contract.py`
+- `contracts/tooling/m05b_attribution_observation.v2.schema.json`
+- `apps/diagnostic-harness/androidApp/src/main/kotlin/com/calisthenics/diagnostic/composition/M05BAttributionV2Runner.kt`
+- `apps/diagnostic-harness/androidApp/src/test/kotlin/com/calisthenics/diagnostic/composition/M05BAttributionV2RunnerTest.kt`
+- `apps/diagnostic-harness/shared/src/commonMain/kotlin/com/calisthenics/diagnostic/study/M05BAttributionV2Json.kt`
+- `apps/diagnostic-harness/shared/src/commonTest/kotlin/com/calisthenics/diagnostic/study/M05BAttributionV2JsonTest.kt`
+- `apps/diagnostic-harness/shared/src/commonTest/kotlin/com/calisthenics/diagnostic/study/M05BAttributionV2Test.kt`
+
+### Fix-round self-review
+
+No unresolved Critical or Important concern remains from the supplied review. The changes preserve fixed argv, binary-safe transfer, fail-closed admission, sanitized non-participant evidence, independent host recomputation, and durable ledger binding. The existing pending physical ledger was not manufactured into recorded evidence. No participant data, paid credits, adb/device execution, push, PR, merge, tag, branch/worktree deletion, or Task 6 work was performed.

@@ -137,6 +137,65 @@ def test_transfer_reference_marks_post_publication_transport_loss_as_awaiting_re
         )
 
 
+def test_transfer_reference_verifies_expected_bytes_before_final_rename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = b"exact-payload"
+    destination = tmp_path / "observation.json"
+    replace_events: list[str] = []
+    original_replace = check_m05b_attribution_v2.os.replace
+
+    monkeypatch.setattr(
+        check_m05b_attribution_v2.subprocess,
+        "run",
+        Mock(return_value=Mock(returncode=0, stdout=payload, stderr=b"")),
+    )
+
+    def recording_replace(source: str | bytes, target: str | bytes) -> None:
+        replace_events.append("rename")
+        original_replace(source, target)
+
+    monkeypatch.setattr(check_m05b_attribution_v2.os, "replace", recording_replace)
+
+    check_m05b_attribution_v2.transfer_reference(
+        "SERIAL-PRIVATE",
+        "com.example.app",
+        "attribution-v2/run/observation.json",
+        destination,
+        expected_length=len(payload),
+        expected_sha256=hashlib.sha256(payload).hexdigest(),
+    )
+
+    assert replace_events == ["rename"]
+    assert destination.read_bytes() == payload
+
+
+def test_transfer_reference_leaves_no_destination_when_expected_digest_is_wrong(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    destination = tmp_path / "observation.json"
+    replace = Mock()
+    monkeypatch.setattr(
+        check_m05b_attribution_v2.subprocess,
+        "run",
+        Mock(return_value=Mock(returncode=0, stdout=b"corrupt", stderr=b"")),
+    )
+    monkeypatch.setattr(check_m05b_attribution_v2.os, "replace", replace)
+
+    with pytest.raises(check_m05b_attribution_v2.AttributionV2CheckError, match="digest"):
+        check_m05b_attribution_v2.transfer_reference(
+            "SERIAL-PRIVATE",
+            "com.example.app",
+            "attribution-v2/run/observation.json",
+            destination,
+            expected_length=7,
+            expected_sha256="0" * 64,
+        )
+
+    replace.assert_not_called()
+    assert not destination.exists()
+
+
 def test_check_attribution_v2_returns_sanitized_host_evidence_after_exact_reopen(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -146,7 +205,13 @@ def test_check_attribution_v2_returns_sanitized_host_evidence_after_exact_reopen
         length_bytes=len(observation_bytes),
     )
 
-    def fake_transfer(_serial: str, _package: str, _relative: str, destination: Path) -> None:
+    def fake_transfer(
+        _serial: str,
+        _package: str,
+        _relative: str,
+        destination: Path,
+        **_expected: object,
+    ) -> None:
         destination.write_bytes(observation_bytes)
 
     monkeypatch.setattr(check_m05b_attribution_v2, "transfer_reference", fake_transfer)
@@ -195,6 +260,137 @@ def test_valid_synthetic_observation_is_recorded_by_host_recomputation() -> None
     assert result["physical_evidence_status"] == "recorded"
     assert result["blocking_codes"] == []
     assert result["satisfies_s25_attribution_v2_gate"] is True
+
+
+def test_host_blocks_undersampled_arm_two_runs_before_admission() -> None:
+    from copy import deepcopy
+
+    observation = deepcopy(_valid_observation())
+    for replicate in observation["end_to_end_replicates"]:
+        for run in replicate["runs"]:
+            limit = run["cadence_fps"]
+            run["terminal_callbacks"] = run["terminal_callbacks"][:limit]
+            run["delivered_callback_ids"] = list(range(limit))
+            run["submitted_inference_ids"] = list(range(limit))
+
+    result = _classify(observation)
+
+    assert result["physical_evidence_status"] == "blocked"
+    assert "ATTRIBUTION.BACKEND_SAMPLE_INSUFFICIENT" in result["blocking_codes"]
+
+
+def test_host_requires_exactly_one_hundred_measured_arm_two_completions() -> None:
+    from copy import deepcopy
+
+    observation = deepcopy(_valid_observation())
+    for replicate in observation["end_to_end_replicates"]:
+        for run in replicate["runs"]:
+            callbacks = run["terminal_callbacks"][:-1]
+            run["terminal_callbacks"] = callbacks
+            run["delivered_callback_ids"] = list(range(len(callbacks)))
+            run["submitted_inference_ids"] = list(range(len(callbacks)))
+            run["measured_span_ns"] = callbacks[-1]["capture_timestamp_ns"]
+
+    result = _classify(observation)
+
+    assert "ATTRIBUTION.BACKEND_SAMPLE_INSUFFICIENT" in result["blocking_codes"]
+
+
+def test_host_replays_arm_two_phase_and_span_assertions_from_raw_terminals() -> None:
+    from copy import deepcopy
+
+    observation = deepcopy(_valid_observation())
+    run = observation["end_to_end_replicates"][0]["runs"][0]
+    run["terminal_callbacks"][20]["phase"] = "warmup"
+
+    result = _classify(observation)
+
+    assert "ATTRIBUTION.ADMISSION_STATE_DIVERGENCE" in result["blocking_codes"]
+
+
+def test_host_recomputes_arm_two_measured_span_from_ordered_capture_timestamps() -> None:
+    from copy import deepcopy
+
+    observation = deepcopy(_valid_observation())
+    observation["end_to_end_replicates"][0]["runs"][0]["measured_span_ns"] = 2_000_000_000
+
+    result = _classify(observation)
+
+    assert "ATTRIBUTION.END_TO_END_NOT_DISTINCT" in result["blocking_codes"]
+
+
+def test_host_blocks_any_arm_two_inference_failure_from_raw_terminals() -> None:
+    from copy import deepcopy
+
+    observation = deepcopy(_valid_observation())
+    observation["end_to_end_replicates"][0]["runs"][0]["terminal_callbacks"][0][
+        "terminal_class"
+    ] = "admitted_inference_failed"
+
+    result = _classify(observation)
+
+    assert "ATTRIBUTION.INFERENCE_FAILURE" in result["blocking_codes"]
+
+
+def test_host_evidence_is_structurally_sanitized_against_free_form_leakage() -> None:
+    from copy import deepcopy
+
+    observation = deepcopy(_valid_observation())
+    observation["device"]["device_identity"] = "SERIAL-PRIVATE/participant/media/landmark"
+    observation["identity"]["backend_version"] = "participant-media-landmark"
+    observation["end_to_end_replicates"][0]["runs"][0]["session_reference"] = (
+        "exports/00000000-0000-4000-8000-000000000099"
+    )
+
+    result = _classify(observation)
+    serialized = json.dumps(result, sort_keys=True)
+
+    assert "SERIAL-PRIVATE" not in serialized
+    assert "participant-media-landmark" not in serialized
+    assert "participant/media/landmark" not in serialized
+    assert result["observation"]["device"]["device_identity"].count("/") == 3
+
+
+def test_host_rejects_absolute_or_non_export_session_references() -> None:
+    from copy import deepcopy
+
+    for reference in ("/data/user/0/private/observation.json", "private/media.json"):
+        observation = deepcopy(_valid_observation())
+        observation["end_to_end_replicates"][0]["runs"][0]["session_reference"] = reference
+        with pytest.raises(check_m05b_attribution_v2.AttributionV2CheckError, match="schema"):
+            _classify(observation)
+
+
+def test_host_adapter_preserves_fractional_rate_ordering_without_flooring() -> None:
+    from copy import deepcopy
+
+    observation = _valid_observation()
+    replicates = deepcopy(observation["end_to_end_replicates"])
+    spans = {10: 1_100_000_000, 15: 2_100_000_000, 30: 3_100_000_000}
+    counts = {10: 1, 15: 2, 30: 3}
+    for replicate in replicates:
+        for run in replicate["runs"]:
+            cadence = run["cadence_fps"]
+            callback_count = 20 + counts[cadence]
+            run["terminal_callbacks"] = run["terminal_callbacks"][:callback_count]
+            run["terminal_callbacks"] = [
+                dict(callback, capture_timestamp_ns=index * spans[cadence] // (callback_count - 1))
+                for index, callback in enumerate(run["terminal_callbacks"])
+            ]
+            run["measured_span_ns"] = spans[cadence]
+
+    adapter = check_m05b_attribution_v2._validation_adapter(  # type: ignore[attr-defined]
+        observation,
+        observation["source_arm"],
+        observation["backend_arm"],
+        observation["selector_arm"],
+        replicates,
+        [10_000_000] * 100,
+        True,
+    )
+    issues = check_m05b_attribution_v2.validate_attribution_v2(adapter, "fractional.json")
+
+    assert "ATTRIBUTION.END_TO_END_NOT_DISTINCT" not in {issue.code for issue in issues}
 
 
 def test_host_rehashes_the_reopened_canonical_protocol(tmp_path: Path) -> None:
@@ -337,6 +533,22 @@ def test_host_reports_source_limitation_from_recorded_timestamps() -> None:
     observation["source_arm"]["timestamps_ns"] = [  # type: ignore[index]
         index * 1_000_000_000 for index in range(300)
     ]
+
+    assert "ATTRIBUTION.SOURCE_LIMITED" in _classify(observation)["blocking_codes"]
+
+
+def test_host_source_limitation_matches_any_target_rule_without_pure_validator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observation = _valid_observation()
+    observation["source_arm"]["timestamps_ns"] = [  # type: ignore[index]
+        index * 100_000_000 for index in range(300)
+    ]
+    monkeypatch.setattr(
+        check_m05b_attribution_v2,
+        "validate_attribution_v2",
+        lambda _document, _path: [],
+    )
 
     assert "ATTRIBUTION.SOURCE_LIMITED" in _classify(observation)["blocking_codes"]
 
@@ -546,17 +758,24 @@ def _valid_replicate(order: list[int], prefix: int) -> dict[str, object]:
     runs = []
     for index, cadence in enumerate(order):
         callbacks = []
-        for callback_id in range(cadence):
-            completion = 10_000_000 + callback_id * 1_000_000
+        measured_span = {10: 20_000_000_000, 15: 10_000_000_000, 30: 5_000_000_000}[cadence]
+        for callback_id in range(120):
+            warmup = callback_id < 20
+            completion = (
+                1_000_000_000 + callback_id * 100_000_000
+                if warmup
+                else 4_000_000_000 + (callback_id - 20) * 10_000_000
+            )
+            capture = callback_id * measured_span // 119
             callbacks.append(
                 {
                     "callback_id": callback_id,
-                    "capture_timestamp_ns": callback_id,
+                    "capture_timestamp_ns": capture,
                     "production_classification": "submit",
                     "cadence_due": True,
                     "slot_available": True,
                     "terminal_class": "admitted_completed",
-                    "phase": "measured",
+                    "phase": "warmup" if warmup else "measured",
                     "admission_observed_session_ns": completion - 100_000,
                     "completion_timestamp_ns": completion,
                 }
@@ -564,13 +783,16 @@ def _valid_replicate(order: list[int], prefix: int) -> dict[str, object]:
         runs.append(
             {
                 "cadence_fps": cadence,
-                "session_reference": f"attribution-v2/replicate-{prefix}/run-{cadence}",
+                "session_reference": (
+                    f"exports/00000000-0000-4000-8000-{prefix * 3 + index + 1:012d}"
+                ),
+                "arm_started_ns": 0,
                 "initial_thermal_status": 0,
                 "final_thermal_status": 0,
-                "measured_span_ns": 1_000_000_000,
-                "delivered_callback_ids": list(range(cadence)),
+                "measured_span_ns": measured_span,
+                "delivered_callback_ids": list(range(120)),
                 "terminal_callbacks": callbacks,
-                "submitted_inference_ids": list(range(cadence)),
+                "submitted_inference_ids": list(range(120)),
                 "pending_inference_ids": [],
             }
         )

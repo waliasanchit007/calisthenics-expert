@@ -113,6 +113,20 @@ class M05BAttributionV2Test {
         assertTrue(result.satisfiesGate)
     }
 
+    @Test
+    fun exactRateOrderingUsesCrossProductsWhenIntegerFloorsCollide() {
+        val runs = listOf(
+            rateRun(10, 1, 1_100_000_000L),
+            rateRun(15, 2, 2_100_000_000L),
+            rateRun(30, 3, 3_100_000_000L),
+        )
+
+        assertEquals(
+            mapOf(10 to 0L, 15 to 1L, 30 to 2L),
+            attributionV2ExactRateOrderValues(runs, admitted = true),
+        )
+    }
+
     private fun baseEvidence(
         source: AttributionV2SourceArm? = AttributionV2SourceArm(sourceTimestamps()),
         backend: AttributionV2BackendArm? = AttributionV2BackendArm(List(100) { 10_000_000L }, 0),
@@ -166,6 +180,29 @@ class M05BAttributionV2Test {
         cadenceOpportunityRates = mapOf(10 to 10L, 15 to 15L, 30 to 30L),
         sourceSupported = M05BAttributionV2Protocol.TARGET_CADENCES_FPS.associateWith { true },
         backendSupported = M05BAttributionV2Protocol.TARGET_CADENCES_FPS.associateWith { true },
+    )
+
+    private fun rateRun(cadence: Int, count: Int, spanNs: Long) = AttributionV2EndToEndRun(
+        cadenceFps = cadence,
+        sessionReference = "exports/00000000-0000-4000-8000-00000000000$cadence",
+        armStartedNs = 0L,
+        initialThermalStatus = 0,
+        finalThermalStatus = 0,
+        deliveredCallbackIds = (0 until count).map(Int::toLong),
+        terminalCallbacks = (0 until count).map { callbackId ->
+            AttributionV2Callback(
+                callbackId = callbackId.toLong(),
+                captureTimestampNs = callbackId.toLong() * spanNs / (count - 1).coerceAtLeast(1),
+                productionClassification = LiveFrameClassification.SUBMIT,
+                cadenceDue = true,
+                slotAvailable = true,
+                terminalClass = AttributionV2TerminalClass.ADMITTED_COMPLETED,
+                phase = AttributionV2CallbackPhase.MEASURED,
+            )
+        },
+        submittedInferenceIds = (0 until count).map(Int::toLong),
+        pendingInferenceIds = emptySet(),
+        measuredSpanNs = spanNs,
     )
 
     private fun classificationFor(terminal: AttributionV2TerminalClass): LiveFrameClassification = when (terminal) {
