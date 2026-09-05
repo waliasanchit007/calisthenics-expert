@@ -172,6 +172,26 @@ class M05BAttributionV2RunnerTest {
     }
 
     @Test
+    fun rawCallbackPreservesExactAdmissionObservedSessionTimestamp() {
+        val observation = AttributionV2Observation { _, _ -> AttributionV2CallbackPhase.MEASURED }
+        observation.onAdmission(
+            callbackId = 901L,
+            captureTimestampNs = 123L,
+            observedSessionNs = 4_000_000_000L,
+            productionClassification = LiveFrameClassification.SUBMIT,
+            productionPredicates = LiveAdmissionPredicates(cadenceDue = true, slotAvailable = true),
+        )
+        observation.onTerminal(
+            callbackId = 901L,
+            terminal = CallbackTerminalDisposition.INFERENCE_COMPLETED,
+            completedNs = 4_001_000_000L,
+        )
+
+        val callback = rawCallbacksFromObservedTerminals(observation).single()
+        assertEquals(4_000_000_000L, callback.admissionObservedSessionNs)
+    }
+
+    @Test
     fun backendRawEvidenceOverflowFailsClosedWithExistingCallbackConservationBlocker() {
         val backend = RecordingBackend(
             successfulBackendRun().copy(rawEvidenceOverflow = true),
@@ -512,6 +532,11 @@ private fun successfulBackendRun(
             slotAvailable = true,
             terminalClass = AttributionV2TerminalClass.ADMITTED_COMPLETED,
             phase = if (callbackId < 20L) AttributionV2CallbackPhase.WARMUP else AttributionV2CallbackPhase.MEASURED,
+            admissionObservedSessionNs = if (callbackId < 20L) {
+                1_999_000_000L + callbackId
+            } else {
+                2_999_000_000L + callbackId
+            },
             completionTimestampNs = if (callbackId < 20L) {
                 2_000_000_000L + callbackId
             } else {

@@ -281,6 +281,27 @@ private fun attributionV2BackendRawBlockers(value: AttributionV2BackendObservati
     }
     val warmup = completed.filter { it.phase == AttributionV2CallbackPhase.WARMUP }
     val measured = completed.filter { it.phase == AttributionV2CallbackPhase.MEASURED }
+    if (value.terminalCallbacks.any { callback ->
+            callback.admissionObservedSessionNs == null || callback.admissionObservedSessionNs < 0L
+        }
+    ) {
+        add("ATTRIBUTION.ADMISSION_STATE_DIVERGENCE")
+    }
+    val measuredDurationOperandsValid = measured.all { callback ->
+        val admissionNs = callback.admissionObservedSessionNs
+        val completionNs = callback.completionTimestampNs
+        admissionNs != null && completionNs != null && completionNs >= admissionNs
+    }
+    if (!measuredDurationOperandsValid) {
+        add("ATTRIBUTION.ADMISSION_STATE_DIVERGENCE")
+    } else {
+        val recomputedDurationsNs = measured.map { callback ->
+            checkNotNull(callback.completionTimestampNs) - checkNotNull(callback.admissionObservedSessionNs)
+        }
+        if (recomputedDurationsNs != value.measuredServiceDurationsNs) {
+            add("ATTRIBUTION.BACKEND_SAMPLE_INSUFFICIENT")
+        }
+    }
     val warmupElapsedNs = warmup.mapNotNull { it.completionTimestampNs }
         .maxOrNull()?.minus(value.armStartedNs) ?: 0L
     if (warmup.size < M05BAttributionV2Protocol.BACKEND_WARMUP_COMPLETIONS ||
@@ -409,6 +430,11 @@ private fun renderCallback(value: AttributionV2Callback): JsonObject = buildJson
     put("slot_available", value.slotAvailable)
     put("terminal_class", value.terminalClass.name.lowercase())
     if (value.phase == null) put("phase", null) else put("phase", value.phase.name.lowercase())
+    if (value.admissionObservedSessionNs == null) {
+        put("admission_observed_session_ns", null)
+    } else {
+        put("admission_observed_session_ns", value.admissionObservedSessionNs)
+    }
     if (value.completionTimestampNs == null) {
         put("completion_timestamp_ns", null)
     } else {

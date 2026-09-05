@@ -862,6 +862,7 @@ private fun List<AttributionV2ObservedAdmission>.toRawCallbacks(
             else -> AttributionV2TerminalClass.ADMISSION_STATE_DIVERGENCE
         },
         phase = terminal.phase,
+        admissionObservedSessionNs = admission.observedSessionNs,
         completionTimestampNs = terminal.completedNs,
     )
 }

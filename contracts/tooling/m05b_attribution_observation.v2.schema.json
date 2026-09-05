@@ -159,7 +159,7 @@
     "callback": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["callback_id", "capture_timestamp_ns", "production_classification", "cadence_due", "slot_available", "terminal_class", "phase", "completion_timestamp_ns"],
+      "required": ["callback_id", "capture_timestamp_ns", "production_classification", "cadence_due", "slot_available", "terminal_class", "phase", "admission_observed_session_ns", "completion_timestamp_ns"],
       "properties": {
         "callback_id": {"type": "integer", "minimum": 0},
         "capture_timestamp_ns": {"type": "integer", "minimum": 0},
@@ -168,6 +168,7 @@
         "slot_available": {"type": "boolean"},
         "terminal_class": {"enum": ["admitted_completed", "admitted_inference_failed", "cadence_only", "backpressure_only", "cadence_and_backpressure", "preprocessing_failed", "session_stopping", "admission_state_divergence"]},
         "phase": {"anyOf": [{"type": "null"}, {"enum": ["warmup", "measured"]}]},
+        "admission_observed_session_ns": {"anyOf": [{"type": "null"}, {"type": "integer", "minimum": 0}]},
         "completion_timestamp_ns": {"anyOf": [{"type": "null"}, {"type": "integer", "minimum": 0}]}
       }
     }

@@ -170,6 +170,7 @@ def test_observation_schema_is_closed_and_requires_non_participant_sanitization(
                                 "slot_available": True,
                                 "terminal_class": "cadence_only",
                                 "phase": "measured",
+                                "admission_observed_session_ns": None,
                                 "completion_timestamp_ns": None,
                             }
                         ],
@@ -190,6 +191,11 @@ def test_observation_schema_is_closed_and_requires_non_participant_sanitization(
     missing_terminals = deepcopy(observation)
     del missing_terminals["end_to_end_replicates"][0]["runs"][0]["terminal_callbacks"]
     assert list(validator.iter_errors(missing_terminals))
+    missing_admission_timestamp = deepcopy(observation)
+    del missing_admission_timestamp["end_to_end_replicates"][0]["runs"][0]["terminal_callbacks"][0][
+        "admission_observed_session_ns"
+    ]
+    assert list(validator.iter_errors(missing_admission_timestamp))
     absolute_reference = deepcopy(observation)
     absolute_reference["end_to_end_replicates"][0]["runs"][0]["session_reference"] = (
         "/data/user/0/private"

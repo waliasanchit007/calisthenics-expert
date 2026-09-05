@@ -24,6 +24,7 @@ data class AttributionV2Callback(
     val slotAvailable: Boolean,
     val terminalClass: AttributionV2TerminalClass,
     val phase: AttributionV2CallbackPhase? = null,
+    val admissionObservedSessionNs: Long? = null,
     val completionTimestampNs: Long? = null,
 )
 

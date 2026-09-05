@@ -6,6 +6,11 @@ import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 
 class M05BAttributionV2JsonTest {
     @Test
@@ -99,6 +104,108 @@ class M05BAttributionV2JsonTest {
         assertContains(rendered, "\"terminal_callbacks\"")
         assertContains(rendered, "\"phase\"")
         assertContains(rendered, "\"warmup_predicates\"")
+    }
+
+    @Test
+    fun rendererCarriesAdmissionObservedSessionTimestampAndRawDurationsRecomputeExactly() {
+        val declaredDurations = List(M05BAttributionV2Protocol.BACKEND_MEASURED_COMPLETIONS) {
+            1_000_000L
+        }
+        val callbacks = (0L until 120L).map { callbackId ->
+            val warmup = callbackId < M05BAttributionV2Protocol.BACKEND_WARMUP_COMPLETIONS
+            val admissionObservedSessionNs = if (warmup) {
+                2_000_000_000L + callbackId * 2_000_000L
+            } else {
+                3_000_000_000L +
+                    (callbackId - M05BAttributionV2Protocol.BACKEND_WARMUP_COMPLETIONS) * 2_000_000L
+            }
+            AttributionV2Callback(
+                callbackId = callbackId,
+                captureTimestampNs = callbackId * 33_333_333L,
+                productionClassification = LiveFrameClassification.SUBMIT,
+                cadenceDue = true,
+                slotAvailable = true,
+                terminalClass = AttributionV2TerminalClass.ADMITTED_COMPLETED,
+                phase = if (warmup) AttributionV2CallbackPhase.WARMUP else AttributionV2CallbackPhase.MEASURED,
+                admissionObservedSessionNs = admissionObservedSessionNs,
+                completionTimestampNs = admissionObservedSessionNs + 1_000_000L,
+            )
+        }
+        val backend = AttributionV2BackendObservation(
+            status = AttributionV2ArmStatus.RECORDED,
+            blockingCodes = emptyList(),
+            warmupCount = M05BAttributionV2Protocol.BACKEND_WARMUP_COMPLETIONS,
+            warmupElapsedNs = M05BAttributionV2Protocol.BACKEND_WARMUP_ELAPSED_NS,
+            measuredServiceDurationsNs = declaredDurations,
+            inferenceFailures = 0,
+            thermalStatus = 0,
+            armStartedNs = 0L,
+            deliveredCallbackIds = callbacks.map { it.callbackId },
+            terminalCallbacks = callbacks,
+            submittedInferenceIds = callbacks.map { it.callbackId },
+        )
+        val base = blockedObservation()
+        val observation = base.copy(
+            sourceArm = base.sourceArm.copy(initialCooldownRecovered = true),
+            backendArm = backend,
+        )
+        val rendered = renderM05BAttributionV2Evidence(
+            observation.copy(blockingCodes = deriveM05BAttributionV2BlockingCodes(observation)),
+        )
+        val renderedBackend = Json.parseToJsonElement(rendered).jsonObject
+            .getValue("backend_arm").jsonObject
+        val measuredCallbacks = renderedBackend.getValue("terminal_callbacks").jsonArray
+            .map { it.jsonObject }
+            .filter { it.getValue("phase").jsonPrimitive.content == "measured" }
+
+        assertEquals(
+            3_000_000_000L,
+            measuredCallbacks.first()["admission_observed_session_ns"]?.jsonPrimitive?.longOrNull,
+        )
+        val recomputedDurations = measuredCallbacks.map { callback ->
+            callback.getValue("completion_timestamp_ns").jsonPrimitive.content.toLong() -
+                callback.getValue("admission_observed_session_ns").jsonPrimitive.content.toLong()
+        }
+        assertEquals(declaredDurations, recomputedDurations)
+        assertEquals(
+            declaredDurations,
+            renderedBackend.getValue("service_durations_ns").jsonArray.map {
+                it.jsonPrimitive.content.toLong()
+            },
+        )
+        val mismatched = observation.copy(
+            backendArm = backend.copy(measuredServiceDurationsNs = List(100) { 2_000_000L }),
+        )
+        assertContains(
+            deriveM05BAttributionV2BlockingCodes(mismatched),
+            "ATTRIBUTION.BACKEND_SAMPLE_INSUFFICIENT",
+        )
+        val missingAdmission = observation.copy(
+            backendArm = backend.copy(
+                terminalCallbacks = callbacks.map { callback ->
+                    if (callback.callbackId == 20L) callback.copy(admissionObservedSessionNs = null) else callback
+                },
+            ),
+        )
+        assertContains(
+            deriveM05BAttributionV2BlockingCodes(missingAdmission),
+            "ATTRIBUTION.ADMISSION_STATE_DIVERGENCE",
+        )
+        val invalidAdmission = observation.copy(
+            backendArm = backend.copy(
+                terminalCallbacks = callbacks.map { callback ->
+                    if (callback.callbackId == 20L) {
+                        callback.copy(admissionObservedSessionNs = checkNotNull(callback.completionTimestampNs) + 1L)
+                    } else {
+                        callback
+                    }
+                },
+            ),
+        )
+        assertContains(
+            deriveM05BAttributionV2BlockingCodes(invalidAdmission),
+            "ATTRIBUTION.ADMISSION_STATE_DIVERGENCE",
+        )
     }
 
     @Test
