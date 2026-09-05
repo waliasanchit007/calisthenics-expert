@@ -11,6 +11,20 @@ import kotlin.test.*
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class MovementViewerActivityLifecycleTest {
+    @Test fun operatorCameraStartAutomaticallyRecordsAndStopDisablesCollection() {
+        val owner = Robolectric.buildActivity(MovementViewerActivity::class.java).setup()
+        try {
+            val activity = owner.get()
+            org.robolectric.Shadows.shadowOf(activity.application).grantPermissions(android.Manifest.permission.CAMERA)
+            assertNull(activity.startViewer(ViewerInput.CAMERA))
+            assertFalse(activity.diagnosticsEnabled)
+            activity.attestedCameraScope = true
+            assertNotNull(activity.startViewer(ViewerInput.CAMERA))
+            assertTrue(activity.diagnosticsEnabled)
+            activity.stopViewer()
+            assertFalse(activity.diagnosticsEnabled)
+        } finally { owner.pause().stop().destroy() }
+    }
     @Test fun freshPrivateMarkerEnablesVisibleDebugDiagnostics() {
         val context = org.robolectric.RuntimeEnvironment.getApplication()
         val marker = java.io.File(context.noBackupFilesDir,"movement-diagnostics.enabled")

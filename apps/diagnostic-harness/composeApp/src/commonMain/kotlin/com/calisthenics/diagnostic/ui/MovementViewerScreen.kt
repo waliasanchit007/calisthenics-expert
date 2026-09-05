@@ -7,7 +7,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -52,8 +52,16 @@ fun MovementViewerScreen(
     movementPanel: (@Composable () -> Unit)? = null,
     diagnosticsStatus: String? = null,
     onDisableDiagnostics: (() -> Unit)? = null,
+    feedbackRecordingEnabled: Boolean = false,
+    onDeleteRecordings: (() -> Unit)? = null,
 ) {
+    var confirmDelete by remember { mutableStateOf(false) }
     MaterialTheme(colorScheme = darkColorScheme(primary = Color(0xFF72E8BF))) {
+        if (confirmDelete) AlertDialog(onDismissRequest = { confirmDelete=false },
+            title = { Text("Delete local recordings?") },
+            text = { Text("Deletes this app's feedback sessions from this phone. Copies already on the Mac are not deleted.") },
+            confirmButton = { TextButton(onClick = { confirmDelete=false; onDeleteRecordings?.invoke() }) { Text("Delete") } },
+            dismissButton = { TextButton(onClick = { confirmDelete=false }) { Text("Cancel") } })
         Surface(Modifier.fillMaxSize()) {
             Column(Modifier.safeDrawingPadding().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("CALISTHENICS • EXPLORER", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
@@ -94,22 +102,26 @@ fun MovementViewerScreen(
                 Text("${state.source} · ${state.landmarks.size}/33 landmark observations")
                 Text("Completed ${state.completed} · submitted ${state.submitted} · skipped ${state.skipped}", style = MaterialTheme.typography.bodySmall)
                 Text(state.performance, style = MaterialTheme.typography.bodySmall)
-                Text(if (livePreview != null) "Continuous preview · latest pose, not frame-synchronized. Short tracking gaps hold the last pose; it fades out by 500 ms from capture. No recording or upload." else "Paired synthetic frames follow inference. Images and landmarks clear on stop. No recording or upload.", style = MaterialTheme.typography.bodySmall)
+                Text(if (livePreview != null) "Continuous preview · latest pose, not frame-synchronized. Short tracking gaps hold the last pose; it fades out by 500 ms from capture. Recording status is shown above. No uploads." else "Paired synthetic frames follow inference. Display clears on stop. No uploads.", style = MaterialTheme.typography.bodySmall)
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Button(onClick = onSynthetic, enabled = !state.active) { Text("Try synthetic figure") }
                     OutlinedButton(onClick = onStop, enabled = state.active) { Text("Stop") }
                 }
                 HorizontalDivider()
                 Text("Movement self-test", style = MaterialTheme.typography.titleMedium)
-                Text("Authorized adult self-test only, or an empty/synthetic scene. Keep bystanders out of view. No app image/video recording or uploads. When diagnostics are ON, derived measurements are logged locally. System screenshots and screen recordings are allowed and may retain camera images outside the app. Stop whenever you want.", style = MaterialTheme.typography.bodySmall)
+                Text("Authorized adult self-test only, or an empty/synthetic scene. Keep bystanders out of view. " +
+                    if (feedbackRecordingEnabled) "Starting the camera automatically saves up to 3 minutes of model-input images, landmarks and decision logs for local debugging and Mac retrieval. No audio or cloud uploads. Stop or disable collection any time. System screenshots remain allowed."
+                    else "No app image/video recording or uploads. System screenshots and screen recordings remain allowed.", style = MaterialTheme.typography.bodySmall)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(state.attestedCameraScope, onCheckedChange = onAttestation, enabled = !state.active)
-                    Text("Only me, a consenting adult, or an empty/synthetic scene is in view. I agree to transient on-device processing without recording.", style = MaterialTheme.typography.bodySmall)
+                    Text(if (feedbackRecordingEnabled) "Only me, a consenting adult, or an empty/synthetic scene is in view. I agree to local image and movement-log collection for this session."
+                        else "Only me, a consenting adult, or an empty/synthetic scene is in view. I agree to transient on-device processing without recording.", style = MaterialTheme.typography.bodySmall)
                 }
                 if (!state.cameraPermission) {
                     OutlinedButton(onClick = onPermission, enabled = !state.active) { Text("Allow camera") }
                 }
                 Button(onClick = onCamera, enabled = !state.active && state.cameraPermission && state.attestedCameraScope) { Text("Start camera viewer") }
+                if (onDeleteRecordings != null) TextButton(onClick = { confirmDelete=true }) { Text("Delete local recordings") }
                 movementPanel?.invoke()
                 Text("Repetitions · holds · transitions\nManual pull-up cycle experiment only. No automatic movement recognition or form claims.", style = MaterialTheme.typography.bodySmall)
             }

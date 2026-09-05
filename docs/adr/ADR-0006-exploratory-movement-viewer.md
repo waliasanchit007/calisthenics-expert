@@ -12,10 +12,40 @@ admitted preprocessing and MediaPipe primitives. Do not route it through empty-s
 construct study manifests/exports, or alter historical blocked evidence. Allow synthetic fixture
 input and attested non-participant camera scenes. Separately authorized self-tests may process
 one consenting adult operator transiently on-device, without bystanders, app-managed recording,
-upload, retention or agent inspection of human frames. The operator starts/stops the camera locally;
+upload, retention or agent inspection of human frames, except for the subsequently approved
+automatic creator feedback amendment below. The operator starts/stops the camera locally;
 fresh scope confirmation is required after stop/background/error. This is not a formal study.
 
 ### Opt-in local debugging exception
+
+#### Automatic creator feedback amendment (2026-09-06)
+
+The owner authorized implementing automatic local collection for the adult-operated self-test,
+including images, without a separate debug-attempt or manual export step. This supersedes the
+numeric-only marker requirement below **for the debug-build camera viewer only**. Fresh in-app
+self-test attestation and operator camera start remain required; the pre-start notice explicitly
+states that model-input images and movement observations are retained. Release builds retain the
+RAM-only default. Formal study/participant gates are unchanged.
+
+During camera use retain up to three minutes / 64 MiB of exact analyzer inputs, controls and
+decisions, raw normalized model landmarks and lossy JPEGs of the corresponding 256x256 model RGB
+input. Session UUID, monotonic capture timestamp and input RGB digest bind the streams; JPEG has its
+own digest and is visual context, not a lossless oracle. Do not equate missing images with missing
+pose input. This is a sampled image sequence, not full-rate video, audio or camera-roll capture.
+Formatting/compression/I/O use bounded workers. Report queue loss, sequence gaps, limits and terminal
+reason explicitly; an absent terminal artifact means unfinalized, not complete. No held overlay
+feeds evidence or analysis. No rule/threshold changes are part of this amendment.
+
+Files stay in private no-backup app storage, distinct from study exports. Refuse new capture when
+the retained store cannot reserve a session within 256 MiB; never silently delete old sessions.
+Stop/background/disable ends collection and drains accepted writer work. A visible status names
+capacity/error conditions. Provide explicit local-record deletion, explaining that already copied
+Mac files remain. The host read-only ADB collector validates paths, hashes, complete rows and
+counters, stores files outside Git with private permissions, and produces local attempt reports.
+No automatic cloud upload or media in Git is needed or added, even where owner sharing is permitted.
+Individual authorization and personal evidence remain separate from source/policy history.
+
+The historical marker/logcat mode below remains available for numeric-only transport testing.
 
 The owner approved a direct diagnostic feedback loop for separately authorized adult self-tests.
 Only debug builds may enable it, through a fresh marker in the app's private no-backup directory
@@ -48,7 +78,7 @@ for the explicitly authorized debugging purpose and remove them when that purpos
 The owner-approved screen-capture policy supersedes the original screenshot prohibition: do not
 enable Android `FLAG_SECURE` anywhere in the app, including launch, live camera, stop and error
 states. User-controlled system screenshots and screen recordings are allowed and can retain camera
-images outside the app; the in-app notice states this limitation. This does not introduce app-owned
+images outside the app; the in-app notice states this limitation. This screen policy alone does not introduce app-owned
 recording/upload or authorize agent capture/retention of human frames or a formal study release.
 
 The original paired-image mode remains for synthetic debugging. The owner-approved smooth-viewer

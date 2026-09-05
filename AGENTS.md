@@ -19,9 +19,13 @@ authorized adult-operated self-test with fresh in-app confirmation and no bystan
 processing by the app is the default: no app-retained observations, agent screenshots of people,
 uploads, or formal study admission. The owner-approved ADR-0006 debug-diagnostics exception permits
 explicitly authorized, time-limited numeric movement/state traces through local ADB, outside Git;
-it does not permit images, video or audio. The owner-approved screen-capture amendment allows user-controlled
-system screenshots/screen recordings throughout the app; never enable `FLAG_SECURE`. This does not
-authorize agents to capture or retain human images. Keep individual authorization/consent records
+the 2026-09-06 automatic-creator-feedback amendment additionally permits debug-build operator-started
+self-test bundles containing model-input images, normalized landmarks and exact decision traces,
+with the limits and local-only retrieval in ADR-0006. It does not permit audio or automatic uploads.
+The owner-approved screen-capture amendment allows user-controlled
+system screenshots/screen recordings throughout the app; never enable `FLAG_SECURE`. That screen
+policy alone does not authorize agent capture; the feedback amendment is a separate scoped path.
+Keep individual authorization/consent records
 outside tracked files. Shared components must remain exercise-independent.
 Work directly in Calisthenics; Buzz is not a prerequisite. The formal study gate below remains
 authoritative for study artifacts and is not satisfied by exploratory viewer results.

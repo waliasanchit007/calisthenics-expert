@@ -15,6 +15,24 @@ import kotlin.test.*
 @RunWith(RobolectricTestRunner::class)
 @org.robolectric.annotation.Config(sdk = [35])
 class ViewerDiagnosticLogTest {
+    @Test fun exactModePreservesTwoFreshInputsInsideRateWindowAndTheirClock() {
+        val rows = java.util.concurrent.CopyOnWriteArrayList<JSONObject>()
+        val latch = CountDownLatch(2)
+        val logger = ViewerDiagnosticLog("test",0,emit = { rows += JSONObject(it); latch.countDown() },
+            exact = true, sessionId = "paired-session")
+        try {
+            for (capture in listOf(10L,20L)) logger.record(ViewerDebugEvent.SAMPLE,capture+1,
+                MovementMeasurements(capture,ArmMeasurements(90.234,.00123,.91234),ArmMeasurements(),3),
+                PullUpExperimentState(),null,MovementFeedStatus.FRESH,10,0,0,0)
+            assertTrue(latch.await(3,TimeUnit.SECONDS))
+            assertEquals(2,rows.size)
+            assertEquals(90.234,rows[0].getDouble("left_elbow_deg"))
+            assertEquals(.00123,rows[0].getDouble("left_wrist_height"))
+            assertEquals(10,rows[0].getLong("capture_ns"))
+            assertEquals(11,rows[0].getLong("decision_ns"))
+            assertEquals("paired-session",rows[0].getString("session"))
+        } finally { logger.close() }
+    }
     @Test fun enableRequiresDebugBuildAndFreshPrivateMarker() {
         val dir = java.nio.file.Files.createTempDirectory("viewer-debug-test").toFile()
         val marker = File(dir,"enabled")

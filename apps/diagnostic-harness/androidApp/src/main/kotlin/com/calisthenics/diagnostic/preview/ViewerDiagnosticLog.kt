@@ -28,26 +28,34 @@ internal data class ViewerJointConfidence(val leftVisibility: Double? = null, va
 internal class ViewerDiagnosticLog(
     private val build: String,
     private val originNs: Long,
+    private val exact: Boolean = false,
+    private val sessionId: String = UUID.randomUUID().toString(),
+    private val onClosed: () -> Unit = {},
     private val emit: (String) -> Unit = { Log.i("CalisthenicsTrace",it); Unit },
 ) : AutoCloseable {
-    private val session = UUID.randomUUID().toString()
+    private val session = sessionId
     private val drops = AtomicLong()
     val droppedRows: Long get() = drops.get()
     private var suppressed = 0L
     private var sequence = 0L
     private var lastEmittedNs: Long? = null
     private var previousState: List<Any?>? = null
-    private val writer = ThreadPoolExecutor(1,1,0,TimeUnit.MILLISECONDS,ArrayBlockingQueue(64),
-        { task -> Thread(task,"viewer-diagnostic-writer").apply { isDaemon = true } })
+    private val writer = object : ThreadPoolExecutor(1,1,0,TimeUnit.MILLISECONDS,ArrayBlockingQueue(64),
+        { task -> Thread(task,"viewer-diagnostic-writer").apply { isDaemon = true } }) {
+        override fun terminated() { onClosed() }
+    }
 
     @Synchronized fun record(
         event: ViewerDebugEvent, nowNs: Long, measurements: MovementMeasurements?,
         state: PullUpExperimentState, issue: ExperimentInputIssue?, feed: MovementFeedStatus,
         gapNs: Long?, submitted: Int, completed: Int, pipelineSkipped: Int,
         jointConfidence: ViewerJointConfidence = ViewerJointConfidence(), performance: ViewerPerformance? = null,
+        observation: ViewerObservation? = null,
     ) {
         if (writer.isShutdown) return
-        val signature = listOf(state.stage,state.phase,state.candidateCycles,state.failure,issue)
+        val signature = listOf(state.stage,state.phase,state.candidateCycles,state.failure,issue,
+            if (exact) observation?.capturedNs ?: measurements?.capturedNs else null,
+            if (exact) feed else null)
         if (event == ViewerDebugEvent.SAMPLE && signature == previousState &&
             lastEmittedNs?.let { nowNs - it in 0 until 100_000_000L } == true) {
             suppressed++; return
@@ -60,12 +68,16 @@ internal class ViewerDiagnosticLog(
             writer.execute {
                 try {
                     fun numeric(value: Double?, step: Double? = null): Any =
-                        value?.takeIf { it.isFinite() }?.let { if (step == null) it else round(it / step) * step }
+                        value?.takeIf { it.isFinite() }?.let { if (step == null || exact) it else round(it / step) * step }
                             ?: JSONObject.NULL
                     val row = JSONObject()
-                        .put("v",1).put("session",session).put("seq",seq).put("build",build)
+                        .put("v",if (exact) 2 else 1).put("session",session).put("seq",seq).put("build",build)
                         .put("logging_enabled",true).put("sample_interval_ms",100)
-                        .put("angle_quantum_deg",.5).put("height_quantum",.005)
+                        .put("angle_quantum_deg",if (exact) 0 else .5).put("height_quantum",if (exact) 0 else .005)
+                        .put("capture_ns",measurements?.capturedNs ?: JSONObject.NULL)
+                        .put("decision_ns",nowNs)
+                        .put("observation_capture_ns",observation?.capturedNs ?: JSONObject.NULL)
+                        .put("input_rgb_sha256",if (exact && observation != null) feedbackSha(observation.frame.modelRgb) else JSONObject.NULL)
                         .put("event",event.name).put("elapsed_ms",(nowNs-originNs)/1_000_000.0)
                         .put("capture_ms",numeric(measurements?.let { (it.capturedNs-originNs)/1_000_000.0 }))
                         .put("age_ms",numeric(measurements?.let { (nowNs-it.capturedNs)/1_000_000.0 }))
