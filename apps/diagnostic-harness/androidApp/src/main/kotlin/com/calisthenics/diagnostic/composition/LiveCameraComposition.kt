@@ -99,6 +99,7 @@ import com.calisthenics.diagnostic.study.M05AdmissionResult
 import com.calisthenics.diagnostic.study.M05BBoundArtifact
 import com.calisthenics.diagnostic.study.M05BBoundAttemptEntry
 import com.calisthenics.diagnostic.study.AttributionV2RunIdentity
+import com.calisthenics.diagnostic.study.AttributionV2FpsRange
 import com.calisthenics.diagnostic.study.M05BDurableAdmissionBoundary
 import com.calisthenics.diagnostic.study.M05BExecutionOrder
 import com.calisthenics.diagnostic.study.M05BObservedStart
@@ -930,6 +931,7 @@ class LiveCameraComposition internal constructor(
                     terminalTimestamp,
                     com.calisthenics.diagnostic.live.LiveFrameClassification.SESSION_STOPPING,
                     currentAdmission,
+                    frame = frame,
                 )
                 return@synchronized FrameWork(
                     runner = currentRunner,
@@ -948,6 +950,7 @@ class LiveCameraComposition internal constructor(
                     terminalTimestamp,
                     com.calisthenics.diagnostic.live.LiveFrameClassification.PREPROCESSING_FAILED,
                     currentAdmission,
+                    frame = frame,
                 )
                 return@synchronized FrameWork(
                     runner = currentRunner,
@@ -971,6 +974,7 @@ class LiveCameraComposition internal constructor(
                     rebasedCaptureNs,
                     com.calisthenics.diagnostic.live.LiveFrameClassification.PREPROCESSING_FAILED,
                     currentAdmission,
+                    frame = frame,
                 )
                 return@synchronized FrameWork(
                     currentRunner,
@@ -989,6 +993,7 @@ class LiveCameraComposition internal constructor(
                     rebasedCaptureNs,
                     com.calisthenics.diagnostic.live.LiveFrameClassification.PREPROCESSING_FAILED,
                     currentAdmission,
+                    frame = frame,
                 )
                 return@synchronized FrameWork(
                     currentRunner,
@@ -1022,6 +1027,7 @@ class LiveCameraComposition internal constructor(
                 classification,
                 currentAdmission,
                 productionPredicates,
+                frame,
             )
             when (classification) {
                 com.calisthenics.diagnostic.live.LiveFrameClassification.SUBMIT ->
@@ -1215,7 +1221,21 @@ class LiveCameraComposition internal constructor(
         currentAdmission: LiveFrameAdmissionPort,
         predicates: com.calisthenics.diagnostic.live.LiveAdmissionPredicates =
             currentAdmission.predicates(captureTimestampNs),
+        frame: OwnedYuvFrame? = null,
     ) {
+        dependencies.attributionV2Observer?.onFrameConfiguration(
+            callbackId = callbackId,
+            configuration = frame?.let {
+                AttributionV2ObservedFrameConfiguration(
+                    deliveredWidth = it.width,
+                    deliveredHeight = it.height,
+                    deliveredFormat = "YUV_420_888",
+                    negotiatedCameraFpsRange = it.observedAeTargetFpsRange?.let { range ->
+                        AttributionV2FpsRange(range.lower, range.upper)
+                    },
+                )
+            },
+        )
         dependencies.attributionV2Observer?.onAdmission(
             callbackId = callbackId,
             captureTimestampNs = captureTimestampNs,
@@ -2006,8 +2026,8 @@ class LiveCameraComposition internal constructor(
                                 bitRate = VIDEO_BIT_RATE,
                                 onReleased = { storagePort.closeVideoDescriptor(attempt) },
                             )
-                        }
-                    },
+                }
+            },
                     finalizedVideoObserver = if (!recordVideo) {
                         null
                     } else {

@@ -90,6 +90,7 @@ class M05BAttributionV2DeviceGateTest {
                                 Uuid("00000000-0000-4000-8000-${nextSessionSuffix.getAndIncrement().toString(16).padStart(12, '0')}")
                             },
                             identity = identity,
+                            environmentSnapshot = environment::snapshot,
                         )
                     },
                     selector = M05BAttributionV2Selector { timestamps, cadence ->

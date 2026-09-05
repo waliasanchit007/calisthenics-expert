@@ -495,20 +495,23 @@ class M05BAttributionV2Runner(
                     result.measuredServiceDurationsNs.size != M05BAttributionV2Protocol.BACKEND_MEASURED_COMPLETIONS
                 ) blockers += "ATTRIBUTION.BACKEND_SAMPLE_INSUFFICIENT"
                 if (result.inferenceFailures != 0) blockers += "ATTRIBUTION.INFERENCE_FAILURE"
-                val run = result.endToEndRun?.copy(
-                    cadenceFps = cadence,
-                    initialThermalStatus = result.initialThermalStatus,
-                    finalThermalStatus = result.finalThermalStatus,
-                    environment = result.environment ?: AttributionV2EnvironmentBoundary(
-                        armStartedNs = result.armStartedNs,
-                        armEndedNs = maxOf(result.armStartedNs, dependencies.clock.nowNs()),
-                        start = dependencies.environmentSnapshot(),
-                        end = dependencies.environmentSnapshot(),
-                    ),
-                    sessionBundle = result.sessionBundle,
-                )
+                val run = result.endToEndRun?.let { endToEnd ->
+                    val environment = result.environment
+                    if (environment == null) {
+                        blockers += "ATTRIBUTION.ENVIRONMENT_MISMATCH"
+                        null
+                    } else {
+                        endToEnd.copy(
+                            cadenceFps = cadence,
+                            initialThermalStatus = result.initialThermalStatus,
+                            finalThermalStatus = result.finalThermalStatus,
+                            environment = environment,
+                            sessionBundle = result.sessionBundle,
+                        )
+                    }
+                }
                 if (run == null) {
-                    blockers += "ATTRIBUTION.REPLICATE_DISAGREEMENT"
+                    if (result.endToEndRun == null) blockers += "ATTRIBUTION.REPLICATE_DISAGREEMENT"
                 } else {
                     runs += run
                     blockers += attributionV2CallbackBlockers(
@@ -818,9 +821,11 @@ internal class AndroidM05BAttributionV2Backend(
     private val storage: M05BAttributionV2ArtifactStorage,
     private val sessionIdProvider: () -> Uuid,
     private val identity: AttributionV2RunIdentity,
+    private val environmentSnapshot: () -> AttributionV2EnvironmentSnapshot,
 ) : M05BAttributionV2Backend {
     override fun run(spec: BackendRunSpec): BackendRunResult {
         val startedAtNs = SystemClock.elapsedRealtimeNanos()
+        val environmentStartRaw = environmentSnapshot()
         val phaseMachine = M05BAttributionV2BackendPhaseMachine(
             warmupCompletions = spec.warmupCompletions,
             warmupElapsedNs = spec.warmupElapsedNs,
@@ -883,6 +888,20 @@ internal class AndroidM05BAttributionV2Backend(
             completion = composition.stop()
         }
         val elapsedNs = SystemClock.elapsedRealtimeNanos() - startedAtNs
+        val environmentEndRaw = environmentSnapshot()
+        val observedConfiguration = observer.observedFrameConfigurationBoundary()
+        val environmentFailureCode = when {
+            observedConfiguration.missing -> "ATTRIBUTION.ENVIRONMENT_MISMATCH"
+            !observedConfiguration.consistent -> "ATTRIBUTION.SOURCE_CONFIGURATION"
+            else -> null
+        }
+        val observedEnvironment = attributionV2EnvironmentBoundaryFromObservedConfiguration(
+            armStartedNs = startedAtNs,
+            armEndedNs = startedAtNs + elapsedNs,
+            start = environmentStartRaw,
+            end = environmentEndRaw,
+            observed = observedConfiguration,
+        )
         val admissions = observer.admissionSnapshot()
         val terminals = observer.terminalSnapshot()
         phaseSnapshot = phaseMachine.observe(
@@ -943,6 +962,8 @@ internal class AndroidM05BAttributionV2Backend(
                 .filterNot { callbackId -> boundedTerminals.any { it.callbackId == callbackId } }
                 .toSet(),
             rawEvidenceOverflow = rawOverflow,
+            failureCode = environmentFailureCode,
+            environment = observedEnvironment,
             sessionBundle = completion?.sessionId?.value?.let { sessionId ->
                 storage.publishedSessionBundle("exports/$sessionId")
             },

@@ -7,6 +7,7 @@ import com.calisthenics.diagnostic.live.LiveFrameAdmission
 import com.calisthenics.diagnostic.live.LiveFrameAdmissionPort
 import com.calisthenics.diagnostic.live.LiveFrameClassification
 import com.calisthenics.diagnostic.camera.OwnedYuvFrame
+import com.calisthenics.diagnostic.camera.SourceFpsRange
 import com.calisthenics.diagnostic.camera.CameraXFrameSource
 import com.calisthenics.diagnostic.contract.Landmark
 import com.calisthenics.diagnostic.contract.RawPoseFrame
@@ -62,6 +63,31 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.system.measureTimeMillis
 
 class LiveCameraCompositionTest {
+
+    @Test
+    fun attributionV2AdmissionCarriesActualFrameConfiguration() {
+        val observer = RecordingAttributionV2Observer()
+        withHarness(Harness(attributionV2Observer = observer)) { harness ->
+            assertIs<LiveCameraStartResult.Started>(harness.start(30))
+
+            harness.source.emit(
+                frame(
+                    timestampNs = 1_000_002_000L,
+                    observedAeTargetFpsRange = SourceFpsRange(24, 30),
+                ),
+            )
+
+            val configuration = observer.admissions.single().configuration
+            assertEquals(2, configuration?.deliveredWidth)
+            assertEquals(2, configuration?.deliveredHeight)
+            assertEquals("YUV_420_888", configuration?.deliveredFormat)
+            assertEquals(
+                com.calisthenics.diagnostic.study.AttributionV2FpsRange(24, 30),
+                configuration?.negotiatedCameraFpsRange,
+            )
+            assertNotEquals(1280, configuration?.deliveredWidth)
+        }
+    }
 
     @Test
     fun attributionV2ObservesPredicatesBeforeProductionReservationAndOneTerminal() {
@@ -2093,6 +2119,7 @@ class LiveCameraCompositionTest {
             val callbackId: Long,
             val classification: LiveFrameClassification,
             val predicates: LiveAdmissionPredicates,
+            val configuration: AttributionV2ObservedFrameConfiguration?,
         )
 
         data class Terminal(val callbackId: Long, val terminal: CallbackTerminalDisposition)
@@ -2100,6 +2127,14 @@ class LiveCameraCompositionTest {
         val admissions = mutableListOf<Admission>()
         val terminals = mutableListOf<Terminal>()
         val order = mutableListOf<String>()
+        private val configurations = mutableMapOf<Long, AttributionV2ObservedFrameConfiguration?>()
+
+        override fun onFrameConfiguration(
+            callbackId: Long,
+            configuration: AttributionV2ObservedFrameConfiguration?,
+        ) {
+            configurations[callbackId] = configuration
+        }
 
         override fun onAdmission(
             callbackId: Long,
@@ -2108,7 +2143,12 @@ class LiveCameraCompositionTest {
             productionClassification: LiveFrameClassification,
             productionPredicates: LiveAdmissionPredicates,
         ) {
-            admissions += Admission(callbackId, productionClassification, productionPredicates)
+            admissions += Admission(
+                callbackId,
+                productionClassification,
+                productionPredicates,
+                configurations.remove(callbackId),
+            )
             order += "admission:$callbackId"
         }
 
@@ -2535,6 +2575,7 @@ class LiveCameraCompositionTest {
             timestampNs: Long = 1_000_002_000L,
             rotation: FrameRotation = FrameRotation.R0,
             mirrored: Boolean = false,
+            observedAeTargetFpsRange: SourceFpsRange? = null,
         ) = OwnedYuvFrame(
             yBytes = ByteArray(width * height) { 100.toByte() },
             yRowStride = width,
@@ -2553,6 +2594,7 @@ class LiveCameraCompositionTest {
             colorStandard = YuvColorStandard.BT601,
             colorRange = YuvColorRange.FULL,
             timestampNs = timestampNs,
+            observedAeTargetFpsRange = observedAeTargetFpsRange,
         )
 
         fun malformedFrame(timestampNs: Long) = OwnedYuvFrame(

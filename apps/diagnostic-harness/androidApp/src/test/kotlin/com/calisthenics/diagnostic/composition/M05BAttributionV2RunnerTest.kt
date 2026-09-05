@@ -14,6 +14,7 @@ import com.calisthenics.diagnostic.study.renderM05BAttributionV2Evidence
 import com.calisthenics.diagnostic.telemetry.CallbackTerminalDisposition
 import com.calisthenics.diagnostic.study.M05BAttributionV2Protocol
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
@@ -282,6 +283,146 @@ class M05BAttributionV2RunnerTest {
         assertTrue(result.observation.blockingCodes.contains("ATTRIBUTION.CALLBACK_CONSERVATION"))
         assertEquals(0, selector.invocations)
         assertTrue(result.observation.endToEndReplicates.isEmpty())
+    }
+
+    @Test
+    fun backendEnvironmentUsesDivergentObservedFrameConfigurationInsteadOfDefaults() {
+        val defaults = com.calisthenics.diagnostic.study.AttributionV2EnvironmentSnapshot()
+        val observed = AttributionV2ObservedFrameConfiguration(
+            deliveredWidth = 1920,
+            deliveredHeight = 1080,
+            deliveredFormat = "YUV_420_888",
+            negotiatedCameraFpsRange =
+                com.calisthenics.diagnostic.study.AttributionV2FpsRange(24, 30),
+        )
+        val observation = AttributionV2Observation()
+        observation.onFrameConfiguration(callbackId = 17L, configuration = observed)
+        observation.onAdmission(
+            callbackId = 17L,
+            captureTimestampNs = 100L,
+            observedSessionNs = 200L,
+            productionClassification = LiveFrameClassification.SUBMIT,
+            productionPredicates = LiveAdmissionPredicates(cadenceDue = true, slotAvailable = true),
+        )
+        val boundary = observation.observedFrameConfigurationBoundary()
+
+        val environment = checkNotNull(attributionV2EnvironmentBoundaryFromObservedConfiguration(
+            armStartedNs = 10L,
+            armEndedNs = 20L,
+            start = defaults,
+            end = defaults,
+            observed = boundary,
+        ))
+
+        assertEquals(1920, environment.start.deliveredWidth)
+        assertEquals(1080, environment.start.deliveredHeight)
+        assertEquals(
+            com.calisthenics.diagnostic.study.AttributionV2FpsRange(24, 30),
+            environment.start.negotiatedCameraFpsRange,
+        )
+        assertEquals(1920, environment.end.deliveredWidth)
+        assertEquals(1080, environment.end.deliveredHeight)
+        assertEquals(
+            com.calisthenics.diagnostic.study.AttributionV2FpsRange(24, 30),
+            environment.end.negotiatedCameraFpsRange,
+        )
+        assertTrue(environment.start.deliveredWidth != 1280)
+    }
+
+    @Test
+    fun missingObservedFrameConfigurationCannotProduceBackendEnvironment() {
+        val defaults = com.calisthenics.diagnostic.study.AttributionV2EnvironmentSnapshot()
+        val observed = AttributionV2ObservedFrameConfiguration(
+            deliveredWidth = 1920,
+            deliveredHeight = 1080,
+            deliveredFormat = "YUV_420_888",
+            negotiatedCameraFpsRange =
+                com.calisthenics.diagnostic.study.AttributionV2FpsRange(24, 30),
+        )
+
+        assertNull(
+            attributionV2EnvironmentBoundaryFromObservedConfiguration(
+                armStartedNs = 10L,
+                armEndedNs = 20L,
+                start = defaults,
+                end = defaults,
+                observed = AttributionV2ObservedFrameConfigurationBoundary(
+                    start = observed,
+                    end = observed,
+                    missing = true,
+                    consistent = false,
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun missingObservedFpsCannotProduceBackendEnvironment() {
+        val defaults = com.calisthenics.diagnostic.study.AttributionV2EnvironmentSnapshot()
+        val observed = AttributionV2ObservedFrameConfiguration(
+            deliveredWidth = 1920,
+            deliveredHeight = 1080,
+            deliveredFormat = "YUV_420_888",
+            negotiatedCameraFpsRange = null,
+        )
+
+        assertNull(
+            attributionV2EnvironmentBoundaryFromObservedConfiguration(
+                armStartedNs = 10L,
+                armEndedNs = 20L,
+                start = defaults,
+                end = defaults,
+                observed = AttributionV2ObservedFrameConfigurationBoundary(
+                    start = observed,
+                    end = observed,
+                    missing = false,
+                    consistent = true,
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun divergentMiddleConfigurationCannotProduceEnvironmentWhenEndpointsMatch() {
+        val defaults = com.calisthenics.diagnostic.study.AttributionV2EnvironmentSnapshot()
+        val endpointConfiguration = AttributionV2ObservedFrameConfiguration(
+            deliveredWidth = 1920,
+            deliveredHeight = 1080,
+            deliveredFormat = "YUV_420_888",
+            negotiatedCameraFpsRange =
+                com.calisthenics.diagnostic.study.AttributionV2FpsRange(24, 30),
+        )
+        val divergentConfiguration = endpointConfiguration.copy(deliveredWidth = 1280)
+        val observation = AttributionV2Observation()
+        listOf(
+            endpointConfiguration,
+            divergentConfiguration,
+            endpointConfiguration,
+        ).forEachIndexed { index, configuration ->
+            val callbackId = index.toLong()
+            observation.onFrameConfiguration(callbackId, configuration)
+            observation.onAdmission(
+                callbackId = callbackId,
+                captureTimestampNs = callbackId,
+                observedSessionNs = callbackId,
+                productionClassification = LiveFrameClassification.SUBMIT,
+                productionPredicates = LiveAdmissionPredicates(cadenceDue = true, slotAvailable = true),
+            )
+        }
+
+        val boundary = observation.observedFrameConfigurationBoundary()
+        assertEquals(endpointConfiguration, boundary.start)
+        assertEquals(endpointConfiguration, boundary.end)
+        assertTrue(!boundary.consistent)
+        assertNull(
+            attributionV2EnvironmentBoundaryFromObservedConfiguration(
+                armStartedNs = 10L,
+                armEndedNs = 20L,
+                start = defaults,
+                end = defaults,
+                observed = boundary,
+            ),
+        )
     }
 
     @Test
