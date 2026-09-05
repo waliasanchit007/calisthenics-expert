@@ -11,6 +11,20 @@ import kotlin.test.*
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class MovementViewerActivityLifecycleTest {
+    @Test fun freshPrivateMarkerEnablesVisibleDebugDiagnostics() {
+        val context = org.robolectric.RuntimeEnvironment.getApplication()
+        val marker = java.io.File(context.noBackupFilesDir,"movement-diagnostics.enabled")
+        marker.writeText("")
+        val owner = Robolectric.buildActivity(MovementViewerActivity::class.java).setup()
+        try { assertTrue(owner.get().diagnosticsEnabled) }
+        finally { owner.pause().stop().destroy(); marker.delete() }
+    }
+    @Test fun diagnosticsStayOffWithoutPrivateAuthorizationEvenWithAnIntentExtra() {
+        val owner = Robolectric.buildActivity(MovementViewerActivity::class.java,
+            android.content.Intent().putExtra("viewerDiagnosticsAuthorized",true)).setup()
+        try { assertFalse(owner.get().diagnosticsEnabled) }
+        finally { owner.pause().stop().destroy() }
+    }
     @Test fun screenshotsRemainAllowedOnLaunchStopAndRecreation() {
         val owner = Robolectric.buildActivity(MovementViewerActivity::class.java).setup()
         try {

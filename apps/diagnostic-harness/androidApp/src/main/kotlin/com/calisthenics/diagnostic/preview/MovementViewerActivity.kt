@@ -23,6 +23,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.Locale
 import com.calisthenics.diagnostic.viewer.ViewerPoint
+import com.calisthenics.diagnostic.android.BuildConfig
+import java.io.File
 
 class MovementViewerActivity : ComponentActivity() {
     private var controller by mutableStateOf<MovementViewerController?>(null)
@@ -37,9 +39,21 @@ class MovementViewerActivity : ComponentActivity() {
     private val movementCoordinator = ViewerMovementCoordinator()
     internal var movementState by mutableStateOf(MovementPanelState())
         private set
+    internal var diagnosticsEnabled by mutableStateOf(false)
+        private set
+    private var diagnosticLog: ViewerDiagnosticLog? = null
+    private var diagnosticDeadlineNs = 0L
+    private val diagnosticMarker get() = File(noBackupFilesDir,"movement-diagnostics.enabled")
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val wallNow = System.currentTimeMillis()
+        if (viewerDiagnosticsAuthorized(diagnosticMarker,BuildConfig.DEBUG,wallNow)) {
+            val nowNs = SystemClock.elapsedRealtimeNanos()
+            diagnosticDeadlineNs = nowNs + (DIAGNOSTIC_AUTH_MS - (wallNow-diagnosticMarker.lastModified())) * 1_000_000L
+            diagnosticLog = ViewerDiagnosticLog(BuildConfig.PROBE_GIT_SHA,nowNs)
+            diagnosticsEnabled = true
+        }
         setContent {
             var permission by remember { mutableStateOf(hasCameraPermission()) }
             val requestPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { permission = it }
@@ -100,6 +114,10 @@ class MovementViewerActivity : ComponentActivity() {
                 livePreview = view?.let { native -> { modifier -> AndroidView(factory = { native }, modifier = modifier) } },
                 livePoints = livePoints,
                 liveOverlayAlpha = overlay?.alpha ?: 0f,
+                diagnosticsStatus = if (diagnosticsEnabled)
+                    "Diagnostics ON · local ADB trace includes derived movement measurements, not images/video. " +
+                    "Auto-off within 30 min · writer drops ${diagnosticLog?.droppedRows ?: 0}" else null,
+                onDisableDiagnostics = if (diagnosticsEnabled) ({ disableDiagnostics() }) else null,
                 movementSummary = if (controller != null) "Candidate cycles ${movementState.experiment.candidateCycles} · " +
                     movementState.experiment.phase.name.lowercase().replace('_',' ') else null,
                 movementPanel = {
@@ -107,16 +125,22 @@ class MovementViewerActivity : ComponentActivity() {
                         onCalibrate = { side ->
                             if (controller != null && input == ViewerInput.CAMERA) {
                                 movementCoordinator.startCalibration(side,SystemClock.elapsedRealtimeNanos())
+                                recordDiagnostic(ViewerDebugEvent.CALIBRATE)
                                 refreshMovementPanel()
                             }
                         },
                         onConfirmRange = {
                             if (controller != null && input == ViewerInput.CAMERA) {
                                 movementCoordinator.experiment.confirmCalibration()
+                                recordDiagnostic(ViewerDebugEvent.CONFIRM)
                                 refreshMovementPanel()
                             }
                         },
-                        onReset = { movementCoordinator.experiment.reset(); refreshMovementPanel() },
+                        onReset = {
+                            movementCoordinator.experiment.reset()
+                            recordDiagnostic(ViewerDebugEvent.RESET)
+                            refreshMovementPanel()
+                        },
                     )
                 },
             )
@@ -132,6 +156,7 @@ class MovementViewerActivity : ComponentActivity() {
         overlayPresenter.clear()
         overlay = null
         snapshot = null
+        recordDiagnostic(if (selected == ViewerInput.CAMERA) ViewerDebugEvent.START_CAMERA else ViewerDebugEvent.START_SYNTHETIC)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         val view = if (selected == ViewerInput.CAMERA) PreviewView(this).apply {
             implementationMode = PreviewView.ImplementationMode.COMPATIBLE
@@ -157,6 +182,7 @@ class MovementViewerActivity : ComponentActivity() {
             movementCoordinator.update(latest.observation,SystemClock.elapsedRealtimeNanos())
         } else movementCoordinator.clear()
         refreshMovementPanel()
+        recordDiagnostic(ViewerDebugEvent.SAMPLE)
         if (controller != null && input == ViewerInput.CAMERA && latest.failure == null) {
             overlay = overlayPresenter.present(candidate, SystemClock.elapsedRealtimeNanos())
         } else {
@@ -172,6 +198,7 @@ class MovementViewerActivity : ComponentActivity() {
     }
 
     fun stopViewer() {
+        if (controller != null) recordDiagnostic(ViewerDebugEvent.STOP)
         movementCoordinator.clear()
         movementState = MovementPanelState()
         overlayPresenter.clear()
@@ -185,6 +212,42 @@ class MovementViewerActivity : ComponentActivity() {
     }
 
     override fun onStop() { stopViewer(); super.onStop() }
+
+    override fun onDestroy() {
+        diagnosticLog?.close()
+        diagnosticLog = null
+        super.onDestroy()
+    }
+
+    private fun recordDiagnostic(event: ViewerDebugEvent) {
+        val logger = diagnosticLog ?: return
+        val now = SystemClock.elapsedRealtimeNanos()
+        val expired = now >= diagnosticDeadlineNs
+        val latest = snapshot
+        fun confidence(indices: Set<Int>, presence: Boolean): Double? {
+            val joints = latest?.observation?.landmarks?.filter { it.index in indices } ?: return null
+            if (joints.size != 3 || joints.map { it.index }.toSet().size != 3) return null
+            val values = joints.map { if (presence) it.presence else it.visibility }
+            if (values.any { it == null || !it.isFinite() }) return null
+            return values.filterNotNull().minOrNull()
+        }
+        val scores = ViewerJointConfidence(confidence(setOf(11,13,15),false),confidence(setOf(11,13,15),true),
+            confidence(setOf(12,14,16),false),confidence(setOf(12,14,16),true))
+        logger.record(if (expired) ViewerDebugEvent.EXPIRED else event,now,
+            movementCoordinator.measurements,movementCoordinator.experiment.state,
+            movementCoordinator.experiment.inputIssue,movementCoordinator.feedStatus,
+            movementCoordinator.captureGapNs,latest?.submitted ?: 0,latest?.completed ?: 0,latest?.skipped ?: 0,
+            scores,latest?.performance)
+        if (expired) {
+            logger.close(); diagnosticLog = null; diagnosticsEnabled = false
+        }
+    }
+
+    private fun disableDiagnostics() {
+        recordDiagnostic(ViewerDebugEvent.DISABLE)
+        diagnosticLog?.close(); diagnosticLog = null; diagnosticsEnabled = false
+        diagnosticMarker.delete()
+    }
 
     private fun hasCameraPermission() = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
 }

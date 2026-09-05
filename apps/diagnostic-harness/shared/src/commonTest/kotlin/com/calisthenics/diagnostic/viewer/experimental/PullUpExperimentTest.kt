@@ -8,6 +8,26 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class PullUpExperimentTest {
+    @Test fun diagnosticsIdentifyTheActualRejectedInputWithoutChangingCounting() {
+        val experiment = PullUpExperiment()
+        experiment.startCalibration(ArmSide.LEFT,0)
+        experiment.onSample(sample(5_000_000_000,leftAngle=160.0),5_000_000_000)
+        assertNull(experiment.inputIssue)
+        experiment.onSample(sample(5_100_000_000,leftAngle=160.0,leftWrist=-.1),5_100_000_000)
+        assertEquals(ExperimentInputIssue.WRIST_NOT_ABOVE_SHOULDER,experiment.inputIssue)
+        assertEquals(ExperimentStage.ERROR,experiment.state.stage)
+        assertEquals(CalibrationFailure.INPUT_UNUSABLE,experiment.state.failure)
+        assertEquals(0,experiment.state.candidateCycles)
+        experiment.reset()
+        assertNull(experiment.inputIssue)
+        experiment.startCalibration(ArmSide.LEFT,0)
+        experiment.onSample(sample(5_000_000_000,leftAngle=null),5_000_000_000)
+        assertEquals(ExperimentInputIssue.ELBOW_UNAVAILABLE,experiment.inputIssue)
+        experiment.onSample(sample(5_100_000_000,leftAngle=160.0,leftConfidence=.2),5_100_000_000)
+        assertEquals(ExperimentInputIssue.CONFIDENCE_UNAVAILABLE,experiment.inputIssue)
+        experiment.onTrackingGap()
+        assertEquals(ExperimentInputIssue.TRACKING_GAP,experiment.inputIssue)
+    }
     private val nsPerMs = 1_000_000L
     private val countdownEnd = 5_000L * nsPerMs
     private val calibrationEnd = 15_000L * nsPerMs

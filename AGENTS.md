@@ -16,8 +16,10 @@ The owner approved the product-learning reset and exercise-independent viewer im
 `docs/superpowers/plans/2026-09-05-product-learning-reset.md`. It permits RAM-only diagnostic
 visualization using synthetic fixtures, attested non-participant camera scenes, or an explicitly
 authorized adult-operated self-test with fresh in-app confirmation and no bystanders. Only RAM-only
-processing by the app is permitted: no app-retained observations, agent screenshots of people,
-uploads, or formal study admission. The owner-approved ADR-0006 amendment allows user-controlled
+processing by the app is the default: no app-retained observations, agent screenshots of people,
+uploads, or formal study admission. The owner-approved ADR-0006 debug-diagnostics exception permits
+explicitly authorized, time-limited numeric movement/state traces through local ADB, outside Git;
+it does not permit images, video or audio. The owner-approved screen-capture amendment allows user-controlled
 system screenshots/screen recordings throughout the app; never enable `FLAG_SECURE`. This does not
 authorize agents to capture or retain human images. Keep individual authorization/consent records
 outside tracked files. Shared components must remain exercise-independent.

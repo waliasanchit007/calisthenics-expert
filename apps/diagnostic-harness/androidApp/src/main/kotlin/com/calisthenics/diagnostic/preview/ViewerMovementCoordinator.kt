@@ -7,7 +7,13 @@ import com.calisthenics.diagnostic.viewer.experimental.ArmSide
 import com.calisthenics.diagnostic.viewer.experimental.PullUpExperiment
 
 /** Fresh raw observations only. Never accepts a ViewerOverlay or reads its held pose. */
+internal enum class MovementFeedStatus { FRESH, WAITING, NO_POSE, RESULT_TIMEOUT, DUPLICATE, BACKWARDS }
+
 internal class ViewerMovementCoordinator {
+    var feedStatus = MovementFeedStatus.WAITING
+        private set
+    var captureGapNs: Long? = null
+        private set
     val experiment = PullUpExperiment()
     var measurements: MovementMeasurements? = null
         private set
@@ -20,6 +26,7 @@ internal class ViewerMovementCoordinator {
         val fresh = observation != null && observation.posePresent &&
             nowNs - observation.capturedNs in 0 until SAMPLE_FRESHNESS_NS
         if (!fresh) {
+            feedStatus = MovementFeedStatus.WAITING
             if (measurements != null) {
                 trace = (trace + AngleTracePoint(nowNs,null,null)).takeLast(90)
             }
@@ -31,6 +38,8 @@ internal class ViewerMovementCoordinator {
             val lastCapture = lastSeenNs
             if (observation?.posePresent == false || lastCapture == null ||
                 nowNs < lastCapture || nowNs - lastCapture >= RESULT_DEADLINE_NS) {
+                feedStatus = if (observation?.posePresent == false) MovementFeedStatus.NO_POSE
+                    else MovementFeedStatus.RESULT_TIMEOUT
                 experiment.onTrackingGap()
             }
             return
@@ -38,13 +47,17 @@ internal class ViewerMovementCoordinator {
         checkNotNull(observation)
         val previous = lastSeenNs
         if (previous != null && observation.capturedNs <= previous) {
+            feedStatus = MovementFeedStatus.DUPLICATE
             if (observation.capturedNs < previous) {
+                feedStatus = MovementFeedStatus.BACKWARDS
                 measurements = null
                 experiment.onTrackingGap()
             }
             return
         }
         lastSeenNs = observation.capturedNs
+        captureGapNs = previous?.let { observation.capturedNs - it }
+        feedStatus = MovementFeedStatus.FRESH
         val measured = measureMovement(observation.landmarks,observation.frame.width,
             observation.frame.height,observation.capturedNs)
         measurements = measured
@@ -55,6 +68,8 @@ internal class ViewerMovementCoordinator {
     fun startCalibration(side: ArmSide, nowNs: Long) { experiment.startCalibration(side,nowNs) }
 
     fun clear() {
+        feedStatus = MovementFeedStatus.WAITING
+        captureGapNs = null
         measurements = null
         trace = emptyList()
         lastSeenNs = null

@@ -15,6 +15,36 @@ one consenting adult operator transiently on-device, without bystanders, app-man
 upload, retention or agent inspection of human frames. The operator starts/stops the camera locally;
 fresh scope confirmation is required after stop/background/error. This is not a formal study.
 
+### Opt-in local debugging exception
+
+The owner approved a direct diagnostic feedback loop for separately authorized adult self-tests.
+Only debug builds may enable it, through a fresh marker in the app's private no-backup directory
+created by an authorized ADB operator. An exported intent extra is not sufficient. Authorization
+expires after 30 minutes and is not automatically renewed; a visible status and disable button are
+required. The mode does not start the camera or waive the existing fresh self-test confirmation.
+
+The allowlisted trace contains relative timestamps, build/session identifiers, frame counters,
+input-rejection and calibration-failure enums, phases/counts, and quantized image-plane arm angles,
+wrist heights and confidence. These are derived movement observations, not anonymous performance
+metrics. No images, landmark coordinate arrays, audio, video, identities or arbitrary exception
+messages are logged. Routine rows are limited to 10 Hz, with control/state transitions retained;
+formatting and logging run on a bounded background writer, whose drop counter is distinct from
+pipeline skips. The observer must not change recognition rules.
+
+Rows use a dedicated Android logcat tag and its bounded system buffer, not study exports or an
+app-owned recording file. Authorized ADB collection may retain a bounded host trace outside every
+Git worktree for debugging; it is never committed or uploaded. Turning off the mode stops new rows,
+but previously emitted rows may remain in the system buffer or host trace. Logging has gaps on
+disconnect, buffer overwrite, process death or writer overflow; session/sequence/drop fields must
+be checked before treating an interval as complete. Do not clear the entire device log to erase
+this tag. Individual authorization remains outside Git; formal study gates remain unchanged.
+
+Current developer procedure: the private marker is `no_backup/movement-diagnostics.enabled`;
+the tag is `CalisthenicsTrace`. Enable/read using debug `adb shell run-as` and `adb logcat`, never
+an app-network permission or exported enable intent. Collector limits are 32 MiB and one hour;
+the app's shorter 30-minute authorization still governs emission. Review retained host logs only
+for the explicitly authorized debugging purpose and remove them when that purpose ends.
+
 The owner-approved screen-capture policy supersedes the original screenshot prohibition: do not
 enable Android `FLAG_SECURE` anywhere in the app, including launch, live camera, stop and error
 states. User-controlled system screenshots and screen recordings are allowed and can retain camera
