@@ -40,7 +40,6 @@ class MovementViewerActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         setContent {
             var permission by remember { mutableStateOf(hasCameraPermission()) }
             val requestPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { permission = it }
@@ -133,8 +132,6 @@ class MovementViewerActivity : ComponentActivity() {
         overlayPresenter.clear()
         overlay = null
         snapshot = null
-        if (selected == ViewerInput.SYNTHETIC) window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
-        else window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         val view = if (selected == ViewerInput.CAMERA) PreviewView(this).apply {
             implementationMode = PreviewView.ImplementationMode.COMPATIBLE
@@ -184,7 +181,6 @@ class MovementViewerActivity : ComponentActivity() {
         nativePreview = null
         snapshot = null
         attestedCameraScope = false
-        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 

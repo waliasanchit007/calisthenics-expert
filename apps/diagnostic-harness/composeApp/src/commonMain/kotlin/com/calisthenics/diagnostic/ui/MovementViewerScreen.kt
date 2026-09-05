@@ -95,7 +95,7 @@ fun MovementViewerScreen(
                 }
                 HorizontalDivider()
                 Text("Movement self-test", style = MaterialTheme.typography.titleMedium)
-                Text("Authorized adult self-test only, or an empty/synthetic scene. Keep bystanders out of view. No recording, screenshots or uploads. Stop whenever you want.", style = MaterialTheme.typography.bodySmall)
+                Text("Authorized adult self-test only, or an empty/synthetic scene. Keep bystanders out of view. The app does not record or upload. System screenshots and screen recordings are allowed and may retain camera images outside the app. Stop whenever you want.", style = MaterialTheme.typography.bodySmall)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(state.attestedCameraScope, onCheckedChange = onAttestation, enabled = !state.active)
                     Text("Only me, a consenting adult, or an empty/synthetic scene is in view. I agree to transient on-device processing without recording.", style = MaterialTheme.typography.bodySmall)

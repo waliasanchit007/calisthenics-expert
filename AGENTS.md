@@ -16,8 +16,11 @@ The owner approved the product-learning reset and exercise-independent viewer im
 `docs/superpowers/plans/2026-09-05-product-learning-reset.md`. It permits RAM-only diagnostic
 visualization using synthetic fixtures, attested non-participant camera scenes, or an explicitly
 authorized adult-operated self-test with fresh in-app confirmation and no bystanders. Only RAM-only
-processing is permitted: no retained observations, screenshots of people, uploads, or formal study
-admission. Keep individual authorization/consent records outside tracked files. Shared components must remain exercise-independent.
+processing by the app is permitted: no app-retained observations, agent screenshots of people,
+uploads, or formal study admission. The owner-approved ADR-0006 amendment allows user-controlled
+system screenshots/screen recordings throughout the app; never enable `FLAG_SECURE`. This does not
+authorize agents to capture or retain human images. Keep individual authorization/consent records
+outside tracked files. Shared components must remain exercise-independent.
 Work directly in Calisthenics; Buzz is not a prerequisite. The formal study gate below remains
 authoritative for study artifacts and is not satisfied by exploratory viewer results.
 

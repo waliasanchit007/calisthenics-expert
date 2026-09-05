@@ -11,9 +11,15 @@ Build an exploratory RAM-only viewer alongside the formal study harness. Reuse C
 admitted preprocessing and MediaPipe primitives. Do not route it through empty-scene study admission,
 construct study manifests/exports, or alter historical blocked evidence. Allow synthetic fixture
 input and attested non-participant camera scenes. Separately authorized self-tests may process
-one consenting adult operator transiently on-device, without bystanders, recording, screenshots,
+one consenting adult operator transiently on-device, without bystanders, app-managed recording,
 upload, retention or agent inspection of human frames. The operator starts/stops the camera locally;
 fresh scope confirmation is required after stop/background/error. This is not a formal study.
+
+The owner-approved screen-capture policy supersedes the original screenshot prohibition: do not
+enable Android `FLAG_SECURE` anywhere in the app, including launch, live camera, stop and error
+states. User-controlled system screenshots and screen recordings are allowed and can retain camera
+images outside the app; the in-app notice states this limitation. This does not introduce app-owned
+recording/upload or authorize agent capture/retention of human frames or a formal study release.
 
 The original paired-image mode remains for synthetic debugging. The owner-approved smooth-viewer
 increment uses a native CameraX Preview alongside ImageAnalysis, bound to the same ViewPort.
