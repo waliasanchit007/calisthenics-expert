@@ -15,11 +15,13 @@ one consenting adult operator transiently on-device, without bystanders, recordi
 upload, retention or agent inspection of human frames. The operator starts/stops the camera locally;
 fresh scope confirmation is required after stop/background/error. This is not a formal study.
 
-The first preview displays the upright camera image paired with the corresponding inference result,
-at inference throughput. There is no second CameraX Preview stream in this increment. This bounds
-buffering and avoids displaying old landmarks on a newer frame. Geometry must reverse model padding
-using the same dimensions/rounding as preprocessing. Stale results are cleared using an explicitly
-labelled UI freshness timeout, not a validated pose-quality threshold.
+The original paired-image mode remains for synthetic debugging. The owner-approved smooth-viewer
+increment uses a native CameraX Preview alongside ImageAnalysis, bound to the same ViewPort.
+The live overlay is the latest available pose, not an exact match to the displayed video frame.
+Map its own upright full-buffer transform into the current preview transform after reversing model
+padding with preprocessing's dimensions/rounding. Missing transforms suppress the overlay. Bound
+result age from capture (initial live display timeout 250 ms), expose timing, and never queue old
+frames to simulate smoothness. This UI setting is not a validated pose-quality threshold.
 
 The exploratory viewer selects the front-facing camera for operator-visible self-tests. It keeps
 the source image unmirrored and pairs the overlay to it. Formal study callers retain exact camera

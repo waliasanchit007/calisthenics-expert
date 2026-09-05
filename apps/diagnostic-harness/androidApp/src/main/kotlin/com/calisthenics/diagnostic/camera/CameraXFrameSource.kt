@@ -14,6 +14,7 @@ import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.impl.CameraCaptureResults
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.UseCaseGroup
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -31,14 +32,14 @@ class CameraXFrameSource(
     private val context: android.content.Context,
     private val lifecycleOwner: LifecycleOwner,
     private val requestedLensFacing: Int? = null,
+    private val previewBinding: CameraPreviewBinding? = null,
 ) {
     private val lifecycleDispatcher = AndroidCameraLifecycleDispatcher()
     private val analyzerExecutor = Executors.newSingleThreadExecutor()
     private val analyzerCallbacks = AnalyzerCallbackFence()
-    private val sourceLifecycle = CameraXSourceLifecycle<ProcessCameraProvider, ImageAnalysis>(
+    private val sourceLifecycle = CameraXSourceLifecycle<ProcessCameraProvider, CameraBoundUseCases>(
         cleanupUseCase = { provider, useCase ->
-            useCase.clearAnalyzer()
-            lifecycleDispatcher.dispatch(5_000L) { provider.unbind(useCase) }
+            lifecycleDispatcher.dispatch(5_000L) { useCase.release { provider.unbind(*it) } }
         },
         shutdownAnalyzer = { analyzerExecutor.shutdown() },
     )
@@ -90,7 +91,8 @@ class CameraXFrameSource(
                     Range(TARGET_CAMERA_FPS, TARGET_CAMERA_FPS),
                 )
                 val useCase = useCaseBuilder.build()
-                if (!sourceLifecycle.complete(generation, cameraProvider, useCase) {
+                val boundUseCases = CameraBoundUseCases(useCase, previewBinding?.preview)
+                if (!sourceLifecycle.complete(generation, cameraProvider, boundUseCases) {
                         useCase.setAnalyzer(analyzerExecutor) { image ->
                             if (!analyzerCallbacks.tryEnter()) {
                                 image.close()
@@ -108,7 +110,13 @@ class CameraXFrameSource(
                 ) return@runCatching
                 lifecycleDispatcher.dispatch(5_000L) {
                     if (sourceLifecycle.isCurrent(generation)) {
-                        cameraProvider.bindToLifecycle(lifecycleOwner, selector, useCase)
+                        if (previewBinding == null) {
+                            cameraProvider.bindToLifecycle(lifecycleOwner, selector, useCase)
+                        } else {
+                            val group = UseCaseGroup.Builder().setViewPort(previewBinding.viewPort)
+                                .addUseCase(useCase).addUseCase(previewBinding.preview).build()
+                            cameraProvider.bindToLifecycle(lifecycleOwner, selector, group)
+                        }
                         val resolution = checkNotNull(useCase.resolutionInfo) {
                             "CameraX did not report the negotiated analysis resolution"
                         }.resolution
@@ -133,6 +141,7 @@ class CameraXFrameSource(
         onFrameRejected: (timestampNs: Long?) -> Unit,
     ) {
         var underlying: Image? = null
+        var geometry: AnalysisFrameTransform? = null
         handleImageWithOwnership(
             proxy = object : ImageProxyOwnership {
                 override fun close() {
@@ -146,9 +155,16 @@ class CameraXFrameSource(
                 require(source.dataSpace == OwnedYuvFrame.ADMITTED_RAW_DATASPACE) {
                     "unsupported DataSpace"
                 }
+                if (previewBinding != null) {
+                    geometry = AnalysisFrameTransform(image.imageInfo.sensorToBufferTransformMatrix,
+                        image.width, image.height, image.imageInfo.rotationDegrees)
+                }
             },
             construct = { CameraXOwnedImage(image, checkNotNull(underlying)) },
-            onFrame = onFrame,
+            onFrame = { frame ->
+                if (previewBinding != null) previewBinding.onFrame(frame, checkNotNull(geometry))
+                else onFrame(frame)
+            },
             onFailure = { onFrameRejected(image.imageInfo.timestamp) },
         )
     }

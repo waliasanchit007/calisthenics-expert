@@ -90,42 +90,51 @@ fun yuv420ToUprightRgb24(frame: Yuv420Frame): ByteArray {
     val output = ByteArray(Rgb24.byteLength(outputWidth, outputHeight))
     for (outputY in 0 until outputHeight) {
         for (outputX in 0 until outputWidth) {
-            val uprightX = if (frame.mirrored) outputWidth - 1 - outputX else outputX
-            val sourceX: Int
-            val sourceY: Int
-            when (frame.rotation) {
-                FrameRotation.R0 -> {
-                    sourceX = uprightX
-                    sourceY = outputY
-                }
-
-                FrameRotation.R90 -> {
-                    sourceX = outputY
-                    sourceY = frame.height - 1 - uprightX
-                }
-
-                FrameRotation.R180 -> {
-                    sourceX = frame.width - 1 - uprightX
-                    sourceY = frame.height - 1 - outputY
-                }
-
-                FrameRotation.R270 -> {
-                    sourceX = frame.width - 1 - outputY
-                    sourceY = uprightX
-                }
-            }
-            val y = frame.y.sample(sourceX, sourceY)
-            val chromaX = sourceX / 2
-            val chromaY = sourceY / 2
-            val u = frame.u.sample(chromaX, chromaY)
-            val v = frame.v.sample(chromaX, chromaY)
             val offset = Rgb24.pixelOffset(outputX, outputY, outputWidth)
-            output[offset] = convert(y, v - 128, 1_402_000).toByte()
-            output[offset + 1] = convert(y, u - 128, v - 128, -344_136, -714_136).toByte()
-            output[offset + 2] = convert(y, u - 128, 1_772_000).toByte()
+            val rgb = frame.uprightRgb24At(outputX, outputY, outputWidth)
+            output[offset] = (rgb shr 16).toByte()
+            output[offset + 1] = (rgb shr 8).toByte()
+            output[offset + 2] = rgb.toByte()
         }
     }
     return output
+}
+
+/** Returns one converted upright pixel packed as 0xRRGGBB without allocating. */
+internal fun Yuv420Frame.uprightRgb24At(outputX: Int, outputY: Int, outputWidth: Int): Int {
+    val uprightX = if (mirrored) outputWidth - 1 - outputX else outputX
+    val sourceX: Int
+    val sourceY: Int
+    when (rotation) {
+        FrameRotation.R0 -> {
+            sourceX = uprightX
+            sourceY = outputY
+        }
+
+        FrameRotation.R90 -> {
+            sourceX = outputY
+            sourceY = height - 1 - uprightX
+        }
+
+        FrameRotation.R180 -> {
+            sourceX = width - 1 - uprightX
+            sourceY = height - 1 - outputY
+        }
+
+        FrameRotation.R270 -> {
+            sourceX = width - 1 - outputY
+            sourceY = uprightX
+        }
+    }
+    val y = y.sample(sourceX, sourceY)
+    val chromaX = sourceX / 2
+    val chromaY = sourceY / 2
+    val u = u.sample(chromaX, chromaY)
+    val v = v.sample(chromaX, chromaY)
+    val red = convert(y, v - 128, 1_402_000)
+    val green = convert(y, u - 128, v - 128, -344_136, -714_136)
+    val blue = convert(y, u - 128, 1_772_000)
+    return (red shl 16) or (green shl 8) or blue
 }
 
 private fun convert(y: Int, delta: Int, coefficient: Int): Int =

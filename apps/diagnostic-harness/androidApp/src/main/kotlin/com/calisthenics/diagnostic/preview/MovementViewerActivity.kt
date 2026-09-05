@@ -10,17 +10,23 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.*
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import com.calisthenics.diagnostic.ui.MovementViewerScreen
 import com.calisthenics.diagnostic.ui.MovementViewerUiState
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import java.util.Locale
+import com.calisthenics.diagnostic.viewer.ViewerPoint
 
 class MovementViewerActivity : ComponentActivity() {
     private var controller by mutableStateOf<MovementViewerController?>(null)
     internal var snapshot by mutableStateOf<ViewerSnapshot?>(null)
         private set
     private var input by mutableStateOf(ViewerInput.SYNTHETIC)
+    private var nativePreview by mutableStateOf<PreviewView?>(null)
     internal var attestedCameraScope by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -31,15 +37,37 @@ class MovementViewerActivity : ComponentActivity() {
             val requestPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { permission = it }
             LaunchedEffect(controller) {
                 val current = controller ?: return@LaunchedEffect
+                launch {
+                    current.snapshots().collect { latest ->
+                        if (controller === current) {
+                            // Derive expiry at display time, including results already old on arrival.
+                            snapshot = current.snapshot()
+                            if (latest.failure != null) finishWithFailure(latest)
+                        }
+                    }
+                }
                 while (controller === current) {
                     val latest = current.snapshot()
                     snapshot = latest
                     if (latest.failure != null) { finishWithFailure(latest); break }
-                    delay(100)
+                    // Expiry/metric refresh only: completions above are event-driven.
+                    delay(50)
                 }
             }
             val observation = snapshot?.observation
-            val image = remember(observation) { observation?.frame?.toBitmap()?.asImageBitmap() }
+            val image = remember(observation, input) {
+                if (input == ViewerInput.SYNTHETIC) observation?.frame?.toBitmap()?.asImageBitmap() else null
+            }
+            val view = nativePreview
+            val target = view?.sensorToViewTransform
+            val geometry = observation?.frame?.analysisTransform
+            val livePoints = if (view != null && view.width > 0 && view.height > 0 && geometry != null) {
+                observation.landmarks.mapNotNull { landmark ->
+                    mapPreviewPoint(landmark.x, landmark.y, geometry, target)?.let {
+                        landmark.index to ViewerPoint(it.x / view.width, it.y / view.height)
+                    }
+                }.toMap()
+            } else emptyMap()
             MovementViewerScreen(
                 state = MovementViewerUiState(
                     active = controller != null,
@@ -51,6 +79,7 @@ class MovementViewerActivity : ComponentActivity() {
                     submitted = snapshot?.submitted ?: 0, completed = snapshot?.completed ?: 0,
                     skipped = snapshot?.skipped ?: 0, cameraPermission = permission,
                     attestedCameraScope = attestedCameraScope,
+                    performance = formatViewerTiming(snapshot?.performance, controller?.previewFps()),
                 ),
                 image = image,
                 onSynthetic = { startViewer(ViewerInput.SYNTHETIC) },
@@ -58,6 +87,8 @@ class MovementViewerActivity : ComponentActivity() {
                 onStop = ::stopViewer,
                 onPermission = { requestPermission.launch(Manifest.permission.CAMERA) },
                 onAttestation = { attestedCameraScope = it },
+                livePreview = view?.let { native -> { modifier -> AndroidView(factory = { native }, modifier = modifier) } },
+                livePoints = livePoints,
             )
         }
     }
@@ -70,7 +101,16 @@ class MovementViewerActivity : ComponentActivity() {
         if (selected == ViewerInput.SYNTHETIC) window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
         else window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        return MovementViewerController(this, this, selected).also { controller = it; it.start() }
+        val view = if (selected == ViewerInput.CAMERA) PreviewView(this).apply {
+            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+            scaleType = PreviewView.ScaleType.FIT_CENTER
+        } else null
+        nativePreview = view
+        return MovementViewerController(this, this, selected, previewView = view).also { current ->
+            view?.setFrameUpdateListener(ContextCompat.getMainExecutor(this)) { timestamp -> current.onPreviewFrame(timestamp) }
+            controller = current
+            current.start()
+        }
     }
 
     internal fun finishWithFailure(latest: ViewerSnapshot) {
@@ -81,6 +121,7 @@ class MovementViewerActivity : ComponentActivity() {
     fun stopViewer() {
         controller?.close()
         controller = null
+        nativePreview = null
         snapshot = null
         attestedCameraScope = false
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
@@ -90,6 +131,13 @@ class MovementViewerActivity : ComponentActivity() {
     override fun onStop() { stopViewer(); super.onStop() }
 
     private fun hasCameraPermission() = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+}
+
+private fun formatViewerTiming(performance: ViewerPerformance?, previewFps: Double?): String {
+    fun number(value: Double?): String = value?.let { String.format(Locale.ROOT, "%.1f", it) } ?: "—"
+    return "Preview ${number(previewFps)} FPS · analysis ${number(performance?.offerFps)} FPS · pose ${number(performance?.poseFps)} FPS\n" +
+        "Prepare ${number(performance?.preparationMs)} ms · inference ${number(performance?.inferenceMs)} ms\n" +
+        "Capture→result ${number(performance?.captureToResultMs)} ms · pose age ${number(performance?.poseAgeMs)} ms"
 }
 
 private fun ViewerFrame.toBitmap(): Bitmap {

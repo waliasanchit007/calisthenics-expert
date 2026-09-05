@@ -191,6 +191,8 @@ observed behavior. The subsequent human self-test stays explicitly authorized.
 
 ## Next action
 
-Prepare the concise experimental operating-gate amendment and the viewer's implementation brief.
-Then build Milestone 1. Do not resume attribution v3 by default, and do not begin human capture
-until its narrow boundary has been explicitly accepted.
+The viewer and smooth-preview increment are implemented; see
+`2026-09-05-smooth-movement-viewer.md` for scoped software/device evidence. Next is the short
+movement-feature experiment in section2, followed by a provisional cycle and contrasting hold or
+movement. Keep the shared model exercise-independent. Do not resume attribution v3 by default or
+treat viewer performance as movement-accuracy validation. Recording/upload remains off in this build.

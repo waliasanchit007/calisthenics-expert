@@ -14,9 +14,11 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.unit.dp
 import com.calisthenics.diagnostic.contract.Landmark
 import com.calisthenics.diagnostic.viewer.ViewerGeometry
+import com.calisthenics.diagnostic.viewer.ViewerPoint
 
 /** Display observations only. There are no exercise-specific states or quality thresholds. */
 data class MovementViewerUiState(
@@ -31,6 +33,7 @@ data class MovementViewerUiState(
     val skipped: Int = 0,
     val cameraPermission: Boolean = false,
     val attestedCameraScope: Boolean = false,
+    val performance: String = "Timing unavailable until frames arrive",
 )
 
 @Composable
@@ -42,6 +45,8 @@ fun MovementViewerScreen(
     onStop: () -> Unit,
     onPermission: () -> Unit,
     onAttestation: (Boolean) -> Unit,
+    livePreview: (@Composable (Modifier) -> Unit)? = null,
+    livePoints: Map<Int, ViewerPoint> = emptyMap(),
 ) {
     MaterialTheme(colorScheme = darkColorScheme(primary = Color(0xFF72E8BF))) {
         Surface(Modifier.fillMaxSize()) {
@@ -49,14 +54,17 @@ fun MovementViewerScreen(
                 Text("CALISTHENICS • EXPLORER", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
                 Text("See your movement", style = MaterialTheme.typography.headlineLarge)
                 Text("Exercise-independent pose viewer · experimental", style = MaterialTheme.typography.bodyMedium)
-                Box(Modifier.fillMaxWidth().aspectRatio(1f).background(Color(0xFF15232A)), contentAlignment = Alignment.Center) {
-                    if (image == null) {
+                Box(Modifier.fillMaxWidth().aspectRatio(1f).clipToBounds().background(Color(0xFF15232A)), contentAlignment = Alignment.Center) {
+                    if (livePreview != null) livePreview(Modifier.fillMaxSize())
+                    if (image == null && livePreview == null) {
                         Text(state.message, color = Color(0xFFB8C7CD))
                     } else {
-                        Image(image, "${state.source} paired inference frame", Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                        if (image != null && livePreview == null) Image(image, "${state.source} paired inference frame", Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
                         Canvas(Modifier.fillMaxSize()) {
                             val geometry = ViewerGeometry(state.width, state.height)
-                            val points = state.landmarks.mapNotNull { landmark ->
+                            val points = if (livePreview != null) livePoints.mapValues { (_, point) ->
+                                Offset(point.x * size.width, point.y * size.height)
+                            } else state.landmarks.mapNotNull { landmark ->
                                 geometry.modelToSource(landmark.x, landmark.y)?.let { normalized ->
                                     val pixel = geometry.fitPoint(normalized, size.width, size.height)
                                     landmark.index to Offset(pixel.x, pixel.y)
@@ -73,7 +81,8 @@ fun MovementViewerScreen(
                 Text(state.message, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
                 Text("${state.source} · ${state.landmarks.size}/33 landmark observations")
                 Text("Completed ${state.completed} · submitted ${state.submitted} · skipped ${state.skipped}", style = MaterialTheme.typography.bodySmall)
-                Text("Preview follows inference speed. Images and landmarks stay in memory and clear on stop. No recording or upload.", style = MaterialTheme.typography.bodySmall)
+                Text(state.performance, style = MaterialTheme.typography.bodySmall)
+                Text(if (livePreview != null) "Continuous preview · latest pose, not frame-synchronized. Overlay hides when older than 250 ms. No recording or upload." else "Paired synthetic frames follow inference. Images and landmarks clear on stop. No recording or upload.", style = MaterialTheme.typography.bodySmall)
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Button(onClick = onSynthetic, enabled = !state.active) { Text("Try synthetic figure") }
                     OutlinedButton(onClick = onStop, enabled = state.active) { Text("Stop") }

@@ -6,8 +6,55 @@ import androidx.lifecycle.Lifecycle
 import org.junit.Test
 import kotlin.test.*
 
-/** Real packaged model + real viewer; synthetic pixels only, never starts the camera. */
+/** Synthetic by default; the named live test requires explicit operator authorization argument. */
 class MovementViewerDeviceTest {
+    /** Owner-authorized short self-test: retain aggregate timings only, no pixels/landmarks. */
+    @Test fun nativeCameraPreviewStreamsIndependentlyAndStopsCleanly() {
+        org.junit.Assume.assumeTrue("requires an authorized operator-only or empty scene",
+            InstrumentationRegistry.getArguments().getString("viewerSelfTestAuthorized") == "true")
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
+        fun files() = context.filesDir.walkTopDown().filter { it.isFile }.map { it.relativeTo(context.filesDir).path }.toSet()
+        fun preview(view: android.view.View): androidx.camera.view.PreviewView? {
+            if (view is androidx.camera.view.PreviewView) return view
+            if (view is android.view.ViewGroup) for (i in 0 until view.childCount) {
+                preview(view.getChildAt(i))?.let { return it }
+            }
+            return null
+        }
+        val before = files()
+        ActivityScenario.launch(MovementViewerActivity::class.java).use { scenario ->
+            lateinit var controller: MovementViewerController
+            scenario.onActivity {
+                it.attestedCameraScope = true
+                controller = checkNotNull(it.startViewer(ViewerInput.CAMERA))
+            }
+            val deadline = System.nanoTime() + 20_000_000_000L
+            while (controller.snapshot().completed < 2 && controller.snapshot().failure == null && System.nanoTime() < deadline) Thread.sleep(100)
+            assertNull(controller.snapshot().failure)
+            Thread.sleep(5_000)
+            val observed = controller.snapshot()
+            instrumentation.sendStatus(0, android.os.Bundle().apply {
+                putString("stream", "Viewer timings only: previewFps=${controller.previewFps()}, ${observed.performance}\n")
+            })
+            assertTrue(observed.completed >= 2, "real front-camera model callbacks must complete")
+            assertTrue((controller.previewFps() ?: 0.0) > 0.0, "must observe native preview callbacks, not requested FPS")
+            lateinit var native: androidx.camera.view.PreviewView
+            scenario.onActivity {
+                native = assertNotNull(preview(it.window.decorView), "camera must use a native PreviewView, not inference-frame bitmaps")
+                assertEquals(androidx.camera.view.PreviewView.StreamState.STREAMING, native.previewStreamState.value)
+                assertNotNull(native.sensorToViewTransform)
+                it.stopViewer()
+            }
+            Thread.sleep(750)
+            assertNull(controller.snapshot().observation)
+            scenario.onActivity {
+                assertFalse(it.attestedCameraScope)
+                assertEquals(androidx.camera.view.PreviewView.StreamState.IDLE, native.previewStreamState.value)
+            }
+        }
+        assertEquals(before, files(), "live performance check must not persist observations")
+    }
     @Test fun frontCameraIsPresentAndHasCompatibleTimestampMetadataWithoutOpeningIt() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val manager = context.getSystemService(android.hardware.camera2.CameraManager::class.java)

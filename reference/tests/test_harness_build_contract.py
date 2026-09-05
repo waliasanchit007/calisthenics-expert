@@ -344,7 +344,11 @@ def test_camera_source_fences_startup_before_exactly_once_analyzer_shutdown() ->
     assert "CameraXSourceLifecycle" in source, (
         "catches the source losing its startup/stop fence around asynchronous provider completion"
     )
-    assert "useCase.clearAnalyzer()" in source, (
+    preview_binding = (
+        HARNESS
+        / "androidApp/src/main/kotlin/com/calisthenics/diagnostic/camera/CameraPreviewBinding.kt"
+    ).read_text()
+    assert "useCase.release" in source and "analysis.clearAnalyzer()" in preview_binding, (
         "catches stop leaving CameraX's analyzer attached during owned-use-case cleanup"
     )
     assert "analyzerExecutor.shutdown()" in source, (

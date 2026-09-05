@@ -95,4 +95,73 @@ class ViewerSessionTest {
         assertNull(session.snapshot(3_000_000).observation)
         assertEquals("Inference failed", session.snapshot(3_000_000).failure)
     }
+
+    @Test fun performanceUsesObservedElapsedTimeAndStageDurations() {
+        val clock = Clock()
+        val port = Port()
+        val session = ViewerSession(port, clockNs = clock::now)
+
+        session.offer(0) {
+            clock.nowNs = 2_000_000
+            frame()
+        }
+        clock.nowNs = 1_000_000_000
+        session.offer(1_000_000_000) { error("an in-flight offer must be skipped") }
+        port.callback!!(pose())
+
+        val performance = session.snapshot(1_500_000_000).performance
+        assertEquals(2, performance.cameraOffers)
+        assertEquals(1, performance.completions)
+        assertEquals(2.0 / 1.5, performance.offerFps!!, 0.000001)
+        assertEquals(1.0 / 1.5, performance.poseFps!!, 0.000001)
+        assertEquals(2.0, performance.preparationMs)
+        assertEquals(998.0, performance.inferenceMs)
+        assertEquals(1_000.0, performance.captureToResultMs)
+        assertEquals(1_500.0, performance.poseAgeMs)
+    }
+
+    @Test fun stateFlowPublishesAcceptanceSkipAndImmediateCompletion() {
+        val clock = Clock()
+        val port = Port()
+        val session = ViewerSession(port, clockNs = clock::now)
+
+        session.offer(0) { frame() }
+        assertEquals(1, session.snapshots.value.submitted)
+        session.offer(1) { error("busy frame must not be prepared") }
+        assertEquals(1, session.snapshots.value.skipped)
+
+        port.callback!!(pose())
+        assertNotNull(session.snapshots.value.observation)
+        assertEquals(1, session.snapshots.value.completed)
+    }
+
+    @Test fun staleSnapshotClearsStateFlowWhenSnapshotIsRead() {
+        val port = Port()
+        val session = ViewerSession(port, freshnessNs = 100)
+        session.offer(10) { frame() }
+        port.callback!!(pose())
+
+        assertNotNull(session.snapshots.value.observation)
+        session.snapshot(110)
+        assertNull(session.snapshots.value.observation)
+        assertEquals("Frame stale", session.snapshots.value.message)
+    }
+
+    @Test fun stopClearsStateFlowAndLateCallbackCannotRestoreIt() {
+        val port = Port()
+        val session = ViewerSession(port)
+        session.offer(10) { frame() }
+        val late = port.callback!!
+
+        session.close()
+        assertNull(session.snapshots.value.observation)
+        assertEquals("Stopped", session.snapshots.value.message)
+        late(pose())
+        assertNull(session.snapshots.value.observation)
+        assertEquals("Stopped", session.snapshots.value.message)
+    }
+
+    private class Clock(var nowNs: Long = 0) {
+        fun now(): Long = nowNs
+    }
 }

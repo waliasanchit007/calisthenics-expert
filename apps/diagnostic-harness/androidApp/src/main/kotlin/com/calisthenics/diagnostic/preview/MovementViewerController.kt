@@ -3,6 +3,17 @@ package com.calisthenics.diagnostic.preview
 import android.content.Context
 import android.os.SystemClock
 import androidx.lifecycle.LifecycleOwner
+import androidx.camera.core.MirrorMode
+import androidx.camera.core.Preview
+import androidx.camera.view.PreviewView
+import androidx.core.view.doOnLayout
+import android.os.Handler
+import android.os.Looper
+import com.calisthenics.diagnostic.camera.CameraPreviewBinding
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.emitAll
 import com.calisthenics.diagnostic.camera.CameraXFrameSource
 import com.calisthenics.diagnostic.camera.OwnedYuvFrame
 import com.calisthenics.diagnostic.mediapipe.PoseLandmarkerLiveAdapterFactory
@@ -25,6 +36,7 @@ class MovementViewerController(
     private val lifecycleOwner: LifecycleOwner,
     private val input: ViewerInput,
     private val worker: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor(),
+    private val previewView: PreviewView? = null,
 ) {
     private val context = context.applicationContext
     private val closed = AtomicBoolean(false)
@@ -32,6 +44,17 @@ class MovementViewerController(
     @Volatile private var port: PoseLandmarkerLiveInferencePort? = null
     @Volatile private var source: CameraXFrameSource? = null
     @Volatile private var failure: String? = null
+    private val previewRate = PreviewFrameRate()
+
+    internal fun onPreviewFrame(timestampNs: Long) { if (!closed.get()) previewRate.onFrame(timestampNs) }
+    fun previewFps(): Double? = previewRate.fps(SystemClock.elapsedRealtimeNanos())
+
+    /** Results wake the UI immediately; startup waiting does not throttle active inference. */
+    fun snapshots(): Flow<ViewerSnapshot> = flow {
+        while (!closed.get() && session == null) delay(10)
+        val active = session
+        if (active != null && failure == null) emitAll(active.snapshots) else emit(snapshot())
+    }
 
     fun start() {
         worker.execute {
@@ -44,7 +67,9 @@ class MovementViewerController(
                     SystemClock::elapsedRealtimeNanos, realLiveDetectorConstructor(context),
                 ).create()
                 port = native
-                val active = ViewerSession(native)
+                val active = ViewerSession(native,
+                    freshnessNs = if (input == ViewerInput.CAMERA) 250_000_000L else 1_500_000_000L,
+                    clockNs = SystemClock::elapsedRealtimeNanos)
                 session = active
                 if (closed.get()) { active.close(); native.dispose(); return@execute }
                 when (input) {
@@ -64,17 +89,7 @@ class MovementViewerController(
                         }, 0, 100, TimeUnit.MILLISECONDS)
                     }
                     ViewerInput.CAMERA -> {
-                        val camera = CameraXFrameSource(context, lifecycleOwner,
-                            requestedLensFacing = androidx.camera.core.CameraSelector.LENS_FACING_FRONT)
-                        source = camera
-                        camera.start(
-                            onSourceStarted = {},
-                            onFrame = { frame ->
-                                active.offer(frame.timestampNs) { prepareViewerFrame(frame) }
-                            },
-                            onFrameRejected = { active.fail("Camera format unavailable") },
-                            onFailure = { active.fail("Camera unavailable") },
-                        )
+                        startCamera(active)
                     }
                 }
             } catch (_: Exception) {
@@ -90,6 +105,35 @@ class MovementViewerController(
         if (startupFailure != null) return ViewerSnapshot(null, startupFailure, 0, 0, 0, startupFailure)
         return session?.snapshot(SystemClock.elapsedRealtimeNanos())
             ?: ViewerSnapshot(null, if (closed.get()) "Stopped" else "Loading pose model", 0, 0, 0, null)
+    }
+
+    private fun startCamera(active: ViewerSession) {
+        val view = checkNotNull(previewView) { "live viewer needs a native preview" }
+        Handler(Looper.getMainLooper()).post {
+            view.doOnLayout {
+                if (closed.get()) return@doOnLayout
+                try {
+                    val preview = Preview.Builder().setMirrorMode(MirrorMode.MIRROR_MODE_OFF)
+                        .setTargetRotation(view.display.rotation).build()
+                    preview.setSurfaceProvider(view.surfaceProvider)
+                    val binding = CameraPreviewBinding(preview, checkNotNull(view.viewPort)) { frame, geometry ->
+                        active.offer(frame.timestampNs) { prepareViewerFrame(frame).copy(analysisTransform = geometry) }
+                    }
+                    val camera = CameraXFrameSource(context, lifecycleOwner,
+                        requestedLensFacing = androidx.camera.core.CameraSelector.LENS_FACING_FRONT,
+                        previewBinding = binding)
+                    source = camera
+                    // Stop can race this main-thread callback; the activity calls close on main too.
+                    if (closed.get()) { camera.stop {}; return@doOnLayout }
+                    camera.start(
+                        onSourceStarted = {},
+                        onFrame = { active.fail("Camera transform unavailable") },
+                        onFrameRejected = { active.fail("Camera format unavailable") },
+                        onFailure = { active.fail("Camera unavailable") },
+                    )
+                } catch (_: Exception) { active.fail("Camera unavailable") }
+            }
+        }
     }
 
     fun close() {
@@ -116,7 +160,7 @@ class MovementViewerController(
 }
 
 internal fun prepareViewerFrame(frame: OwnedYuvFrame): ViewerFrame {
-    val rgb = yuv420ToUprightRgb24(Yuv420Frame(
+    val modelRgb = yuv420ToScalePadRgb24(Yuv420Frame(
         frame.width, frame.height,
         YuvPlane(frame.y.bytes, frame.y.rowStride, frame.y.pixelStride),
         YuvPlane(frame.u.bytes, frame.u.rowStride, frame.u.pixelStride),
@@ -124,5 +168,6 @@ internal fun prepareViewerFrame(frame: OwnedYuvFrame): ViewerFrame {
         frame.colorStandard, frame.colorRange, frame.rotation, frame.mirrored,
     ))
     val (width, height) = uprightDimensions(frame.width, frame.height, frame.rotation)
-    return ViewerFrame(rgb, width, height, scalePadRgb24(rgb, width, height, 256, 256))
+    // PreviewView owns display pixels. Keep only the model plane and geometry for live inference.
+    return ViewerFrame(ByteArray(0), width, height, modelRgb)
 }
