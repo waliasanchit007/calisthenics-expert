@@ -23,6 +23,8 @@ data class AttributionV2Callback(
     val cadenceDue: Boolean,
     val slotAvailable: Boolean,
     val terminalClass: AttributionV2TerminalClass,
+    val phase: AttributionV2CallbackPhase = AttributionV2CallbackPhase.MEASURED,
+    val completionTimestampNs: Long? = null,
 )
 
 data class AttributionV2SourceArm(val measuredTimestampsNs: List<Long>)

@@ -13,6 +13,7 @@ import com.calisthenics.diagnostic.study.AttributionV2ArmStatus
 import com.calisthenics.diagnostic.study.AttributionV2BackendObservation
 import com.calisthenics.diagnostic.study.AttributionV2Callback
 import com.calisthenics.diagnostic.study.AttributionV2CallbackArm
+import com.calisthenics.diagnostic.study.AttributionV2CallbackPhase
 import com.calisthenics.diagnostic.study.AttributionV2DeviceSource
 import com.calisthenics.diagnostic.study.AttributionV2EndToEndRun
 import com.calisthenics.diagnostic.study.AttributionV2FpsRange
@@ -37,7 +38,11 @@ import java.util.concurrent.TimeUnit
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
-data class SourceCaptureResult(val elapsedNs: Long, val stoppedByCap: Boolean)
+data class SourceCaptureResult(
+    val elapsedNs: Long,
+    val stoppedByCap: Boolean,
+    val stopAcknowledged: Boolean = true,
+)
 
 interface M05BAttributionV2SourceFrame {
     val timestampNs: Long
@@ -49,6 +54,45 @@ interface M05BAttributionV2SourceArm {
 }
 
 enum class BackendRunMode { CAPACITY, END_TO_END }
+
+enum class BackendPhase { WARMUP, MEASURED }
+
+data class BackendPhaseSnapshot(
+    val phase: BackendPhase,
+    val warmupCompletionCount: Int,
+    val warmupElapsedNs: Long,
+    val measuredCompletionCount: Int,
+)
+
+internal class M05BAttributionV2BackendPhaseMachine(
+    private val warmupCompletions: Int,
+    private val warmupElapsedNs: Long,
+    private val measuredCompletions: Int,
+) {
+    private var phase = BackendPhase.WARMUP
+    private var boundaryCompletionCount = 0
+    private var boundaryElapsedNs = 0L
+
+    fun observe(completions: Int, elapsedNs: Long): BackendPhaseSnapshot {
+        if (phase == BackendPhase.WARMUP &&
+            completions >= warmupCompletions && elapsedNs >= warmupElapsedNs
+        ) {
+            phase = BackendPhase.MEASURED
+            boundaryCompletionCount = completions
+            boundaryElapsedNs = elapsedNs
+        }
+        return BackendPhaseSnapshot(
+            phase = phase,
+            warmupCompletionCount = if (phase == BackendPhase.WARMUP) completions else boundaryCompletionCount,
+            warmupElapsedNs = if (phase == BackendPhase.WARMUP) elapsedNs else boundaryElapsedNs,
+            measuredCompletionCount = if (phase == BackendPhase.MEASURED) {
+                (completions - boundaryCompletionCount).coerceAtMost(measuredCompletions)
+            } else {
+                0
+            },
+        )
+    }
+}
 
 data class BackendRunSpec(
     val mode: BackendRunMode,
@@ -70,6 +114,12 @@ data class BackendRunResult(
     val initialThermalStatus: Int = 0,
     val finalThermalStatus: Int = initialThermalStatus,
     val failureCode: String? = null,
+    val armStartedNs: Long = 0L,
+    val deliveredCallbackIds: List<Long> = emptyList(),
+    val terminalCallbacks: List<AttributionV2Callback> = emptyList(),
+    val submittedInferenceIds: List<Long> = emptyList(),
+    val pendingInferenceIds: Set<Long> = emptySet(),
+    val rawEvidenceOverflow: Boolean = false,
 )
 
 interface M05BAttributionV2Backend {
@@ -152,7 +202,11 @@ class M05BAttributionV2Runner(
                 M05BAttributionV2Protocol.COOLDOWN_SAMPLE_NS,
                 M05BAttributionV2Protocol.COOLDOWN_MAX_NS,
             )
-            if (!cooldown.recovered) {
+            sourceObservation = sourceObservation.copy(
+                initialCooldownThermalStatuses = cooldown.samples.take(attributionV2CooldownMaximumSamples()),
+                initialCooldownRecovered = cooldown.recovered,
+            )
+            if (!cooldown.recovered || cooldown.samples.size > attributionV2CooldownMaximumSamples()) {
                 sourceObservation = sourceObservation.copy(
                     status = AttributionV2ArmStatus.BLOCKED,
                     blockingCodes = (sourceObservation.blockingCodes + "ATTRIBUTION.THERMAL_STATE_MISMATCH")
@@ -208,15 +262,22 @@ class M05BAttributionV2Runner(
 
     private fun runSourceArm(boundaryThermalStatus: Int): AttributionV2SourceObservation {
         val frames = mutableListOf<M05BAttributionV2SourceFrame>()
+        val startedNs = dependencies.clock.nowNs()
         val capture = dependencies.sourceArmFactory().capture(M05BAttributionV2Protocol.ARM_CAP_NS) { frame ->
             frames += frame
             frames.size < M05BAttributionV2Protocol.SOURCE_WARMUP_CALLBACKS +
                 M05BAttributionV2Protocol.SOURCE_MEASURED_CALLBACKS
         }
+        val runnerElapsedNs = dependencies.clock.nowNs() - startedNs
         val measured = frames.drop(M05BAttributionV2Protocol.SOURCE_WARMUP_CALLBACKS)
             .take(M05BAttributionV2Protocol.SOURCE_MEASURED_CALLBACKS)
         val blockers = buildList {
-            if (capture.stoppedByCap || measured.size != M05BAttributionV2Protocol.SOURCE_MEASURED_CALLBACKS) {
+            if (capture.stoppedByCap ||
+                capture.elapsedNs > M05BAttributionV2Protocol.ARM_CAP_NS ||
+                runnerElapsedNs > M05BAttributionV2Protocol.ARM_CAP_NS ||
+                !capture.stopAcknowledged ||
+                measured.size != M05BAttributionV2Protocol.SOURCE_MEASURED_CALLBACKS
+            ) {
                 add("ATTRIBUTION.SOURCE_SAMPLE_INSUFFICIENT")
             }
             if (frames.any { it.aeTargetFpsRange == null } ||
@@ -260,6 +321,7 @@ class M05BAttributionV2Runner(
                 result.measuredServiceDurationsNs.size != M05BAttributionV2Protocol.BACKEND_MEASURED_COMPLETIONS
             ) add("ATTRIBUTION.BACKEND_SAMPLE_INSUFFICIENT")
             if (result.inferenceFailures != 0) add("ATTRIBUTION.INFERENCE_FAILURE")
+            addAll(attributionV2BackendRunRawBlockers(result))
             if (M05BAttributionV2Protocol.TARGET_CADENCES_FPS.any {
                     !backendSupports(result.measuredServiceDurationsNs, it)
                 }
@@ -274,6 +336,21 @@ class M05BAttributionV2Runner(
                 .take(M05BAttributionV2Protocol.BACKEND_MEASURED_COMPLETIONS),
             inferenceFailures = result.inferenceFailures,
             thermalStatus = result.initialThermalStatus.takeIf { it >= 0 } ?: boundaryThermalStatus,
+            armStartedNs = result.armStartedNs,
+            deliveredCallbackIds = result.deliveredCallbackIds
+                .take(M05BAttributionV2Protocol.SOURCE_MEASURED_CALLBACKS),
+            terminalCallbacks = result.terminalCallbacks
+                .take(M05BAttributionV2Protocol.SOURCE_MEASURED_CALLBACKS),
+            submittedInferenceIds = result.submittedInferenceIds
+                .take(M05BAttributionV2Protocol.SOURCE_MEASURED_CALLBACKS),
+            pendingInferenceIds = result.pendingInferenceIds
+                .take(M05BAttributionV2Protocol.SOURCE_MEASURED_CALLBACKS)
+                .toSet(),
+            rawEvidenceOverflow = result.rawEvidenceOverflow ||
+                result.deliveredCallbackIds.size > M05BAttributionV2Protocol.SOURCE_MEASURED_CALLBACKS ||
+                result.terminalCallbacks.size > M05BAttributionV2Protocol.SOURCE_MEASURED_CALLBACKS ||
+                result.submittedInferenceIds.size > M05BAttributionV2Protocol.SOURCE_MEASURED_CALLBACKS ||
+                result.pendingInferenceIds.size > M05BAttributionV2Protocol.SOURCE_MEASURED_CALLBACKS,
         )
     }
 
@@ -369,12 +446,51 @@ class M05BAttributionV2Runner(
     }
 }
 
+private fun attributionV2CooldownMaximumSamples(): Int =
+    (M05BAttributionV2Protocol.COOLDOWN_MAX_NS / M05BAttributionV2Protocol.COOLDOWN_SAMPLE_NS).toInt() + 1
+
+private fun attributionV2BackendRunRawBlockers(result: BackendRunResult): List<String> = buildList {
+    val max = M05BAttributionV2Protocol.SOURCE_MEASURED_CALLBACKS
+    if (result.rawEvidenceOverflow ||
+        result.deliveredCallbackIds.size > max ||
+        result.terminalCallbacks.size > max ||
+        result.submittedInferenceIds.size > max ||
+        result.pendingInferenceIds.size > max
+    ) add("ATTRIBUTION.CALLBACK_CONSERVATION")
+    addAll(
+        attributionV2CallbackBlockers(
+            AttributionV2CallbackArm(
+                deliveredCallbackIds = result.deliveredCallbackIds.take(max),
+                terminalCallbacks = result.terminalCallbacks.take(max),
+                submittedInferenceIds = result.submittedInferenceIds.take(max),
+                pendingInferenceIds = result.pendingInferenceIds.take(max).toSet(),
+            ),
+        ),
+    )
+    val completed = result.terminalCallbacks.filter {
+        it.terminalClass == AttributionV2TerminalClass.ADMITTED_COMPLETED ||
+            it.terminalClass == AttributionV2TerminalClass.ADMITTED_INFERENCE_FAILED
+    }
+    val warmup = completed.filter { it.phase == AttributionV2CallbackPhase.WARMUP }
+    val measured = completed.filter { it.phase == AttributionV2CallbackPhase.MEASURED }
+    val warmupElapsedNs = warmup.mapNotNull { it.completionTimestampNs }
+        .maxOrNull()?.minus(result.armStartedNs) ?: 0L
+    if (warmup.size < M05BAttributionV2Protocol.BACKEND_WARMUP_COMPLETIONS ||
+        warmupElapsedNs < M05BAttributionV2Protocol.BACKEND_WARMUP_ELAPSED_NS ||
+        measured.size != M05BAttributionV2Protocol.BACKEND_MEASURED_COMPLETIONS
+    ) add("ATTRIBUTION.BACKEND_SAMPLE_INSUFFICIENT")
+    if (completed.count { it.terminalClass == AttributionV2TerminalClass.ADMITTED_INFERENCE_FAILED } != result.inferenceFailures) {
+        add("ATTRIBUTION.INFERENCE_FAILURE")
+    }
+}
+
 /** CameraX adapter used only by the internal v2 device gate. */
 internal class M05BAttributionV2CameraXSourceArm(
     private val source: CameraXFrameSource,
 ) : M05BAttributionV2SourceArm {
     override fun capture(capNs: Long, onFrame: (M05BAttributionV2SourceFrame) -> Boolean): SourceCaptureResult {
         val startNs = SystemClock.elapsedRealtimeNanos()
+        val deadlineNs = startNs + capNs
         val finished = CountDownLatch(1)
         val stopped = java.util.concurrent.atomic.AtomicBoolean(false)
         val capExecutor = Executors.newSingleThreadScheduledExecutor()
@@ -397,11 +513,18 @@ internal class M05BAttributionV2CameraXSourceArm(
             },
             onFailure = { stop(false) },
         )
-        finished.await(capNs + 5_000_000_000L, TimeUnit.NANOSECONDS)
-        stop(hitCap)
+        val acknowledged = finished.await(
+            (deadlineNs - SystemClock.elapsedRealtimeNanos()).coerceAtLeast(0L),
+            TimeUnit.NANOSECONDS,
+        )
+        if (!acknowledged) stop(true)
         timer.cancel(false)
         capExecutor.shutdownNow()
-        return SourceCaptureResult(SystemClock.elapsedRealtimeNanos() - startNs, hitCap)
+        return SourceCaptureResult(
+            elapsedNs = SystemClock.elapsedRealtimeNanos() - startNs,
+            stoppedByCap = hitCap || SystemClock.elapsedRealtimeNanos() >= deadlineNs,
+            stopAcknowledged = acknowledged,
+        )
     }
 }
 
@@ -566,8 +689,13 @@ internal class AndroidM05BAttributionV2Backend(
                 failureCode = "ATTRIBUTION.BACKEND_SAMPLE_INSUFFICIENT",
             )
         }
-        val requiredCompletions = spec.warmupCompletions + spec.measuredCompletions
+        val phaseMachine = M05BAttributionV2BackendPhaseMachine(
+            warmupCompletions = spec.warmupCompletions,
+            warmupElapsedNs = spec.warmupElapsedNs,
+            measuredCompletions = spec.measuredCompletions,
+        )
         var completionCount = 0
+        var phaseSnapshot = BackendPhaseSnapshot(BackendPhase.WARMUP, 0, 0L, 0)
         var completion: LiveCameraCompletion? = null
         try {
             while (SystemClock.elapsedRealtimeNanos() - startedAtNs < spec.armCapNs) {
@@ -575,7 +703,11 @@ internal class AndroidM05BAttributionV2Backend(
                     it.terminal == com.calisthenics.diagnostic.telemetry.CallbackTerminalDisposition.INFERENCE_COMPLETED ||
                         it.terminal == com.calisthenics.diagnostic.telemetry.CallbackTerminalDisposition.INFERENCE_FAILED
                 }
-                if (completionCount >= requiredCompletions) break
+                phaseSnapshot = phaseMachine.observe(
+                    completions = completionCount,
+                    elapsedNs = SystemClock.elapsedRealtimeNanos() - startedAtNs,
+                )
+                if (phaseSnapshot.measuredCompletionCount >= spec.measuredCompletions) break
                 Thread.sleep(10L)
             }
         } finally {
@@ -589,17 +721,29 @@ internal class AndroidM05BAttributionV2Backend(
             it.terminal == com.calisthenics.diagnostic.telemetry.CallbackTerminalDisposition.INFERENCE_COMPLETED ||
                 it.terminal == com.calisthenics.diagnostic.telemetry.CallbackTerminalDisposition.INFERENCE_FAILED
         }
-        val warmup = completed.take(spec.warmupCompletions)
-        val measured = completed.drop(spec.warmupCompletions).take(spec.measuredCompletions)
+        val warmup = completed.take(phaseSnapshot.warmupCompletionCount)
+        val measured = completed.drop(phaseSnapshot.warmupCompletionCount).take(spec.measuredCompletions)
+        val warmupIds = warmup.map { it.callbackId }.toSet()
         val serviceDurations = measured.map { terminal ->
             val admission = checkNotNull(byId[terminal.callbackId])
             (terminal.completedNs - admission.observedSessionNs).coerceAtLeast(0L)
         }
+        val phaseByCallbackId = completed.associate { terminal ->
+            terminal.callbackId to if (terminal.callbackId in warmupIds) {
+                AttributionV2CallbackPhase.WARMUP
+            } else {
+                AttributionV2CallbackPhase.MEASURED
+            }
+        }
+        val maxRawCallbacks = M05BAttributionV2Protocol.SOURCE_MEASURED_CALLBACKS
+        val rawOverflow = admissions.size > maxRawCallbacks || terminals.size > maxRawCallbacks
+        val boundedAdmissions = admissions.take(maxRawCallbacks)
+        val boundedTerminals = terminals.take(maxRawCallbacks)
         return BackendRunResult(
             elapsedNs = elapsedNs,
-            stoppedByCap = completionCount < requiredCompletions && elapsedNs >= spec.armCapNs,
-            warmupCompletions = warmup.size,
-            warmupElapsedNs = warmup.lastOrNull()?.completedNs ?: 0L,
+            stoppedByCap = phaseSnapshot.measuredCompletionCount < spec.measuredCompletions && elapsedNs >= spec.armCapNs,
+            warmupCompletions = phaseSnapshot.warmupCompletionCount,
+            warmupElapsedNs = phaseSnapshot.warmupElapsedNs,
             measuredServiceDurationsNs = serviceDurations,
             inferenceFailures = measured.count {
                 it.terminal == com.calisthenics.diagnostic.telemetry.CallbackTerminalDisposition.INFERENCE_FAILED
@@ -610,12 +754,30 @@ internal class AndroidM05BAttributionV2Backend(
                     spec.cadenceFps ?: error("missing cadence"),
                     byId,
                     "exports/${checkNotNull(completion).sessionId.value}",
+                    phaseByCallbackId,
                 )
             } else {
                 null
             },
             initialThermalStatus = initialThermalStatus,
             finalThermalStatus = thermalStatus(),
+            armStartedNs = startedAtNs,
+            deliveredCallbackIds = boundedAdmissions.map { it.callbackId },
+            terminalCallbacks = boundedAdmissions.toRawCallbacks(
+                boundedTerminals,
+                spec.cadenceFps,
+                byId,
+                phaseByCallbackId,
+            ),
+            submittedInferenceIds = boundedAdmissions
+                .filter { it.productionClassification == LiveFrameClassification.SUBMIT }
+                .map { it.callbackId },
+            pendingInferenceIds = boundedAdmissions
+                .filter { it.productionClassification == LiveFrameClassification.SUBMIT }
+                .map { it.callbackId }
+                .filterNot { callbackId -> boundedTerminals.any { it.callbackId == callbackId } }
+                .toSet(),
+            rawEvidenceOverflow = rawOverflow,
         )
     }
 }
@@ -625,37 +787,9 @@ private fun List<AttributionV2ObservedAdmission>.toEndToEndRun(
     cadenceFps: Int,
     byId: Map<Long, AttributionV2ObservedAdmission>,
     sessionReference: String,
+    phaseByCallbackId: Map<Long, AttributionV2CallbackPhase> = emptyMap(),
 ): AttributionV2EndToEndRun {
-    fun terminalClass(
-        admission: AttributionV2ObservedAdmission,
-        terminal: com.calisthenics.diagnostic.telemetry.CallbackTerminalDisposition,
-    ): AttributionV2TerminalClass = when (terminal) {
-        com.calisthenics.diagnostic.telemetry.CallbackTerminalDisposition.INFERENCE_COMPLETED ->
-            AttributionV2TerminalClass.ADMITTED_COMPLETED
-        com.calisthenics.diagnostic.telemetry.CallbackTerminalDisposition.INFERENCE_FAILED ->
-            AttributionV2TerminalClass.ADMITTED_INFERENCE_FAILED
-        com.calisthenics.diagnostic.telemetry.CallbackTerminalDisposition.CADENCE_SELECTION ->
-            predicateTerminal(admission, admission.shadowSelections[cadenceFps] ?: false)
-        com.calisthenics.diagnostic.telemetry.CallbackTerminalDisposition.BACKPRESSURE ->
-            predicateTerminal(admission, admission.shadowSelections[cadenceFps] ?: false)
-        com.calisthenics.diagnostic.telemetry.CallbackTerminalDisposition.PREPROCESSING_FAILED ->
-            AttributionV2TerminalClass.PREPROCESSING_FAILED
-        com.calisthenics.diagnostic.telemetry.CallbackTerminalDisposition.SESSION_STOPPING ->
-            AttributionV2TerminalClass.SESSION_STOPPING
-        else -> AttributionV2TerminalClass.ADMISSION_STATE_DIVERGENCE
-    }
-
-    val terminalCallbacks = terminals.map { terminal ->
-        val admission = checkNotNull(byId[terminal.callbackId])
-        AttributionV2Callback(
-            callbackId = terminal.callbackId,
-            captureTimestampNs = admission.captureTimestampNs,
-            productionClassification = admission.productionClassification,
-            cadenceDue = admission.shadowSelections[cadenceFps] ?: false,
-            slotAvailable = admission.productionPredicates.slotAvailable,
-            terminalClass = terminalClass(admission, terminal.terminal),
-        )
-    }
+    val terminalCallbacks = toRawCallbacks(terminals, cadenceFps, byId, phaseByCallbackId)
     val submitted = filter { it.productionClassification == LiveFrameClassification.SUBMIT }
         .map { it.callbackId }
     val terminalIds = terminalCallbacks.map { it.callbackId }.toSet()
@@ -671,6 +805,39 @@ private fun List<AttributionV2ObservedAdmission>.toEndToEndRun(
         measuredSpanNs = map { it.captureTimestampNs }.let { timestamps ->
             if (timestamps.size < 2) 0L else timestamps.last() - timestamps.first()
         },
+    )
+}
+
+private fun List<AttributionV2ObservedAdmission>.toRawCallbacks(
+    terminals: List<AttributionV2ObservedTerminal>,
+    cadenceFps: Int?,
+    byId: Map<Long, AttributionV2ObservedAdmission>,
+    phaseByCallbackId: Map<Long, AttributionV2CallbackPhase>,
+): List<AttributionV2Callback> = terminals.map { terminal ->
+    val admission = checkNotNull(byId[terminal.callbackId])
+    AttributionV2Callback(
+        callbackId = terminal.callbackId,
+        captureTimestampNs = admission.captureTimestampNs,
+        productionClassification = admission.productionClassification,
+        cadenceDue = cadenceFps?.let { admission.shadowSelections[it] } ?: admission.productionPredicates.cadenceDue,
+        slotAvailable = admission.productionPredicates.slotAvailable,
+        terminalClass = when (terminal.terminal) {
+            com.calisthenics.diagnostic.telemetry.CallbackTerminalDisposition.INFERENCE_COMPLETED ->
+                AttributionV2TerminalClass.ADMITTED_COMPLETED
+            com.calisthenics.diagnostic.telemetry.CallbackTerminalDisposition.INFERENCE_FAILED ->
+                AttributionV2TerminalClass.ADMITTED_INFERENCE_FAILED
+            com.calisthenics.diagnostic.telemetry.CallbackTerminalDisposition.CADENCE_SELECTION ->
+                predicateTerminal(admission, cadenceFps?.let { admission.shadowSelections[it] } ?: false)
+            com.calisthenics.diagnostic.telemetry.CallbackTerminalDisposition.BACKPRESSURE ->
+                predicateTerminal(admission, cadenceFps?.let { admission.shadowSelections[it] } ?: false)
+            com.calisthenics.diagnostic.telemetry.CallbackTerminalDisposition.PREPROCESSING_FAILED ->
+                AttributionV2TerminalClass.PREPROCESSING_FAILED
+            com.calisthenics.diagnostic.telemetry.CallbackTerminalDisposition.SESSION_STOPPING ->
+                AttributionV2TerminalClass.SESSION_STOPPING
+            else -> AttributionV2TerminalClass.ADMISSION_STATE_DIVERGENCE
+        },
+        phase = phaseByCallbackId[terminal.callbackId] ?: AttributionV2CallbackPhase.MEASURED,
+        completionTimestampNs = terminal.completedNs,
     )
 }
 

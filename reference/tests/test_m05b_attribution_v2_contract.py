@@ -142,6 +142,8 @@ def test_observation_schema_is_closed_and_requires_non_participant_sanitization(
             "timestamps_ns": [index * 33_333_333 for index in range(300)],
             "observed_ae_target_fps": {"lower": 30, "upper": 30},
             "thermal_status": 0,
+            "initial_cooldown_thermal_statuses": [],
+            "initial_cooldown_recovered": None,
         },
         "backend_arm": None,
         "selector_arm": None,
@@ -167,6 +169,8 @@ def test_observation_schema_is_closed_and_requires_non_participant_sanitization(
                                 "cadence_due": False,
                                 "slot_available": True,
                                 "terminal_class": "cadence_only",
+                                "phase": "measured",
+                                "completion_timestamp_ns": None,
                             }
                         ],
                         "submitted_inference_ids": [],

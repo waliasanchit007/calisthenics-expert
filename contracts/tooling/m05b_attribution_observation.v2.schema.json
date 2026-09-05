@@ -55,7 +55,7 @@
     "source_arm": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["status", "blocking_codes", "warmup_count", "measured_count", "timestamps_ns", "observed_ae_target_fps", "thermal_status"],
+      "required": ["status", "blocking_codes", "warmup_count", "measured_count", "timestamps_ns", "observed_ae_target_fps", "thermal_status", "initial_cooldown_thermal_statuses", "initial_cooldown_recovered"],
       "properties": {
         "status": {"enum": ["recorded", "blocked"]},
         "blocking_codes": {"$ref": "#/$defs/blocking_codes"},
@@ -63,13 +63,15 @@
         "measured_count": {"type": "integer", "minimum": 0},
         "timestamps_ns": {"type": "array", "maxItems": 300, "items": {"type": "integer", "minimum": 0}},
         "observed_ae_target_fps": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/fps_range"}]},
-        "thermal_status": {"type": "integer", "minimum": 0}
+        "thermal_status": {"type": "integer", "minimum": 0},
+        "initial_cooldown_thermal_statuses": {"type": "array", "maxItems": 601, "items": {"type": "integer", "minimum": 0}},
+        "initial_cooldown_recovered": {"anyOf": [{"type": "null"}, {"type": "boolean"}]}
       }
     },
     "backend_arm": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["status", "blocking_codes", "warmup_count", "warmup_elapsed_ns", "measured_count", "service_durations_ns", "inference_failures", "thermal_status"],
+      "required": ["status", "blocking_codes", "warmup_count", "warmup_elapsed_ns", "measured_count", "service_durations_ns", "inference_failures", "thermal_status", "arm_started_ns", "warmup_predicates", "delivered_callback_ids", "terminal_callbacks", "submitted_inference_ids", "pending_inference_ids", "raw_evidence_overflow"],
       "properties": {
         "status": {"enum": ["recorded", "blocked"]},
         "blocking_codes": {"$ref": "#/$defs/blocking_codes"},
@@ -78,7 +80,25 @@
         "measured_count": {"type": "integer", "minimum": 0},
         "service_durations_ns": {"type": "array", "maxItems": 100, "items": {"type": "integer", "minimum": 0}},
         "inference_failures": {"type": "integer", "minimum": 0},
-        "thermal_status": {"type": "integer", "minimum": 0}
+        "thermal_status": {"type": "integer", "minimum": 0},
+        "arm_started_ns": {"type": "integer", "minimum": 0},
+        "warmup_predicates": {"$ref": "#/$defs/warmup_predicates"},
+        "delivered_callback_ids": {"type": "array", "maxItems": 300, "uniqueItems": true, "items": {"type": "integer", "minimum": 0}},
+        "terminal_callbacks": {"type": "array", "maxItems": 300, "items": {"$ref": "#/$defs/callback"}},
+        "submitted_inference_ids": {"type": "array", "maxItems": 300, "uniqueItems": true, "items": {"type": "integer", "minimum": 0}},
+        "pending_inference_ids": {"type": "array", "maxItems": 300, "uniqueItems": true, "items": {"type": "integer", "minimum": 0}},
+        "raw_evidence_overflow": {"type": "boolean"}
+      }
+    },
+    "warmup_predicates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["completion_count", "elapsed_ns", "completion_count_satisfied", "elapsed_satisfied"],
+      "properties": {
+        "completion_count": {"type": "integer", "minimum": 0},
+        "elapsed_ns": {"type": "integer", "minimum": 0},
+        "completion_count_satisfied": {"type": "boolean"},
+        "elapsed_satisfied": {"type": "boolean"}
       }
     },
     "fps_range": {
@@ -139,14 +159,16 @@
     "callback": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["callback_id", "capture_timestamp_ns", "production_classification", "cadence_due", "slot_available", "terminal_class"],
+      "required": ["callback_id", "capture_timestamp_ns", "production_classification", "cadence_due", "slot_available", "terminal_class", "phase", "completion_timestamp_ns"],
       "properties": {
         "callback_id": {"type": "integer", "minimum": 0},
         "capture_timestamp_ns": {"type": "integer", "minimum": 0},
         "production_classification": {"enum": ["submit", "cadence_selection", "backpressure", "preprocessing_failed", "session_stopping"]},
         "cadence_due": {"type": "boolean"},
         "slot_available": {"type": "boolean"},
-        "terminal_class": {"enum": ["admitted_completed", "admitted_inference_failed", "cadence_only", "backpressure_only", "cadence_and_backpressure", "preprocessing_failed", "session_stopping", "admission_state_divergence"]}
+        "terminal_class": {"enum": ["admitted_completed", "admitted_inference_failed", "cadence_only", "backpressure_only", "cadence_and_backpressure", "preprocessing_failed", "session_stopping", "admission_state_divergence"]},
+        "phase": {"enum": ["warmup", "measured"]},
+        "completion_timestamp_ns": {"anyOf": [{"type": "null"}, {"type": "integer", "minimum": 0}]}
       }
     }
   }

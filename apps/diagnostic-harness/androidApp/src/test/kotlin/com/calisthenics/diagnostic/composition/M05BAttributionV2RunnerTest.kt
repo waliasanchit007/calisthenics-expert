@@ -3,6 +3,7 @@ package com.calisthenics.diagnostic.composition
 import com.calisthenics.diagnostic.study.AttributionV2DeviceSource
 import com.calisthenics.diagnostic.study.AttributionV2EndToEndRun
 import com.calisthenics.diagnostic.study.AttributionV2Callback
+import com.calisthenics.diagnostic.study.AttributionV2CallbackPhase
 import com.calisthenics.diagnostic.study.AttributionV2ArmStatus
 import com.calisthenics.diagnostic.live.LiveFrameClassification
 import com.calisthenics.diagnostic.study.AttributionV2RunIdentity
@@ -80,6 +81,40 @@ class M05BAttributionV2RunnerTest {
         assertEquals(AttributionV2ArmStatus.BLOCKED, result.observation.backendArm?.status)
         assertTrue(result.observation.blockingCodes.contains("ATTRIBUTION.BACKEND_SAMPLE_INSUFFICIENT"))
         assertEquals(0, selector.invocations)
+    }
+
+    @Test
+    fun backendArmPublishesBoundedRawCallbackIdsTerminalsAndPhases() {
+        val result = runner(
+            source = RecordingSource(measuredFrames()),
+            backendFactory = { RecordingBackend.successfulCapacity() },
+        ).run("raw-backend-evidence")
+        val backend = checkNotNull(result.observation.backendArm)
+
+        assertEquals(120, backend.deliveredCallbackIds.size)
+        assertEquals(120, backend.terminalCallbacks.size)
+        assertEquals(20, backend.terminalCallbacks.count { it.phase == AttributionV2CallbackPhase.WARMUP })
+        assertEquals(100, backend.terminalCallbacks.count { it.phase == AttributionV2CallbackPhase.MEASURED })
+        assertEquals(0, backend.inferenceFailures)
+        assertTrue(backend.pendingInferenceIds.isEmpty())
+    }
+
+    @Test
+    fun backendRawEvidenceOverflowFailsClosedWithExistingCallbackConservationBlocker() {
+        val backend = RecordingBackend(
+            successfulBackendRun().copy(rawEvidenceOverflow = true),
+        )
+        val selector = RecordingSelector()
+
+        val result = runner(
+            source = RecordingSource(measuredFrames()),
+            backendFactory = { backend },
+            selector = selector,
+        ).run("raw-overflow")
+
+        assertTrue(result.observation.blockingCodes.contains("ATTRIBUTION.CALLBACK_CONSERVATION"))
+        assertEquals(0, selector.invocations)
+        assertTrue(result.observation.endToEndReplicates.isEmpty())
     }
 
     @Test
@@ -191,6 +226,44 @@ class M05BAttributionV2RunnerTest {
         assertTrue(result.observation.endToEndReplicates.single().runs.isEmpty())
     }
 
+    @Test
+    fun concreteBackendPhaseTransitionRequiresBothWarmupPredicatesBeforeMeasuredCollection() {
+        val phase = M05BAttributionV2BackendPhaseMachine(
+            warmupCompletions = M05BAttributionV2Protocol.BACKEND_WARMUP_COMPLETIONS,
+            warmupElapsedNs = M05BAttributionV2Protocol.BACKEND_WARMUP_ELAPSED_NS,
+            measuredCompletions = M05BAttributionV2Protocol.BACKEND_MEASURED_COMPLETIONS,
+        )
+
+        assertEquals(BackendPhase.WARMUP, phase.observe(completions = 20, elapsedNs = 1_999_999_999L).phase)
+        assertEquals(BackendPhase.WARMUP, phase.observe(completions = 21, elapsedNs = 1_999_999_999L).phase)
+        val transitioned = phase.observe(completions = 21, elapsedNs = 2_000_000_000L)
+        assertEquals(BackendPhase.MEASURED, transitioned.phase)
+        assertEquals(21, transitioned.warmupCompletionCount)
+        assertEquals(0, transitioned.measuredCompletionCount)
+        assertEquals(
+            100,
+            phase.observe(completions = 121, elapsedNs = 3_000_000_000L).measuredCompletionCount,
+        )
+    }
+
+    @Test
+    fun sourceArmFailsClosedWhenCaptureExtendsPastAbsoluteDeadline() {
+        val source = RecordingSource(
+            frames = measuredFrames(),
+            captureResult = SourceCaptureResult(
+                elapsedNs = M05BAttributionV2Protocol.ARM_CAP_NS + 5_000_000_000L,
+                stoppedByCap = false,
+                stopAcknowledged = false,
+            ),
+        )
+
+        val result = runner(source = source).run("absolute-deadline")
+
+        assertEquals(AttributionV2ArmStatus.BLOCKED, result.observation.sourceArm.status)
+        assertTrue(result.observation.blockingCodes.contains("ATTRIBUTION.SOURCE_SAMPLE_INSUFFICIENT"))
+        assertTrue(result.observation.endToEndReplicates.isEmpty())
+    }
+
     private fun runner(
         source: RecordingSource,
         backendFactory: () -> RecordingBackend = { RecordingBackend.successfulEndToEnd() },
@@ -208,6 +281,7 @@ class M05BAttributionV2RunnerTest {
             thermal = thermal,
             storage = storage,
             statusSink = { storage.statuses += 1 },
+            clock = M05BAttributionV2Clock { 0L },
         ),
     )
 
@@ -216,6 +290,7 @@ class M05BAttributionV2RunnerTest {
     private class RecordingSource(
         private val frames: List<SourceFrame>,
         private val hitCap: Boolean = false,
+        private val captureResult: SourceCaptureResult? = null,
     ) : M05BAttributionV2SourceArm {
         var requestedCapNs: Long = -1
         var delivered = 0
@@ -228,7 +303,7 @@ class M05BAttributionV2RunnerTest {
                 closed += 1
                 if (!onFrame(frame)) break
             }
-            return SourceCaptureResult(
+            return captureResult ?: SourceCaptureResult(
                 elapsedNs = if (hitCap) capNs else 11_000_000_000L,
                 stoppedByCap = hitCap,
             )
@@ -338,6 +413,26 @@ private fun successfulBackendRun(
     measuredServiceDurationsNs = List(100) { 1_000_000L },
     inferenceFailures = 0,
     endToEndRun = endToEnd,
+    armStartedNs = 0L,
+    deliveredCallbackIds = (0L until 120L).toList(),
+    terminalCallbacks = (0L until 120L).map { callbackId ->
+        AttributionV2Callback(
+            callbackId = callbackId,
+            captureTimestampNs = callbackId,
+            productionClassification = LiveFrameClassification.SUBMIT,
+            cadenceDue = true,
+            slotAvailable = true,
+            terminalClass = AttributionV2TerminalClass.ADMITTED_COMPLETED,
+            phase = if (callbackId < 20L) AttributionV2CallbackPhase.WARMUP else AttributionV2CallbackPhase.MEASURED,
+            completionTimestampNs = if (callbackId < 20L) {
+                2_000_000_000L + callbackId
+            } else {
+                3_000_000_000L + callbackId
+            },
+        )
+    },
+    submittedInferenceIds = (0L until 120L).toList(),
+    pendingInferenceIds = emptySet(),
 )
 
 private fun validEndToEndRun() = AttributionV2EndToEndRun(

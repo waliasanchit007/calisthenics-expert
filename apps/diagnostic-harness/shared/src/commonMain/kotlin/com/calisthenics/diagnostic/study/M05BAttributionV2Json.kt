@@ -43,6 +43,11 @@ data class AttributionV2RunIdentity(
 
 data class AttributionV2FpsRange(val lower: Int, val upper: Int)
 
+enum class AttributionV2CallbackPhase {
+    WARMUP,
+    MEASURED,
+}
+
 data class AttributionV2SourceObservation(
     val status: AttributionV2ArmStatus,
     val blockingCodes: List<String>,
@@ -50,6 +55,8 @@ data class AttributionV2SourceObservation(
     val measuredTimestampsNs: List<Long>,
     val observedAeTargetFps: AttributionV2FpsRange?,
     val thermalStatus: Int,
+    val initialCooldownThermalStatuses: List<Int> = emptyList(),
+    val initialCooldownRecovered: Boolean? = null,
 )
 
 data class AttributionV2BackendObservation(
@@ -60,6 +67,12 @@ data class AttributionV2BackendObservation(
     val measuredServiceDurationsNs: List<Long>,
     val inferenceFailures: Int,
     val thermalStatus: Int,
+    val armStartedNs: Long = 0L,
+    val deliveredCallbackIds: List<Long> = emptyList(),
+    val terminalCallbacks: List<AttributionV2Callback> = emptyList(),
+    val submittedInferenceIds: List<Long> = emptyList(),
+    val pendingInferenceIds: Set<Long> = emptySet(),
+    val rawEvidenceOverflow: Boolean = false,
 )
 
 data class AttributionV2SelectorObservation(
@@ -119,8 +132,8 @@ fun renderM05BAttributionV2Evidence(value: M05BAttributionV2DeviceObservation): 
         put("device", renderDevice(value.device))
         put("identity", renderIdentity(value.identity))
         put("source_arm", renderSource(value.sourceArm))
-        value.backendArm?.let { put("backend_arm", renderBackend(it)) } ?: put("backend_arm", null)
-        value.selectorArm?.let { put("selector_arm", renderSelector(it)) } ?: put("selector_arm", null)
+        if (value.backendArm == null) put("backend_arm", null) else put("backend_arm", renderBackend(value.backendArm))
+        if (value.selectorArm == null) put("selector_arm", null) else put("selector_arm", renderSelector(value.selectorArm))
         putJsonArray("end_to_end_replicates") {
             value.endToEndReplicates.forEach { add(renderReplicate(it)) }
         }
@@ -131,7 +144,14 @@ fun renderM05BAttributionV2Evidence(value: M05BAttributionV2DeviceObservation): 
 /** Derives all blocker codes from raw device observation fields before serialization. */
 fun deriveM05BAttributionV2BlockingCodes(value: M05BAttributionV2DeviceObservation): List<String> = (
     value.sourceArm.blockingCodes +
-        (value.backendArm?.blockingCodes ?: emptyList()) +
+        (value.backendArm?.let { backend ->
+            backend.blockingCodes + attributionV2BackendRawBlockers(backend)
+        } ?: emptyList()) +
+        if (value.backendArm != null && value.sourceArm.initialCooldownRecovered != true) {
+            listOf("ATTRIBUTION.THERMAL_STATE_MISMATCH")
+        } else {
+            emptyList()
+        } +
         (value.selectorArm?.blockingCodes ?: emptyList()) +
         value.endToEndReplicates.flatMap { replicate ->
             replicate.blockingCodes + replicate.runs.flatMap { run ->
@@ -158,6 +178,13 @@ private fun validateObservationBounds(value: M05BAttributionV2DeviceObservation)
         (value.backendArm?.measuredServiceDurationsNs?.size ?: 0) <=
             M05BAttributionV2Protocol.BACKEND_MEASURED_COMPLETIONS,
     )
+    require(value.sourceArm.initialCooldownThermalStatuses.size <= cooldownMaximumSamples())
+    value.backendArm?.let { backend ->
+        require(backend.deliveredCallbackIds.size <= M05BAttributionV2Protocol.SOURCE_MEASURED_CALLBACKS)
+        require(backend.terminalCallbacks.size <= M05BAttributionV2Protocol.SOURCE_MEASURED_CALLBACKS)
+        require(backend.submittedInferenceIds.size <= M05BAttributionV2Protocol.SOURCE_MEASURED_CALLBACKS)
+        require(backend.pendingInferenceIds.size <= M05BAttributionV2Protocol.SOURCE_MEASURED_CALLBACKS)
+    }
     require(value.endToEndReplicates.size <= M05BAttributionV2Protocol.REPLICATE_ORDERS.size)
     value.endToEndReplicates.forEach { replicate ->
         require(replicate.runs.size <= M05BAttributionV2Protocol.TARGET_CADENCES_FPS.size)
@@ -189,7 +216,14 @@ private fun M05BAttributionV2DeviceObservation.toValidationEvidence(): M05BAttri
         selectorArm = selectorArm?.let {
             AttributionV2SelectorArm(it.productionSelections, it.hostSelections)
         },
-        callbackArm = null,
+        callbackArm = backendArm?.let {
+            AttributionV2CallbackArm(
+                deliveredCallbackIds = it.deliveredCallbackIds,
+                terminalCallbacks = it.terminalCallbacks,
+                submittedInferenceIds = it.submittedInferenceIds,
+                pendingInferenceIds = it.pendingInferenceIds,
+            )
+        },
         replicates = endToEndReplicates.map { replicate ->
             AttributionV2Replicate(
                 cadenceOrder = replicate.order,
@@ -225,6 +259,38 @@ private fun AttributionV2EndToEndRun.toCallbackArm() = AttributionV2CallbackArm(
     submittedInferenceIds = submittedInferenceIds,
     pendingInferenceIds = pendingInferenceIds,
 )
+
+private fun attributionV2BackendRawBlockers(value: AttributionV2BackendObservation): List<String> = buildList {
+    if (value.rawEvidenceOverflow) add("ATTRIBUTION.CALLBACK_CONSERVATION")
+    addAll(
+        attributionV2CallbackBlockers(
+            AttributionV2CallbackArm(
+                deliveredCallbackIds = value.deliveredCallbackIds,
+                terminalCallbacks = value.terminalCallbacks,
+                submittedInferenceIds = value.submittedInferenceIds,
+                pendingInferenceIds = value.pendingInferenceIds,
+            ),
+        ),
+    )
+    val completed = value.terminalCallbacks.filter {
+        it.terminalClass == AttributionV2TerminalClass.ADMITTED_COMPLETED ||
+            it.terminalClass == AttributionV2TerminalClass.ADMITTED_INFERENCE_FAILED
+    }
+    val warmup = completed.filter { it.phase == AttributionV2CallbackPhase.WARMUP }
+    val measured = completed.filter { it.phase == AttributionV2CallbackPhase.MEASURED }
+    val warmupElapsedNs = warmup.mapNotNull { it.completionTimestampNs }
+        .maxOrNull()?.minus(value.armStartedNs) ?: 0L
+    if (warmup.size < M05BAttributionV2Protocol.BACKEND_WARMUP_COMPLETIONS ||
+        warmupElapsedNs < M05BAttributionV2Protocol.BACKEND_WARMUP_ELAPSED_NS ||
+        measured.size != M05BAttributionV2Protocol.BACKEND_MEASURED_COMPLETIONS
+    ) add("ATTRIBUTION.BACKEND_SAMPLE_INSUFFICIENT")
+    val rawInferenceFailures = completed.count {
+        it.terminalClass == AttributionV2TerminalClass.ADMITTED_INFERENCE_FAILED
+    }
+    if (rawInferenceFailures != value.inferenceFailures || rawInferenceFailures != 0) {
+        add("ATTRIBUTION.INFERENCE_FAILURE")
+    }
+}
 
 private fun ratePerSecond(count: Long, spanNs: Long): Long =
     if (spanNs <= 0L) 0L else (count * 1_000_000_000L) / spanNs
@@ -263,6 +329,8 @@ private fun renderSource(value: AttributionV2SourceObservation): JsonObject = bu
         }
     } ?: put("observed_ae_target_fps", null)
     put("thermal_status", value.thermalStatus)
+    putIntArray("initial_cooldown_thermal_statuses", value.initialCooldownThermalStatuses)
+    value.initialCooldownRecovered?.let { put("initial_cooldown_recovered", it) } ?: put("initial_cooldown_recovered", null)
 }
 
 private fun renderBackend(value: AttributionV2BackendObservation): JsonObject = buildJsonObject {
@@ -274,6 +342,25 @@ private fun renderBackend(value: AttributionV2BackendObservation): JsonObject = 
     putLongArray("service_durations_ns", value.measuredServiceDurationsNs)
     put("inference_failures", value.inferenceFailures)
     put("thermal_status", value.thermalStatus)
+    put("arm_started_ns", value.armStartedNs)
+    putJsonObject("warmup_predicates") {
+        val completed = value.terminalCallbacks.filter {
+            it.terminalClass == AttributionV2TerminalClass.ADMITTED_COMPLETED ||
+                it.terminalClass == AttributionV2TerminalClass.ADMITTED_INFERENCE_FAILED
+        }
+        val warmup = completed.filter { it.phase == AttributionV2CallbackPhase.WARMUP }
+        val elapsedNs = warmup.mapNotNull { it.completionTimestampNs }
+            .maxOrNull()?.minus(value.armStartedNs) ?: 0L
+        put("completion_count", warmup.size)
+        put("elapsed_ns", elapsedNs)
+        put("completion_count_satisfied", warmup.size >= M05BAttributionV2Protocol.BACKEND_WARMUP_COMPLETIONS)
+        put("elapsed_satisfied", elapsedNs >= M05BAttributionV2Protocol.BACKEND_WARMUP_ELAPSED_NS)
+    }
+    putLongArray("delivered_callback_ids", value.deliveredCallbackIds)
+    putJsonArray("terminal_callbacks") { value.terminalCallbacks.forEach { add(renderCallback(it)) } }
+    putLongArray("submitted_inference_ids", value.submittedInferenceIds)
+    putLongArray("pending_inference_ids", value.pendingInferenceIds.sorted())
+    put("raw_evidence_overflow", value.rawEvidenceOverflow)
 }
 
 private fun renderSelector(value: AttributionV2SelectorObservation): JsonObject = buildJsonObject {
@@ -318,6 +405,8 @@ private fun renderCallback(value: AttributionV2Callback): JsonObject = buildJson
     put("cadence_due", value.cadenceDue)
     put("slot_available", value.slotAvailable)
     put("terminal_class", value.terminalClass.name.lowercase())
+    put("phase", value.phase.name.lowercase())
+    value.completionTimestampNs?.let { put("completion_timestamp_ns", it) } ?: put("completion_timestamp_ns", null)
 }
 
 private fun LiveFrameClassification.wireValue(): String = when (this) {

@@ -3,6 +3,7 @@ package com.calisthenics.diagnostic.study
 import com.calisthenics.diagnostic.live.LiveFrameClassification
 import kotlin.test.Test
 import kotlin.test.assertContains
+import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 
@@ -59,6 +60,71 @@ class M05BAttributionV2JsonTest {
         assertFailsWith<IllegalArgumentException> {
             renderM05BAttributionV2Evidence(blockedObservation().copy(sourceArm = source))
         }
+    }
+
+    @Test
+    fun rendererIncludesRawBackendCallbackAndPhaseEvidence() {
+        val backend = AttributionV2BackendObservation(
+            status = AttributionV2ArmStatus.BLOCKED,
+            blockingCodes = emptyList(),
+            warmupCount = 20,
+            warmupElapsedNs = M05BAttributionV2Protocol.BACKEND_WARMUP_ELAPSED_NS,
+            measuredServiceDurationsNs = List(100) { 1_000_000L },
+            inferenceFailures = 0,
+            thermalStatus = 0,
+            armStartedNs = 0L,
+            deliveredCallbackIds = listOf(7L),
+            terminalCallbacks = listOf(
+                AttributionV2Callback(
+                    callbackId = 7L,
+                    captureTimestampNs = 123_000_000L,
+                    productionClassification = LiveFrameClassification.SUBMIT,
+                    cadenceDue = true,
+                    slotAvailable = true,
+                    terminalClass = AttributionV2TerminalClass.ADMITTED_COMPLETED,
+                    phase = AttributionV2CallbackPhase.WARMUP,
+                    completionTimestampNs = M05BAttributionV2Protocol.BACKEND_WARMUP_ELAPSED_NS,
+                ),
+            ),
+            submittedInferenceIds = listOf(7L),
+        )
+
+        val withBackend = blockedObservation().copy(backendArm = backend)
+        assertEquals(backend, withBackend.backendArm)
+        val rendered = renderM05BAttributionV2Evidence(
+            withBackend.copy(blockingCodes = deriveM05BAttributionV2BlockingCodes(withBackend)),
+        )
+
+        assertContains(rendered, "\"delivered_callback_ids\"")
+        assertContains(rendered, "\"terminal_callbacks\"")
+        assertContains(rendered, "\"phase\"")
+        assertContains(rendered, "\"warmup_predicates\"")
+    }
+
+    @Test
+    fun droppedRawBackendCallbackDataDerivesTerminalClosureBlocker() {
+        val backend = AttributionV2BackendObservation(
+            status = AttributionV2ArmStatus.BLOCKED,
+            blockingCodes = emptyList(),
+            warmupCount = 20,
+            warmupElapsedNs = M05BAttributionV2Protocol.BACKEND_WARMUP_ELAPSED_NS,
+            measuredServiceDurationsNs = List(100) { 1_000_000L },
+            inferenceFailures = 0,
+            thermalStatus = 0,
+            armStartedNs = 0L,
+            deliveredCallbackIds = listOf(7L),
+            terminalCallbacks = emptyList(),
+            submittedInferenceIds = listOf(7L),
+        )
+        val observation = blockedObservation().copy(
+            sourceArm = blockedObservation().sourceArm.copy(initialCooldownRecovered = true),
+            backendArm = backend,
+        )
+
+        assertContains(
+            deriveM05BAttributionV2BlockingCodes(observation),
+            "ATTRIBUTION.TERMINAL_CLOSURE",
+        )
     }
 
     @Test
