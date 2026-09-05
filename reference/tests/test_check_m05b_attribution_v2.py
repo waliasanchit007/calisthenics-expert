@@ -424,6 +424,31 @@ def test_host_missing_environment_operand_is_total_and_uses_environment_mismatch
     assert "ATTRIBUTION.ENVIRONMENT_MISMATCH" in result["blocking_codes"]
 
 
+def test_host_rejects_each_committed_environment_mutation() -> None:
+    from copy import deepcopy
+
+    mutations = (
+        lambda value: value["start"].update(power_source="usb"),
+        lambda value: value["start"].update(charging=True),
+        lambda value: value["start"].update(wifi_transport=False),
+        lambda value: value["start"].update(screen_keep_awake=False),
+        lambda value: value["start"].update(device_idle=True),
+        lambda value: value.update(arm_started_ns=2, arm_ended_ns=1),
+    )
+    for mutation in mutations:
+        observation = deepcopy(_valid_observation())
+        mutation(observation["end_to_end_replicates"][0]["runs"][0]["environment"])
+        result = _classify(observation)
+        assert "ATTRIBUTION.ENVIRONMENT_MISMATCH" in result["blocking_codes"]
+
+    observation = deepcopy(_valid_observation())
+    observation["end_to_end_replicates"][0]["runs"][1]["environment"]["start"][
+        "delivered_width"
+    ] = 640
+    result = _classify(observation)
+    assert "ATTRIBUTION.ENVIRONMENT_MISMATCH" in result["blocking_codes"]
+
+
 def test_host_blocks_undersampled_arm_two_runs_before_admission() -> None:
     from copy import deepcopy
 
