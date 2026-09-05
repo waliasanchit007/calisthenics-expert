@@ -167,7 +167,7 @@
         "cadence_due": {"type": "boolean"},
         "slot_available": {"type": "boolean"},
         "terminal_class": {"enum": ["admitted_completed", "admitted_inference_failed", "cadence_only", "backpressure_only", "cadence_and_backpressure", "preprocessing_failed", "session_stopping", "admission_state_divergence"]},
-        "phase": {"enum": ["warmup", "measured"]},
+        "phase": {"anyOf": [{"type": "null"}, {"enum": ["warmup", "measured"]}]},
         "completion_timestamp_ns": {"anyOf": [{"type": "null"}, {"type": "integer", "minimum": 0}]}
       }
     }

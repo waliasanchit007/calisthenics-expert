@@ -4,6 +4,7 @@ import com.calisthenics.diagnostic.live.LiveAdmissionPredicates
 import com.calisthenics.diagnostic.live.LiveFrameAdmission
 import com.calisthenics.diagnostic.live.LiveFrameClassification
 import com.calisthenics.diagnostic.study.M05BAttributionV2Protocol
+import com.calisthenics.diagnostic.study.AttributionV2CallbackPhase
 import com.calisthenics.diagnostic.telemetry.CallbackTerminalDisposition
 
 interface AttributionV2CallbackObserver {
@@ -31,10 +32,13 @@ data class AttributionV2ObservedTerminal(
     val callbackId: Long,
     val terminal: CallbackTerminalDisposition,
     val completedNs: Long,
+    val phase: AttributionV2CallbackPhase? = null,
 )
 
 /** Observation-only projection; it owns its shadow selectors and never receives production state. */
-class AttributionV2Observation : AttributionV2CallbackObserver {
+class AttributionV2Observation(
+    private val phaseAtTerminal: ((CallbackTerminalDisposition, Long) -> AttributionV2CallbackPhase?)? = null,
+) : AttributionV2CallbackObserver {
     private val shadowAdmissions = M05BAttributionV2Protocol.TARGET_CADENCES_FPS.associateWith(::LiveFrameAdmission)
     private val admissions = mutableListOf<AttributionV2ObservedAdmission>()
     private val terminals = mutableListOf<AttributionV2ObservedTerminal>()
@@ -66,7 +70,12 @@ class AttributionV2Observation : AttributionV2CallbackObserver {
 
     @Synchronized
     override fun onTerminal(callbackId: Long, terminal: CallbackTerminalDisposition, completedNs: Long) {
-        terminals += AttributionV2ObservedTerminal(callbackId, terminal, completedNs)
+        terminals += AttributionV2ObservedTerminal(
+            callbackId = callbackId,
+            terminal = terminal,
+            completedNs = completedNs,
+            phase = phaseAtTerminal?.invoke(terminal, completedNs),
+        )
     }
 
     @Synchronized

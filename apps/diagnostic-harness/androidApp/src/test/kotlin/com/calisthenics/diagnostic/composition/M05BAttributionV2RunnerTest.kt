@@ -6,11 +6,19 @@ import com.calisthenics.diagnostic.study.AttributionV2Callback
 import com.calisthenics.diagnostic.study.AttributionV2CallbackPhase
 import com.calisthenics.diagnostic.study.AttributionV2ArmStatus
 import com.calisthenics.diagnostic.live.LiveFrameClassification
+import com.calisthenics.diagnostic.live.LiveAdmissionPredicates
 import com.calisthenics.diagnostic.study.AttributionV2RunIdentity
 import com.calisthenics.diagnostic.study.AttributionV2TerminalClass
+import com.calisthenics.diagnostic.study.deriveM05BAttributionV2BlockingCodes
+import com.calisthenics.diagnostic.study.renderM05BAttributionV2Evidence
+import com.calisthenics.diagnostic.telemetry.CallbackTerminalDisposition
 import com.calisthenics.diagnostic.study.M05BAttributionV2Protocol
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Test
 
 class M05BAttributionV2RunnerTest {
@@ -97,6 +105,70 @@ class M05BAttributionV2RunnerTest {
         assertEquals(100, backend.terminalCallbacks.count { it.phase == AttributionV2CallbackPhase.MEASURED })
         assertEquals(0, backend.inferenceFailures)
         assertTrue(backend.pendingInferenceIds.isEmpty())
+    }
+
+    @Test
+    fun nonInferenceTerminalObservedDuringWarmupSerializesWarmupPhase() {
+        val phaseMachine = M05BAttributionV2BackendPhaseMachine(
+            warmupCompletions = M05BAttributionV2Protocol.BACKEND_WARMUP_COMPLETIONS,
+            warmupElapsedNs = M05BAttributionV2Protocol.BACKEND_WARMUP_ELAPSED_NS,
+            measuredCompletions = M05BAttributionV2Protocol.BACKEND_MEASURED_COMPLETIONS,
+        )
+        val observation = AttributionV2Observation { terminal, completedNs ->
+            phaseMachine.phaseAtTerminal(terminal, completedNs)
+        }
+        (0L until M05BAttributionV2Protocol.BACKEND_WARMUP_COMPLETIONS).forEach { callbackId ->
+            observation.onAdmission(
+                callbackId = callbackId,
+                captureTimestampNs = callbackId,
+                observedSessionNs = callbackId,
+                productionClassification = LiveFrameClassification.SUBMIT,
+                productionPredicates = LiveAdmissionPredicates(cadenceDue = true, slotAvailable = true),
+            )
+            observation.onTerminal(
+                callbackId = callbackId,
+                terminal = CallbackTerminalDisposition.INFERENCE_COMPLETED,
+                completedNs = 1_000_000_000L + callbackId,
+            )
+        }
+        observation.onAdmission(
+            callbackId = 900L,
+            captureTimestampNs = 1_000_000_000L,
+            observedSessionNs = 1_000_000_000L,
+            productionClassification = LiveFrameClassification.CADENCE_SELECTION,
+            productionPredicates = LiveAdmissionPredicates(cadenceDue = false, slotAvailable = true),
+        )
+        observation.onTerminal(
+            callbackId = 900L,
+            terminal = CallbackTerminalDisposition.CADENCE_SELECTION,
+            completedNs = 1_500_000_000L,
+        )
+
+        val terminal = rawCallbacksFromObservedTerminals(observation).single { it.callbackId == 900L }
+        assertEquals(AttributionV2CallbackPhase.WARMUP, terminal.phase)
+        assertEquals(1_500_000_000L, terminal.completionTimestampNs)
+
+        val base = runner(
+            source = RecordingSource(measuredFrames()),
+            backendFactory = { RecordingBackend.successfulCapacity() },
+        ).run("phase-serialization").observation
+        val baseBackend = checkNotNull(base.backendArm)
+        val augmented = base.copy(
+            backendArm = baseBackend.copy(
+                deliveredCallbackIds = baseBackend.deliveredCallbackIds + terminal.callbackId,
+                terminalCallbacks = baseBackend.terminalCallbacks + terminal,
+            ),
+        )
+        assertEquals(AttributionV2CallbackPhase.WARMUP, augmented.backendArm!!.terminalCallbacks.last().phase)
+        assertEquals(1_500_000_000L, augmented.backendArm!!.terminalCallbacks.last().completionTimestampNs)
+        val rendered = renderM05BAttributionV2Evidence(
+            augmented.copy(blockingCodes = deriveM05BAttributionV2BlockingCodes(augmented)),
+        )
+        val serialized = Json.parseToJsonElement(rendered).jsonObject["backend_arm"]!!.jsonObject
+            .getValue("terminal_callbacks").jsonArray
+            .single { it.jsonObject.getValue("callback_id").jsonPrimitive.content.toLong() == 900L }
+
+        assertEquals("warmup", serialized.jsonObject.getValue("phase").jsonPrimitive.content)
     }
 
     @Test
@@ -286,6 +358,22 @@ class M05BAttributionV2RunnerTest {
     )
 
     private fun measuredFrames() = (0 until 330).map { SourceFrame(it * 33_333_333L) }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun rawCallbacksFromObservedTerminals(observation: AttributionV2Observation): List<AttributionV2Callback> {
+        val converter = Class.forName(
+            "com.calisthenics.diagnostic.composition.M05BAttributionV2RunnerKt",
+        ).declaredMethods.first { it.name == "toRawCallbacks" }
+        converter.isAccessible = true
+        val admissions = observation.admissionSnapshot()
+        return converter.invoke(
+            null,
+            admissions,
+            observation.terminalSnapshot(),
+            null,
+            admissions.associateBy { it.callbackId },
+        ) as List<AttributionV2Callback>
+    }
 
     private class RecordingSource(
         private val frames: List<SourceFrame>,

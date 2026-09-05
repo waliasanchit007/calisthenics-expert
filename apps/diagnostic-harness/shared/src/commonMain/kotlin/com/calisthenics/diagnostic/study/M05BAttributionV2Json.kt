@@ -262,6 +262,9 @@ private fun AttributionV2EndToEndRun.toCallbackArm() = AttributionV2CallbackArm(
 
 private fun attributionV2BackendRawBlockers(value: AttributionV2BackendObservation): List<String> = buildList {
     if (value.rawEvidenceOverflow) add("ATTRIBUTION.CALLBACK_CONSERVATION")
+    if (value.terminalCallbacks.any { it.phase == null }) {
+        add("ATTRIBUTION.ADMISSION_STATE_DIVERGENCE")
+    }
     addAll(
         attributionV2CallbackBlockers(
             AttributionV2CallbackArm(
@@ -405,8 +408,12 @@ private fun renderCallback(value: AttributionV2Callback): JsonObject = buildJson
     put("cadence_due", value.cadenceDue)
     put("slot_available", value.slotAvailable)
     put("terminal_class", value.terminalClass.name.lowercase())
-    put("phase", value.phase.name.lowercase())
-    value.completionTimestampNs?.let { put("completion_timestamp_ns", it) } ?: put("completion_timestamp_ns", null)
+    if (value.phase == null) put("phase", null) else put("phase", value.phase.name.lowercase())
+    if (value.completionTimestampNs == null) {
+        put("completion_timestamp_ns", null)
+    } else {
+        put("completion_timestamp_ns", value.completionTimestampNs)
+    }
 }
 
 private fun LiveFrameClassification.wireValue(): String = when (this) {

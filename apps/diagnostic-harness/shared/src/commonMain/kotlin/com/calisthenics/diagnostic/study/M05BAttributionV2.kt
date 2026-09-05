@@ -23,7 +23,7 @@ data class AttributionV2Callback(
     val cadenceDue: Boolean,
     val slotAvailable: Boolean,
     val terminalClass: AttributionV2TerminalClass,
-    val phase: AttributionV2CallbackPhase = AttributionV2CallbackPhase.MEASURED,
+    val phase: AttributionV2CallbackPhase? = null,
     val completionTimestampNs: Long? = null,
 )
 
