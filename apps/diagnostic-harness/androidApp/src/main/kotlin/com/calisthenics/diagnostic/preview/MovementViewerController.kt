@@ -64,7 +64,8 @@ class MovementViewerController(
                         }, 0, 100, TimeUnit.MILLISECONDS)
                     }
                     ViewerInput.CAMERA -> {
-                        val camera = CameraXFrameSource(context, lifecycleOwner)
+                        val camera = CameraXFrameSource(context, lifecycleOwner,
+                            requestedLensFacing = androidx.camera.core.CameraSelector.LENS_FACING_FRONT)
                         source = camera
                         camera.start(
                             onSourceStarted = {},

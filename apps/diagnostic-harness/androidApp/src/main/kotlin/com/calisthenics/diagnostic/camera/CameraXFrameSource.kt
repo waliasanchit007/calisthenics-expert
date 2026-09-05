@@ -30,6 +30,7 @@ import android.hardware.camera2.CaptureResult
 class CameraXFrameSource(
     private val context: android.content.Context,
     private val lifecycleOwner: LifecycleOwner,
+    private val requestedLensFacing: Int? = null,
 ) {
     private val lifecycleDispatcher = AndroidCameraLifecycleDispatcher()
     private val analyzerExecutor = Executors.newSingleThreadExecutor()
@@ -54,17 +55,21 @@ class CameraXFrameSource(
         future.addListener({
             runCatching {
                 val cameraProvider = future.get()
+                val selectedId = selectSourceCameraId(cameraProvider.availableCameraInfos.map { info ->
+                    val camera = Camera2CameraInfo.from(info)
+                    camera.cameraId to camera.getCameraCharacteristic(CameraCharacteristics.LENS_FACING)
+                }, requestedLensFacing)
                 val selectedCameraInfo = cameraProvider.availableCameraInfos.firstOrNull { info ->
-                    Camera2CameraInfo.from(info).cameraId == OwnedYuvFrame.CAMERA_ID
-                } ?: error("camera ID 0 is unavailable")
+                    Camera2CameraInfo.from(info).cameraId == selectedId
+                } ?: error("selected camera is unavailable")
                 require(
                     Camera2CameraInfo.from(selectedCameraInfo)
                         .getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE) ==
                         CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME,
-                ) { "camera ID 0 does not provide REALTIME timestamps" }
+                ) { "selected camera does not provide REALTIME timestamps" }
                 val selector = CameraSelector.Builder()
                     .addCameraFilter { infos ->
-                        infos.filter { Camera2CameraInfo.from(it).cameraId == OwnedYuvFrame.CAMERA_ID }
+                        infos.filter { Camera2CameraInfo.from(it).cameraId == selectedId }
                     }
                     .build()
                 val useCaseBuilder = ImageAnalysis.Builder()
@@ -155,6 +160,12 @@ class CameraXFrameSource(
         const val REQUESTED_ANALYSIS_HEIGHT = 720
     }
 }
+
+/** Study calls keep their exact admitted camera; viewer calls explicitly select lens direction. */
+internal fun selectSourceCameraId(available: List<Pair<String, Int?>>, requestedLensFacing: Int? = null): String =
+    available.firstOrNull { (id, facing) ->
+        if (requestedLensFacing == null) id == OwnedYuvFrame.CAMERA_ID else facing == requestedLensFacing
+    }?.first ?: error("requested camera is unavailable")
 
 /** One-session fence that makes analyzer callback ownership explicit at source teardown. */
 internal class AnalyzerCallbackFence {

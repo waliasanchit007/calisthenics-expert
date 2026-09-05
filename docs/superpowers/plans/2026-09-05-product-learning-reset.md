@@ -50,7 +50,7 @@ This is a planning/setup step attached to the viewer deliverable, not another pl
 
 ### 1. See the signal — Android skeleton viewer
 
-Deliver one screen with rear-camera preview, aligned skeleton, required-joint availability,
+Deliver one screen with front-camera preview, aligned skeleton, required-joint availability,
 pose-present/no-pose/stale status, and Start/Stop. Share UI/state and geometry through KMP; keep
 CameraX preview integration in Android. Retain the current S25 and admitted preprocessing scope.
 These are display observations, not released GOOD/DEGRADED tracking-quality classifications.
@@ -68,7 +68,7 @@ These are display observations, not released GOOD/DEGRADED tracking-quality clas
 - [x] Exercise geometry with synthetic corner/joint vectors and runtime with existing synthetic
   inputs before human use. The packaged synthetic input produced 33 landmarks and a visible
   overlay on physical SM-S938B; Stop/background cleared observations without new observation files.
-- [ ] Validate the actual rear-camera path with a freshly confirmed non-participant scene. An
+- [ ] Validate the actual front-camera path with an authorized scene. An
   empty scene must show no pose. This remains distinct from the packaged synthetic demo.
 
 Acceptance: installable S25 screen, visible detection on the existing detection-bearing synthetic

@@ -8,6 +8,19 @@ import kotlin.test.*
 
 /** Real packaged model + real viewer; synthetic pixels only, never starts the camera. */
 class MovementViewerDeviceTest {
+    @Test fun frontCameraIsPresentAndHasCompatibleTimestampMetadataWithoutOpeningIt() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val manager = context.getSystemService(android.hardware.camera2.CameraManager::class.java)
+        val available = manager.cameraIdList.map { id ->
+            id to manager.getCameraCharacteristics(id).get(android.hardware.camera2.CameraCharacteristics.LENS_FACING)
+        }
+        val id = com.calisthenics.diagnostic.camera.selectSourceCameraId(available, androidx.camera.core.CameraSelector.LENS_FACING_FRONT)
+        val metadata = manager.getCameraCharacteristics(id)
+        assertEquals(android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT,
+            metadata.get(android.hardware.camera2.CameraCharacteristics.LENS_FACING))
+        assertEquals(android.hardware.camera2.CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME,
+            metadata.get(android.hardware.camera2.CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE))
+    }
     @Test fun installedViewerCannotUseNetworkPermission() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val info = context.packageManager.getPackageInfo(context.packageName, android.content.pm.PackageManager.GET_PERMISSIONS)

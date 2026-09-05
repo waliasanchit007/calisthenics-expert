@@ -21,6 +21,11 @@ buffering and avoids displaying old landmarks on a newer frame. Geometry must re
 using the same dimensions/rounding as preprocessing. Stale results are cleared using an explicitly
 labelled UI freshness timeout, not a validated pose-quality threshold.
 
+The exploratory viewer selects the front-facing camera for operator-visible self-tests. It keeps
+the source image unmirrored and pairs the overlay to it. Formal study callers retain exact camera
+ID 0; rear-camera device evidence does not validate the front camera. The same REALTIME timestamp
+and observed YUV DataSpace admission checks remain mandatory; unavailable front input fails closed.
+
 Use a small controller independent of storage, telemetry recording and study publication. The UI
 shows observations (pose present, missing, stale), not reliable/unreliable medical or form claims.
 Stop/background/error clears displayed image/landmarks and releases the camera and model.

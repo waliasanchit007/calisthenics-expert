@@ -44,7 +44,7 @@ class MovementViewerActivity : ComponentActivity() {
                 state = MovementViewerUiState(
                     active = controller != null,
                     message = snapshot?.message ?: "Ready to explore",
-                    source = if (input == ViewerInput.SYNTHETIC) "Packaged synthetic figure" else "Rear camera",
+                    source = if (input == ViewerInput.SYNTHETIC) "Packaged synthetic figure" else "Front camera",
                     width = observation?.frame?.width ?: 1,
                     height = observation?.frame?.height ?: 1,
                     landmarks = observation?.landmarks.orEmpty(),
