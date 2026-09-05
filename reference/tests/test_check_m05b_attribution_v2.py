@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 import check_m05b_attribution_v2
 
 from observation_contracts.m05b_attribution_v2 import selector_timestamps
+from tests.samples import minimal_manifest, minimal_pose_frame
 
 STATUS_TAG = check_m05b_attribution_v2.STATUS_TAG
 SUITE = check_m05b_attribution_v2.SUITE
@@ -197,44 +198,116 @@ def test_transfer_reference_leaves_no_destination_when_expected_digest_is_wrong(
     assert not destination.exists()
 
 
-def test_transfer_session_bundle_reopens_manifest_frames_and_telemetry_before_publish(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    manifest = b'{"session_id":"00000000-0000-4000-8000-000000000001"}'
-    frames = b'{"session_id":"00000000-0000-4000-8000-000000000001"}\n'
-    telemetry = b'{"record_type":"pipeline_stage_event"}\n'
+def _realistic_session_bundle(
+    session_id: str,
+) -> tuple[dict[str, object], dict[str, bytes]]:
+    identity = _valid_identity()
+    manifest = minimal_manifest(
+        session_id=session_id,
+        schema_version="1.1.0",
+        camera_frames_received=2,
+        inference_frames_submitted=2,
+        inference_records_emitted=2,
+        pose_detected_records=2,
+    )
+    manifest["session_kind"] = "live_conformance"
+    manifest["device"]["device_model"] = "SM-S938B"
+    manifest["device"]["os_version"] = identity["runtime_version"]
+    manifest["harness_git_sha"] = identity["app_git_sha"]
+    manifest["pose_pipeline"]["model_asset_sha256"] = identity["model_sha256"]
+    manifest["pose_pipeline"]["backend_version"] = identity["backend_version"]
+    manifest["pose_pipeline"]["delegate"] = identity["delegate"]
+    manifest["study_context"]["m05b_attribution_identity"] = identity
+    frames = [
+        minimal_pose_frame(index=index, capture_ns=(index + 1) * 100, session_id=session_id)
+        for index in range(2)
+    ]
+    telemetry_records = []
+    sequence = 0
+    for frame_index in range(2):
+        telemetry_records.extend(
+            [
+                {
+                    "record_type": "pipeline_stage_event",
+                    "schema_version": "1.0.0",
+                    "sequence": sequence,
+                    "t_session_ns": sequence,
+                    "frame_index": frame_index,
+                    "stage": "CAMERA_CALLBACK",
+                    "disposition": "RECEIVED",
+                },
+                {
+                    "record_type": "pipeline_stage_event",
+                    "schema_version": "1.0.0",
+                    "sequence": sequence + 1,
+                    "t_session_ns": sequence + 1,
+                    "frame_index": frame_index,
+                    "stage": "INFERENCE",
+                    "disposition": "SUBMITTED",
+                },
+                {
+                    "record_type": "pipeline_stage_event",
+                    "schema_version": "1.0.0",
+                    "sequence": sequence + 2,
+                    "t_session_ns": sequence + 2,
+                    "frame_index": frame_index,
+                    "stage": "INFERENCE",
+                    "disposition": "COMPLETED",
+                },
+            ]
+        )
+        sequence += 3
     payloads = {
-        "exports/00000000-0000-4000-8000-000000000001/manifest.json": manifest,
-        "exports/00000000-0000-4000-8000-000000000001/frames.ndjson": frames,
-        "exports/00000000-0000-4000-8000-000000000001/telemetry.ndjson": telemetry,
+        f"exports/{session_id}/manifest.json": json.dumps(
+            manifest, separators=(",", ":"), sort_keys=True
+        ).encode(),
+        f"exports/{session_id}/frames.ndjson": b"".join(
+            json.dumps(frame, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+            for frame in frames
+        ),
+        f"exports/{session_id}/telemetry.ndjson": b"".join(
+            json.dumps(record, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+            for record in telemetry_records
+        ),
     }
     bundle = {
-        "session_reference": "exports/00000000-0000-4000-8000-000000000001",
+        "session_reference": f"exports/{session_id}",
         **{
             name: {
                 "relative_path": path,
                 "length_bytes": len(data),
                 "sha256": hashlib.sha256(data).hexdigest(),
             }
-            for name, path, data in (
-                (
-                    "manifest",
-                    next(path for path in payloads if path.endswith("manifest.json")),
-                    manifest,
-                ),
-                (
-                    "frames",
-                    next(path for path in payloads if path.endswith("frames.ndjson")),
-                    frames,
-                ),
-                (
-                    "telemetry",
-                    next(path for path in payloads if path.endswith("telemetry.ndjson")),
-                    telemetry,
-                ),
+            for name, suffix in (
+                ("manifest", "manifest.json"),
+                ("frames", "frames.ndjson"),
+                ("telemetry", "telemetry.ndjson"),
             )
+            for path, data in [
+                (f"exports/{session_id}/{suffix}", payloads[f"exports/{session_id}/{suffix}"])
+            ]
         },
     }
+    return bundle, payloads
+
+
+def _patch_bundle_payload(
+    bundle: dict[str, object],
+    payloads: dict[str, bytes],
+    name: str,
+    data: bytes,
+) -> None:
+    path = bundle[name]["relative_path"]
+    payloads[path] = data
+    bundle[name]["length_bytes"] = len(data)
+    bundle[name]["sha256"] = hashlib.sha256(data).hexdigest()
+
+
+def test_transfer_session_bundle_reopens_manifest_frames_and_telemetry_before_publish(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    session_id = "00000000-0000-4000-8000-000000000001"
+    bundle, payloads = _realistic_session_bundle(session_id)
 
     def fake_run(argv: list[str], **_kwargs: object) -> object:
         path = argv[-1]
@@ -243,19 +316,227 @@ def test_transfer_session_bundle_reopens_manifest_frames_and_telemetry_before_pu
     monkeypatch.setattr(check_m05b_attribution_v2.subprocess, "run", fake_run)
 
     result = check_m05b_attribution_v2.transfer_session_bundle(
-        "SERIAL", "com.example.app", bundle, tmp_path / "exports"
+        "SERIAL",
+        "com.example.app",
+        bundle,
+        tmp_path / "exports",
+        expected_identity=_valid_identity(),
+        expected_cadence=30,
     )
 
-    assert result == {"manifest": len(manifest), "frames": 1, "telemetry": 1}
-    assert (
-        tmp_path / "exports/00000000-0000-4000-8000-000000000001/manifest.json"
-    ).read_bytes() == manifest
+    assert result == {
+        "manifest": len(payloads[f"exports/{session_id}/manifest.json"]),
+        "frames": 2,
+        "telemetry": 6,
+    }
+    assert (tmp_path / f"exports/{session_id}/manifest.json").read_bytes() == payloads[
+        f"exports/{session_id}/manifest.json"
+    ]
 
     forged_digest = deepcopy(bundle)
     forged_digest["frames"]["sha256"] = "0" * 64
     with pytest.raises(check_m05b_attribution_v2.AttributionV2CheckError, match="digest"):
         check_m05b_attribution_v2.transfer_session_bundle(
             "SERIAL", "com.example.app", forged_digest, tmp_path / "forged"
+        )
+
+
+def test_transfer_session_bundle_binds_expected_counts_only_to_telemetry(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    session_id = "00000000-0000-4000-8000-000000000002"
+    bundle, payloads = _realistic_session_bundle(session_id)
+
+    def fake_run(argv: list[str], **_kwargs: object) -> object:
+        path = argv[-1]
+        return type("Completed", (), {"returncode": 0, "stdout": payloads[path]})()
+
+    monkeypatch.setattr(check_m05b_attribution_v2.subprocess, "run", fake_run)
+
+    result = check_m05b_attribution_v2.transfer_session_bundle(
+        "SERIAL",
+        "com.example.app",
+        bundle,
+        tmp_path / "exports",
+        expected_counts={"delivered": 2, "submitted": 2, "terminal": 2},
+    )
+
+    assert result == {
+        "manifest": len(payloads[f"exports/{session_id}/manifest.json"]),
+        "frames": 2,
+        "telemetry": 6,
+    }
+
+
+def test_transfer_session_bundle_rejects_mismatched_telemetry_counts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    session_id = "00000000-0000-4000-8000-000000000003"
+    bundle, payloads = _realistic_session_bundle(session_id)
+
+    def fake_run(argv: list[str], **_kwargs: object) -> object:
+        path = argv[-1]
+        return type("Completed", (), {"returncode": 0, "stdout": payloads[path]})()
+
+    monkeypatch.setattr(check_m05b_attribution_v2.subprocess, "run", fake_run)
+
+    with pytest.raises(
+        check_m05b_attribution_v2.AttributionV2CheckError,
+        match="session telemetry counts do not bind",
+    ):
+        check_m05b_attribution_v2.transfer_session_bundle(
+            "SERIAL",
+            "com.example.app",
+            bundle,
+            tmp_path / "exports",
+            expected_counts={"delivered": 2, "submitted": 3, "terminal": 2},
+        )
+
+
+def test_transfer_session_bundle_rejects_manifest_schema_violation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    session_id = "00000000-0000-4000-8000-000000000004"
+    bundle, payloads = _realistic_session_bundle(session_id)
+    manifest = json.loads(payloads[f"exports/{session_id}/manifest.json"])
+    manifest.pop("camera")
+    _patch_bundle_payload(
+        bundle,
+        payloads,
+        "manifest",
+        json.dumps(manifest, separators=(",", ":"), sort_keys=True).encode(),
+    )
+
+    def fake_run(argv: list[str], **_kwargs: object) -> object:
+        path = argv[-1]
+        return type("Completed", (), {"returncode": 0, "stdout": payloads[path]})()
+
+    monkeypatch.setattr(check_m05b_attribution_v2.subprocess, "run", fake_run)
+
+    with pytest.raises(
+        check_m05b_attribution_v2.AttributionV2CheckError,
+        match="session manifest schema validation failed",
+    ):
+        check_m05b_attribution_v2.transfer_session_bundle(
+            "SERIAL", "com.example.app", bundle, tmp_path / "exports"
+        )
+
+
+def test_transfer_session_bundle_rejects_raw_frame_schema_violation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    session_id = "00000000-0000-4000-8000-000000000005"
+    bundle, payloads = _realistic_session_bundle(session_id)
+    frames = [
+        json.loads(line) for line in payloads[f"exports/{session_id}/frames.ndjson"].splitlines()
+    ]
+    frames[0].pop("frame_index")
+    _patch_bundle_payload(
+        bundle,
+        payloads,
+        "frames",
+        b"".join(
+            json.dumps(frame, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+            for frame in frames
+        ),
+    )
+
+    def fake_run(argv: list[str], **_kwargs: object) -> object:
+        path = argv[-1]
+        return type("Completed", (), {"returncode": 0, "stdout": payloads[path]})()
+
+    monkeypatch.setattr(check_m05b_attribution_v2.subprocess, "run", fake_run)
+
+    with pytest.raises(
+        check_m05b_attribution_v2.AttributionV2CheckError,
+        match="session frames validation failed",
+    ):
+        check_m05b_attribution_v2.transfer_session_bundle(
+            "SERIAL", "com.example.app", bundle, tmp_path / "exports"
+        )
+
+
+def test_transfer_session_bundle_rejects_unknown_telemetry_record(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    session_id = "00000000-0000-4000-8000-000000000006"
+    bundle, payloads = _realistic_session_bundle(session_id)
+    telemetry = [
+        json.loads(line) for line in payloads[f"exports/{session_id}/telemetry.ndjson"].splitlines()
+    ]
+    telemetry[0]["record_type"] = "unknown_telemetry_record"
+    _patch_bundle_payload(
+        bundle,
+        payloads,
+        "telemetry",
+        b"".join(
+            json.dumps(record, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+            for record in telemetry
+        ),
+    )
+
+    def fake_run(argv: list[str], **_kwargs: object) -> object:
+        path = argv[-1]
+        return type("Completed", (), {"returncode": 0, "stdout": payloads[path]})()
+
+    monkeypatch.setattr(check_m05b_attribution_v2.subprocess, "run", fake_run)
+
+    with pytest.raises(
+        check_m05b_attribution_v2.AttributionV2CheckError,
+        match="session telemetry validation failed",
+    ):
+        check_m05b_attribution_v2.transfer_session_bundle(
+            "SERIAL",
+            "com.example.app",
+            bundle,
+            tmp_path / "exports",
+            expected_counts={"delivered": 2, "submitted": 2, "terminal": 2},
+        )
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        (("pose_pipeline", "model_asset_sha256"), "6" * 64),
+        (("pose_pipeline", "backend_version"), "other-backend"),
+        (("pose_pipeline", "delegate"), "gpu"),
+        (("device", "os_version"), "15"),
+    ],
+)
+def test_transfer_session_bundle_binds_manifest_candidate_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    path: tuple[str, str],
+    value: str,
+) -> None:
+    session_id = f"00000000-0000-4000-8000-{int(value != '15'):012d}"
+    bundle, payloads = _realistic_session_bundle(session_id)
+    manifest = json.loads(payloads[f"exports/{session_id}/manifest.json"])
+    manifest[path[0]][path[1]] = value
+    _patch_bundle_payload(
+        bundle,
+        payloads,
+        "manifest",
+        json.dumps(manifest, separators=(",", ":"), sort_keys=True).encode(),
+    )
+
+    def fake_run(argv: list[str], **_kwargs: object) -> object:
+        path_arg = argv[-1]
+        return type("Completed", (), {"returncode": 0, "stdout": payloads[path_arg]})()
+
+    monkeypatch.setattr(check_m05b_attribution_v2.subprocess, "run", fake_run)
+
+    with pytest.raises(
+        check_m05b_attribution_v2.AttributionV2CheckError,
+        match="session manifest candidate identity mismatch",
+    ):
+        check_m05b_attribution_v2.transfer_session_bundle(
+            "SERIAL",
+            "com.example.app",
+            bundle,
+            tmp_path / "exports",
+            expected_identity=_valid_identity(),
+            expected_cadence=30,
         )
 
 

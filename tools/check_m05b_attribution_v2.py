@@ -17,6 +17,7 @@ from math import lcm
 from pathlib import Path
 from typing import cast
 
+from check_m05b_attribution import AttributionCheckError, _derive_telemetry
 from jsonschema import Draft202012Validator
 from observation_contracts.m05b_attribution_v2 import (
     REPLICATE_ORDERS,
@@ -30,6 +31,11 @@ from observation_contracts.schema_loader import (
     load_m05b_attribution_observation_v2_schema,
     load_strict_json,
 )
+from observation_contracts.semantic import (
+    validate_frame_stream,
+    validate_session_manifest_semantics,
+)
+from observation_contracts.structural import validate_document, validate_ndjson
 
 STATUS_TAG = "M05BAttributionV2Evidence"
 SUITE = "com.calisthenics.diagnostic.composition.M05BAttributionV2DeviceGateTest"
@@ -44,9 +50,7 @@ GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 SAFE_RELATIVE = re.compile(
     r"^(?!/)(?![A-Za-z]:[\\/])(?!.*(?:^|/)\.\.(?:/|$))[A-Za-z0-9._/-]+$"
 )
-SESSION_REFERENCE = re.compile(
-    r"^exports/00000000-0000-4000-8000-[0-9a-f]{12}$"
-)
+SESSION_REFERENCE = re.compile(r"^exports/00000000-0000-4000-8000-[0-9a-f]{12}$")
 IDENTITY_TOKEN = re.compile(r"^[A-Za-z0-9._+-]{1,128}$")
 DEVICE_TOKEN = re.compile(r"^[A-Za-z0-9._-]+$")
 DEVICE_KEYS = {
@@ -221,22 +225,34 @@ def transfer_session_bundle(
 ) -> dict[str, int]:
     """Transfer and reopen the reserved synthetic manifest, frames, and telemetry bundle."""
     session_reference = bundle.get("session_reference")
-    if not isinstance(session_reference, str) or not SESSION_REFERENCE.fullmatch(
-        session_reference
-    ) or not session_reference.startswith("exports/00000000-0000-4000-8000-"):
-        raise AttributionV2CheckError("session bundle identity is not reserved synthetic")
+    if (
+        not isinstance(session_reference, str)
+        or not SESSION_REFERENCE.fullmatch(session_reference)
+        or not session_reference.startswith("exports/00000000-0000-4000-8000-")
+    ):
+        raise AttributionV2CheckError(
+            "session bundle identity is not reserved synthetic"
+        )
     session_id = session_reference.removeprefix("exports/")
     destination = destination_root / session_id
-    names = {"manifest": "manifest.json", "frames": "frames.ndjson", "telemetry": "telemetry.ndjson"}
+    names = {
+        "manifest": "manifest.json",
+        "frames": "frames.ndjson",
+        "telemetry": "telemetry.ndjson",
+    }
     counts: dict[str, int] = {}
     for name, suffix in names.items():
         reference = bundle.get(name)
         if not isinstance(reference, Mapping):
-            raise AttributionV2CheckError("session bundle is missing an artifact descriptor")
+            raise AttributionV2CheckError(
+                "session bundle is missing an artifact descriptor"
+            )
         relative = reference.get("relative_path")
         expected_relative = f"exports/{session_id}/{suffix}"
         if relative != expected_relative:
-            raise AttributionV2CheckError("session bundle artifact path is not session-bound")
+            raise AttributionV2CheckError(
+                "session bundle artifact path is not session-bound"
+            )
         target = destination / suffix
         transfer_reference(
             serial,
@@ -253,39 +269,114 @@ def transfer_session_bundle(
             try:
                 manifest = load_strict_json(data.decode("utf-8"))
             except (UnicodeDecodeError, json.JSONDecodeError) as error:
-                raise AttributionV2CheckError("session manifest is malformed") from error
-            if not isinstance(manifest, Mapping) or manifest.get("session_id") != session_id:
+                raise AttributionV2CheckError(
+                    "session manifest is malformed"
+                ) from error
+            if (
+                not isinstance(manifest, Mapping)
+                or manifest.get("session_id") != session_id
+            ):
                 raise AttributionV2CheckError("session manifest identity mismatch")
             if expected_cadence is not None:
                 cadence = manifest.get("cadence")
-                configured = cadence.get("configured_inference_fps") if isinstance(cadence, Mapping) else None
+                configured = (
+                    cadence.get("configured_inference_fps")
+                    if isinstance(cadence, Mapping)
+                    else None
+                )
                 if configured != expected_cadence:
                     raise AttributionV2CheckError("session manifest cadence mismatch")
             if expected_identity is not None:
                 manifest_identity = manifest.get("build_identity")
                 if not isinstance(manifest_identity, Mapping):
                     context = manifest.get("study_context")
-                    manifest_identity = context.get("m05b_attribution_identity") if isinstance(context, Mapping) else None
-                if not isinstance(manifest_identity, Mapping) or dict(manifest_identity) != dict(expected_identity):
-                    raise AttributionV2CheckError("session manifest candidate identity mismatch")
+                    manifest_identity = (
+                        context.get("m05b_attribution_identity")
+                        if isinstance(context, Mapping)
+                        else None
+                    )
+                if not isinstance(manifest_identity, Mapping) or dict(
+                    manifest_identity
+                ) != dict(expected_identity):
+                    raise AttributionV2CheckError(
+                        "session manifest candidate identity mismatch"
+                    )
+                _validate_manifest_candidate_identity(manifest, expected_identity)
+            manifest_issues = validate_document(
+                manifest, "session_manifest", str(target)
+            )
+            if manifest_issues:
+                raise AttributionV2CheckError(
+                    "session manifest schema validation failed"
+                )
             counts[name] = len(data)
         else:
             lines = data.splitlines(keepends=True)
-            if not data.endswith(b"\n") or any(not line.endswith(b"\n") for line in lines):
-                raise AttributionV2CheckError(f"session {name} stream is not LF-terminated")
+            if not data.endswith(b"\n") or any(
+                not line.endswith(b"\n") or line.endswith(b"\r\n") for line in lines
+            ):
+                raise AttributionV2CheckError(
+                    f"session {name} stream is not LF-terminated"
+                )
             for line in lines:
                 try:
                     record = load_strict_json(line[:-1].decode("utf-8"))
                 except (UnicodeDecodeError, json.JSONDecodeError) as error:
-                    raise AttributionV2CheckError(f"session {name} stream is malformed") from error
+                    raise AttributionV2CheckError(
+                        f"session {name} stream is malformed"
+                    ) from error
                 if not isinstance(record, Mapping):
-                    raise AttributionV2CheckError(f"session {name} record is not an object")
+                    raise AttributionV2CheckError(
+                        f"session {name} record is not an object"
+                    )
                 if record.get("session_id") not in {None, session_id}:
                     raise AttributionV2CheckError(f"session {name} identity mismatch")
+            if name == "frames":
+                frame_records, frame_issues = validate_ndjson(target)
+                frame_issues.extend(
+                    validate_frame_stream(
+                        cast(Mapping[str, object], manifest),
+                        frame_records,
+                        str(destination / "manifest.json"),
+                        str(target),
+                    )
+                )
+                frame_issues.extend(
+                    validate_session_manifest_semantics(
+                        cast(Mapping[str, object], manifest),
+                        frame_records,
+                        str(destination / "manifest.json"),
+                    )
+                )
+                if frame_issues:
+                    raise AttributionV2CheckError("session frames validation failed")
+            elif name == "telemetry":
+                try:
+                    _derive_telemetry(data, session_id)
+                except AttributionCheckError as error:
+                    raise AttributionV2CheckError(
+                        "session telemetry validation failed"
+                    ) from error
             counts[name] = len(lines)
-            if expected_counts is not None:
+            if name == "telemetry" and expected_counts is not None:
                 _validate_telemetry_counts(lines, expected_counts)
     return counts
+
+
+def _validate_manifest_candidate_identity(
+    manifest: Mapping[str, object], expected: Mapping[str, object]
+) -> None:
+    pipeline = manifest.get("pose_pipeline")
+    device = manifest.get("device")
+    if not isinstance(pipeline, Mapping) or not isinstance(device, Mapping):
+        raise AttributionV2CheckError("session manifest candidate identity mismatch")
+    if (
+        pipeline.get("model_asset_sha256") != expected.get("model_sha256")
+        or pipeline.get("backend_version") != expected.get("backend_version")
+        or pipeline.get("delegate") != expected.get("delegate")
+        or device.get("os_version") != expected.get("runtime_version")
+    ):
+        raise AttributionV2CheckError("session manifest candidate identity mismatch")
 
 
 def _validate_telemetry_counts(lines: list[bytes], expected: Mapping[str, int]) -> None:
@@ -298,13 +389,17 @@ def _validate_telemetry_counts(lines: list[bytes], expected: Mapping[str, int]) 
         if isinstance(record, Mapping):
             records.append(record)
     delivered = sum(
-        record.get("stage") == "CAMERA_CALLBACK" and record.get("disposition") == "RECEIVED"
+        record.get("stage") == "CAMERA_CALLBACK"
+        and record.get("disposition") == "RECEIVED"
         for record in records
     )
-    submitted = sum(record.get("disposition") in {"SUBMITTED", "SUBMIT"} for record in records)
+    submitted = sum(
+        record.get("disposition") in {"SUBMITTED", "SUBMIT"} for record in records
+    )
     terminal = sum(
         record.get("terminal") is True
-        or record.get("disposition") in {
+        or record.get("disposition")
+        in {
             "COMPLETED",
             "INFERENCE_COMPLETED",
             "INFERENCE_FAILED",
@@ -316,8 +411,12 @@ def _validate_telemetry_counts(lines: list[bytes], expected: Mapping[str, int]) 
         for record in records
     )
     actual = {"delivered": delivered, "submitted": submitted, "terminal": terminal}
-    if any(expected.get(key) != value for key, value in actual.items() if key in expected):
-        raise AttributionV2CheckError("session telemetry counts do not bind to raw callbacks")
+    if any(
+        expected.get(key) != value for key, value in actual.items() if key in expected
+    ):
+        raise AttributionV2CheckError(
+            "session telemetry counts do not bind to raw callbacks"
+        )
 
 
 def check_attribution_v2(
@@ -374,14 +473,20 @@ def _transfer_observation_session_bundles(
 ) -> None:
     backend = observation.get("backend_arm")
     bundles: list[tuple[Mapping[str, object], int | None, Mapping[str, int]]] = []
-    if isinstance(backend, Mapping) and isinstance(backend.get("session_bundle"), Mapping):
+    if isinstance(backend, Mapping) and isinstance(
+        backend.get("session_bundle"), Mapping
+    ):
         bundles.append(
             (
                 cast(Mapping[str, object], backend["session_bundle"]),
                 None,
                 {
-                    "delivered": len(_integer_list(backend.get("delivered_callback_ids"))),
-                    "submitted": len(_integer_list(backend.get("submitted_inference_ids"))),
+                    "delivered": len(
+                        _integer_list(backend.get("delivered_callback_ids"))
+                    ),
+                    "submitted": len(
+                        _integer_list(backend.get("submitted_inference_ids"))
+                    ),
                     "terminal": len(_mapping_list(backend.get("terminal_callbacks"))),
                 },
             )
@@ -395,9 +500,15 @@ def _transfer_observation_session_bundles(
                         cast(Mapping[str, object], bundle),
                         _nonnegative_int(run.get("cadence_fps")),
                         {
-                            "delivered": len(_integer_list(run.get("delivered_callback_ids"))),
-                            "submitted": len(_integer_list(run.get("submitted_inference_ids"))),
-                            "terminal": len(_mapping_list(run.get("terminal_callbacks"))),
+                            "delivered": len(
+                                _integer_list(run.get("delivered_callback_ids"))
+                            ),
+                            "submitted": len(
+                                _integer_list(run.get("submitted_inference_ids"))
+                            ),
+                            "terminal": len(
+                                _mapping_list(run.get("terminal_callbacks"))
+                            ),
                         },
                     )
                 )
@@ -440,10 +551,14 @@ class AttributionV2HostCheck:
         self, observation: Mapping[str, object], prepared_identity: Mapping[str, object]
     ) -> dict[str, object]:
         schema_errors = _observation_schema_errors(observation)
-        if schema_errors and not all(_is_environment_schema_error(error) for error in schema_errors):
+        if schema_errors and not all(
+            _is_environment_schema_error(error) for error in schema_errors
+        ):
             raise AttributionV2CheckError("observation schema validation failed")
         schema_safe_observation = (
-            _fill_missing_environment_operands(observation) if schema_errors else observation
+            _fill_missing_environment_operands(observation)
+            if schema_errors
+            else observation
         )
         if schema_safe_observation.get("record_kind") != OBSERVATION_KIND:
             raise AttributionV2CheckError("observation has the wrong record_kind")
@@ -685,7 +800,9 @@ def _derive_session_bundle_codes(
             if not isinstance(bundle, Mapping):
                 codes.add("ATTRIBUTION.CALLBACK_CONSERVATION")
                 continue
-            bundles.append((cast(Mapping[str, object], bundle), str(run.get("session_reference"))))
+            bundles.append(
+                (cast(Mapping[str, object], bundle), str(run.get("session_reference")))
+            )
     for bundle, owner in bundles:
         reference = bundle.get("session_reference")
         if not isinstance(reference, str) or not SESSION_REFERENCE.fullmatch(reference):
@@ -721,9 +838,7 @@ def _derive_environment(
     if backend is not None:
         arms.append(backend)
     arms.extend(
-        run
-        for replicate in replicates
-        for run in _mapping_list(replicate.get("runs"))
+        run for replicate in replicates for run in _mapping_list(replicate.get("runs"))
     )
     static_config: tuple[object, ...] | None = None
     for arm in arms:
@@ -761,7 +876,9 @@ def _derive_environment(
         start_snapshot = snapshots[0]
         end_snapshot = snapshots[1]
         if isinstance(start_snapshot, Mapping) and isinstance(end_snapshot, Mapping):
-            if start_snapshot.get("thermal_status") != end_snapshot.get("thermal_status"):
+            if start_snapshot.get("thermal_status") != end_snapshot.get(
+                "thermal_status"
+            ):
                 codes.add("ATTRIBUTION.THERMAL_STATE_MISMATCH")
                 codes.add("ATTRIBUTION.ENVIRONMENT_MISMATCH")
     return codes
@@ -1130,10 +1247,15 @@ def _host_terminal_class(callback: Mapping[str, object]) -> str | None:
         return "preprocessing_failed"
     if production == "submit":
         terminal = callback.get("terminal_class")
-        return terminal if terminal in {
-            "admitted_completed",
-            "admitted_inference_failed",
-        } else None
+        return (
+            terminal
+            if terminal
+            in {
+                "admitted_completed",
+                "admitted_inference_failed",
+            }
+            else None
+        )
     cadence_due = callback.get("cadence_due")
     slot_available = callback.get("slot_available")
     if cadence_due is False and slot_available is True:
