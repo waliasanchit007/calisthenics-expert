@@ -25,11 +25,11 @@ class MovementViewerActivityLifecycleTest {
         val owner = Robolectric.buildActivity(MovementViewerActivity::class.java).setup()
         try {
             val activity = owner.get()
-            activity.attestedNoPerson = true
+            activity.attestedCameraScope = true
             activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             val failure = ViewerSnapshot(null, "Inference failed", 1, 0, 0, "Inference failed")
             activity.finishWithFailure(failure)
-            assertFalse(activity.attestedNoPerson)
+            assertFalse(activity.attestedCameraScope)
             assertEquals(0, activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             assertTrue(activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0)
             assertEquals(failure, activity.snapshot)

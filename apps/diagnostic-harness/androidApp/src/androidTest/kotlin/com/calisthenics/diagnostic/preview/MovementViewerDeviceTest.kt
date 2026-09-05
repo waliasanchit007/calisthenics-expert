@@ -40,7 +40,7 @@ class MovementViewerDeviceTest {
         assertEquals(before, files(), "viewer must not create pose, video, telemetry or study exports")
     }
 
-    @Test fun cameraCannotStartWithoutFreshNonParticipantAttestation() {
+    @Test fun cameraCannotStartWithoutFreshCameraScopeAttestation() {
         ActivityScenario.launch(MovementViewerActivity::class.java).use { scenario ->
             scenario.onActivity { assertNull(it.startViewer(ViewerInput.CAMERA)) }
         }

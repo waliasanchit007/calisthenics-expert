@@ -30,7 +30,7 @@ data class MovementViewerUiState(
     val completed: Int = 0,
     val skipped: Int = 0,
     val cameraPermission: Boolean = false,
-    val attestedNoPerson: Boolean = false,
+    val attestedCameraScope: Boolean = false,
 )
 
 @Composable
@@ -79,16 +79,16 @@ fun MovementViewerScreen(
                     OutlinedButton(onClick = onStop, enabled = state.active) { Text("Stop") }
                 }
                 HorizontalDivider()
-                Text("Camera exploration", style = MaterialTheme.typography.titleMedium)
-                Text("Current scope: synthetic figures or empty scenes only. Human movement testing requires a separate authorization.", style = MaterialTheme.typography.bodySmall)
+                Text("Movement self-test", style = MaterialTheme.typography.titleMedium)
+                Text("Authorized adult self-test only, or an empty/synthetic scene. Keep bystanders out of view. No recording, screenshots or uploads. Stop whenever you want.", style = MaterialTheme.typography.bodySmall)
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(state.attestedNoPerson, onCheckedChange = onAttestation, enabled = !state.active)
-                    Text("No person or human footage is in the camera field", style = MaterialTheme.typography.bodySmall)
+                    Checkbox(state.attestedCameraScope, onCheckedChange = onAttestation, enabled = !state.active)
+                    Text("Only me, a consenting adult, or an empty/synthetic scene is in view. I agree to transient on-device processing without recording.", style = MaterialTheme.typography.bodySmall)
                 }
                 if (!state.cameraPermission) {
                     OutlinedButton(onClick = onPermission, enabled = !state.active) { Text("Allow camera") }
                 }
-                Button(onClick = onCamera, enabled = !state.active && state.cameraPermission && state.attestedNoPerson) { Text("Start camera viewer") }
+                Button(onClick = onCamera, enabled = !state.active && state.cameraPermission && state.attestedCameraScope) { Text("Start camera viewer") }
                 Text("Repetitions · holds · transitions\nNo movement classification or form claims yet.", style = MaterialTheme.typography.bodySmall)
             }
         }

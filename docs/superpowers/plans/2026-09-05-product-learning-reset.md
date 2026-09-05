@@ -89,10 +89,10 @@ Report observed frame rate and latency without claiming a validated performance 
 
 ### 2. Observe a real pull-up — explicitly authorized short self-test
 
-- [ ] Before capture, obtain explicit owner acceptance of the narrow experiment: one consenting
-  adult operator, no bystanders, on-device transient processing, no recording/upload/retention,
-  user-controlled stop. This is human input and must never be labelled synthetic or admitted as
-  a formal study. Implement and verify this boundary before asking for the physical test.
+- [x] Implement and verify fresh in-app confirmation for a separately authorized self-test: one
+  consenting adult operator, no bystanders, on-device transient processing, no recording/upload/
+  retention, user-controlled stop. Individual authorization/consent is kept outside tracked files.
+  This is human input and must never be labelled synthetic or admitted as a formal study.
 - [ ] Use one practical camera placement and a short set. Show diagnostic elbow-angle traces and
   landmark availability, without calling image-plane angles anatomical ground truth.
 - [ ] Observe bottom/ascent/top/descent, wrist occlusion near the bar and tracking loss. Record only

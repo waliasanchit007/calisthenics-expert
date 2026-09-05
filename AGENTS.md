@@ -14,8 +14,10 @@ The owner approved the product-learning reset and exercise-independent viewer im
 2026-09-05. For the exploratory viewer track, follow
 `docs/adr/ADR-0006-exploratory-movement-viewer.md` and
 `docs/superpowers/plans/2026-09-05-product-learning-reset.md`. It permits RAM-only diagnostic
-visualization using synthetic fixtures or attested non-participant camera scenes; it does not
-permit human capture or retained observations. Shared components must remain exercise-independent.
+visualization using synthetic fixtures, attested non-participant camera scenes, or an explicitly
+authorized adult-operated self-test with fresh in-app confirmation and no bystanders. Only RAM-only
+processing is permitted: no retained observations, screenshots of people, uploads, or formal study
+admission. Keep individual authorization/consent records outside tracked files. Shared components must remain exercise-independent.
 Work directly in Calisthenics; Buzz is not a prerequisite. The formal study gate below remains
 authoritative for study artifacts and is not satisfied by exploratory viewer results.
 

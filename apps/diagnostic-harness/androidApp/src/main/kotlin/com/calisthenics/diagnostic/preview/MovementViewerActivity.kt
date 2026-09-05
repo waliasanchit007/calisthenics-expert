@@ -21,7 +21,7 @@ class MovementViewerActivity : ComponentActivity() {
     internal var snapshot by mutableStateOf<ViewerSnapshot?>(null)
         private set
     private var input by mutableStateOf(ViewerInput.SYNTHETIC)
-    internal var attestedNoPerson by mutableStateOf(false)
+    internal var attestedCameraScope by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -50,21 +50,21 @@ class MovementViewerActivity : ComponentActivity() {
                     landmarks = observation?.landmarks.orEmpty(),
                     submitted = snapshot?.submitted ?: 0, completed = snapshot?.completed ?: 0,
                     skipped = snapshot?.skipped ?: 0, cameraPermission = permission,
-                    attestedNoPerson = attestedNoPerson,
+                    attestedCameraScope = attestedCameraScope,
                 ),
                 image = image,
                 onSynthetic = { startViewer(ViewerInput.SYNTHETIC) },
                 onCamera = { startViewer(ViewerInput.CAMERA) },
                 onStop = ::stopViewer,
                 onPermission = { requestPermission.launch(Manifest.permission.CAMERA) },
-                onAttestation = { attestedNoPerson = it },
+                onAttestation = { attestedCameraScope = it },
             )
         }
     }
 
     fun startViewer(selected: ViewerInput): MovementViewerController? {
         if (controller != null) return controller
-        if (selected == ViewerInput.CAMERA && (!attestedNoPerson || !hasCameraPermission())) return null
+        if (selected == ViewerInput.CAMERA && (!attestedCameraScope || !hasCameraPermission())) return null
         input = selected
         snapshot = null
         if (selected == ViewerInput.SYNTHETIC) window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
@@ -82,7 +82,7 @@ class MovementViewerActivity : ComponentActivity() {
         controller?.close()
         controller = null
         snapshot = null
-        attestedNoPerson = false
+        attestedCameraScope = false
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
