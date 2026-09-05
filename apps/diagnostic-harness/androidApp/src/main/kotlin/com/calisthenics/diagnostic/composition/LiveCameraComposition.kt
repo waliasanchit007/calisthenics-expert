@@ -1946,6 +1946,11 @@ class LiveCameraComposition internal constructor(
             recordVideo: Boolean = false,
             /** Exact Task 7 admission inputs for a Task 8 sustained run; null for ordinary live mode. */
             m05bRunAdmission: M05BLiveRunAdmission? = null,
+            /** Internal attribution-v2 observation seam; ordinary production callers leave it null. */
+            attributionV2Observer: AttributionV2CallbackObserver? = null,
+            /** Internal attribution-v2 Arm 0B seam; ordinary production callers retain production admission. */
+            frameAdmissionFactory: (Int) -> com.calisthenics.diagnostic.live.LiveFrameAdmissionPort =
+                DEFAULT_LIVE_FRAME_ADMISSION_FACTORY,
         ): LiveCameraComposition {
             val roots = when (val result = AndroidStorageRoots.from(context)) {
                 is StorageRootsResult.Ready -> result.roots
@@ -2194,6 +2199,8 @@ class LiveCameraComposition internal constructor(
                     ),
                     registerRunner = onSessionRunnerCreated,
                     startAdmission = m05bRunAdmission?.asLiveStartAdmission(),
+                    frameAdmissionFactory = frameAdmissionFactory,
+                    attributionV2Observer = attributionV2Observer,
                     onCompletion = onCompletion,
                 ),
             )

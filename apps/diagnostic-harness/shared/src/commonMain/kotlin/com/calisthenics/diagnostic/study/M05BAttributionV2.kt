@@ -168,7 +168,7 @@ private fun validateSelector(arm: AttributionV2SelectorArm?, blockers: MutableLi
     ) blockers += "ATTRIBUTION.SELECTOR_DIVERGENCE"
 }
 
-internal fun attributionV2CallbackBlockers(arm: AttributionV2CallbackArm): List<String> = buildList {
+fun attributionV2CallbackBlockers(arm: AttributionV2CallbackArm): List<String> = buildList {
     val delivered = arm.deliveredCallbackIds
     val terminalIds = arm.terminalCallbacks.filter {
         it.terminalClass in CONSERVATION_TERMINALS

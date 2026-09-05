@@ -106,12 +106,7 @@ data class M05BAttributionV2DeviceObservation(
 
 fun renderM05BAttributionV2Evidence(value: M05BAttributionV2DeviceObservation): String {
     validateObservationBounds(value)
-    val derived = (
-        validateAttributionV2(value.toValidationEvidence()).blockingCodes +
-            value.endToEndReplicates.flatMap { replicate ->
-                replicate.runs.flatMap { run -> attributionV2CallbackBlockers(run.toCallbackArm()) }
-            }
-        ).distinct().sorted()
+    val derived = deriveM05BAttributionV2BlockingCodes(value)
     require(value.blockingCodes.sorted() == derived) {
         "device blocking codes must equal the locally derived blockers"
     }
@@ -132,6 +127,19 @@ fun renderM05BAttributionV2Evidence(value: M05BAttributionV2DeviceObservation): 
         putStringArray("blocking_codes", derived)
     }.toString()
 }
+
+/** Derives all blocker codes from raw device observation fields before serialization. */
+fun deriveM05BAttributionV2BlockingCodes(value: M05BAttributionV2DeviceObservation): List<String> = (
+    value.sourceArm.blockingCodes +
+        (value.backendArm?.blockingCodes ?: emptyList()) +
+        (value.selectorArm?.blockingCodes ?: emptyList()) +
+        value.endToEndReplicates.flatMap { replicate ->
+            replicate.blockingCodes + replicate.runs.flatMap { run ->
+                attributionV2CallbackBlockers(run.toCallbackArm())
+            }
+        } +
+        validateAttributionV2(value.toValidationEvidence()).blockingCodes
+    ).distinct().sorted()
 
 private fun validateObservationBounds(value: M05BAttributionV2DeviceObservation) {
     require(V2_SHA256.matches(value.protocolSha256)) { "invalid protocol digest" }
