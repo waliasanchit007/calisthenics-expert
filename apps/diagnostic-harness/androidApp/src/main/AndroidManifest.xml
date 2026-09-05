@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <!-- Dependencies must not turn this on-device harness into a network-capable app. -->
+    <uses-permission android:name="android.permission.INTERNET" tools:node="remove" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" tools:node="remove" />
     <uses-permission android:name="android.permission.CAMERA" />
     <application
         android:allowBackup="false"
@@ -8,6 +12,9 @@
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
         <activity
             android:name="com.calisthenics.diagnostic.MainActivity"
+            android:exported="false" />
+        <activity
+            android:name="com.calisthenics.diagnostic.preview.MovementViewerActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

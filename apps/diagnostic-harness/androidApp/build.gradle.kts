@@ -178,6 +178,7 @@ dependencies {
     implementation(projects.shared)
     implementation(projects.composeApp)
     implementation(libs.androidx.activity.compose)
+    implementation("org.jetbrains.compose.ui:ui-graphics:${libs.versions.composeMultiplatform.get()}")
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.camera.camera2)
     implementation(libs.androidx.camera.camera2.pipe)

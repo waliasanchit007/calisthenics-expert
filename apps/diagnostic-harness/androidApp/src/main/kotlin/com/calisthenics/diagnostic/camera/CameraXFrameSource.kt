@@ -115,9 +115,10 @@ class CameraXFrameSource(
     }
 
     fun stop(onCallbacksQuiesced: () -> Unit) {
-        analyzerCallbacks.close()
-        sourceLifecycle.stop()
-        analyzerCallbacks.onQuiescent(onCallbacksQuiesced)
+        analyzerCallbacks.closeAndFinally(
+            stop = sourceLifecycle::stop,
+            onCallbacksQuiesced = onCallbacksQuiesced,
+        )
     }
 
     @OptIn(ExperimentalGetImage::class)
@@ -192,6 +193,15 @@ internal class AnalyzerCallbackFence {
 
     fun close() {
         synchronized(monitor) { acceptingCallbacks = false }
+    }
+
+    fun closeAndFinally(stop: () -> Unit, onCallbacksQuiesced: () -> Unit) {
+        close()
+        try {
+            stop()
+        } finally {
+            onQuiescent(onCallbacksQuiesced)
+        }
     }
 
     fun onQuiescent(callback: () -> Unit) {
@@ -308,6 +318,9 @@ internal class CameraXSourceLifecycle<P, U>(
     private var terminal = false
     private var active: Pair<P, U>? = null
 
+    val hasActiveBinding: Boolean
+        get() = active != null
+
     @Synchronized
     fun begin(): Long {
         check(!started && !terminal) { "CameraXFrameSource is one-session-owned" }
@@ -337,9 +350,12 @@ internal class CameraXSourceLifecycle<P, U>(
         terminal = true
         running = false
         nextGeneration += 1L
-        active?.let { (provider, useCase) -> cleanupUseCase(provider, useCase) }
-        active = null
-        shutdownAnalyzer()
+        try {
+            active?.let { (provider, useCase) -> cleanupUseCase(provider, useCase) }
+        } finally {
+            active = null
+            shutdownAnalyzer()
+        }
     }
 }
 

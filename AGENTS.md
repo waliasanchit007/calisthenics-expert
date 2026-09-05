@@ -10,6 +10,15 @@ Do not silently turn hypotheses into decisions. Record open questions, assumptio
 
 ## Current operating gate
 
+The owner approved the product-learning reset and exercise-independent viewer implementation on
+2026-09-05. For the exploratory viewer track, follow
+`docs/adr/ADR-0006-exploratory-movement-viewer.md` and
+`docs/superpowers/plans/2026-09-05-product-learning-reset.md`. It permits RAM-only diagnostic
+visualization using synthetic fixtures or attested non-participant camera scenes; it does not
+permit human capture or retained observations. Shared components must remain exercise-independent.
+Work directly in Calisthenics; Buzz is not a prerequisite. The formal study gate below remains
+authoritative for study artifacts and is not satisfied by exploratory viewer results.
+
 The diagnostic-harness integration boundary closed at live `origin/main` commit
 `ca623d32837dec99d8229083c9159bfd140b1843`. The M0 observation-contract foundation closed at
 `60097f6ff0dbbb1b9623739e1216e17a70f915a9`.

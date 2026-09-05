@@ -1,6 +1,7 @@
 package com.calisthenics.diagnostic.camera
 
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import org.junit.Test
@@ -54,6 +55,62 @@ class CameraXFrameSourceLifecycleTest {
         fence.onQuiescent { quiescenceSignals += 1 }
 
         assertEquals(0, quiescenceSignals)
+        allowLeave.countDown()
+        callbackThread.join(1_000)
+        assertEquals(1, quiescenceSignals)
+    }
+
+    @Test
+    fun throwingCleanupStillClearsActiveBindingAndShutsAnalyzerDownExactlyOnce() {
+        val expected = IllegalStateException("cleanup failed")
+        var cleanupAttempts = 0
+        var shutdowns = 0
+        val lifecycle = CameraXSourceLifecycle<String, String>(
+            cleanupUseCase = { _, _ ->
+                cleanupAttempts += 1
+                throw expected
+            },
+            shutdownAnalyzer = { shutdowns += 1 },
+        )
+        val generation = lifecycle.begin()
+        assertTrue(lifecycle.complete(generation, "provider", "use-case") {})
+
+        assertEquals(expected, assertFailsWith<IllegalStateException> { lifecycle.stop() })
+        lifecycle.stop()
+
+        assertFalse(lifecycle.hasActiveBinding)
+        assertEquals(1, cleanupAttempts)
+        assertEquals(1, shutdowns)
+    }
+
+    @Test
+    fun throwingStopDefersQuiescenceUntilEnteredCallbackLeavesAndFencesNewCallbacks() {
+        val fence = AnalyzerCallbackFence()
+        val expected = IllegalStateException("cleanup failed")
+        var quiescenceSignals = 0
+        val entered = CountDownLatch(1)
+        val allowLeave = CountDownLatch(1)
+        val callbackThread = Thread {
+            check(fence.tryEnter())
+            entered.countDown()
+            check(allowLeave.await(1, TimeUnit.SECONDS))
+            fence.leave()
+        }
+        callbackThread.start()
+        assertTrue(entered.await(1, TimeUnit.SECONDS))
+
+        assertEquals(
+            expected,
+            assertFailsWith<IllegalStateException> {
+                fence.closeAndFinally(
+                    stop = { throw expected },
+                    onCallbacksQuiesced = { quiescenceSignals += 1 },
+                )
+            },
+        )
+        assertFalse(fence.tryEnter())
+        assertEquals(0, quiescenceSignals)
+
         allowLeave.countDown()
         callbackThread.join(1_000)
         assertEquals(1, quiescenceSignals)
