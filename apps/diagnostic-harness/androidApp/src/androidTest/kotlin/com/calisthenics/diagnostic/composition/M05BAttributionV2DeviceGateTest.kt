@@ -67,7 +67,7 @@ class M05BAttributionV2DeviceGateTest {
                         model = Build.MODEL,
                         apiLevel = Build.VERSION.SDK_INT,
                         androidRelease = Build.VERSION.RELEASE,
-                        osBuild = Build.ID,
+                        osBuild = Build.DISPLAY,
                     ),
                     identity = identity,
                     sourceArmFactory = {
@@ -127,6 +127,6 @@ class M05BAttributionV2DeviceGateTest {
     companion object {
         const val STATUS_TAG = "M05BAttributionV2Evidence"
         const val STATUS_CODE = 4
-        const val CANONICAL_PROTOCOL_SHA256 = "b2cd9efec89186806b0195db1dcbfa130450973ebbb25a256696c736eaf96707"
+        const val CANONICAL_PROTOCOL_SHA256 = "b37ba96527e958e993d9ccc73dde9579aa28af22c19f37590675a04a5a8c7822"
     }
 }

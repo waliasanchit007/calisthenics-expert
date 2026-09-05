@@ -32,6 +32,14 @@ class M05BAttributionV2ProtocolParityTest {
         assertEquals(M05BAttributionV2Protocol.BACKEND_WARMUP_ELAPSED_NS, backend.long("warmup_elapsed_ns"))
         assertEquals(M05BAttributionV2Protocol.BACKEND_MEASURED_COMPLETIONS, backend.int("measured_completions"))
         assertEquals(M05BAttributionV2Protocol.ARM_CAP_NS, protocol.long("arm_cap_ns"))
+        val authorizedDevice = protocol.getValue("authorized_device").jsonObject
+        assertEquals("physical_device", authorizedDevice.string("device_class"))
+        assertEquals("samsung/SM-S938B/pa3q/pa3qxins", authorizedDevice.string("device_identity"))
+        assertEquals("samsung", authorizedDevice.string("manufacturer"))
+        assertEquals("SM-S938B", authorizedDevice.string("model"))
+        assertEquals("36", authorizedDevice.string("api_level"))
+        assertEquals("16", authorizedDevice.string("android_release"))
+        assertEquals("BP4A.251205.006.S938BXXSBCZG3", authorizedDevice.string("os_build"))
         val cooldown = protocol.getValue("cooldown").jsonObject
         assertEquals(M05BAttributionV2Protocol.COOLDOWN_SAMPLE_NS, cooldown.long("sampling_interval_ns"))
         assertEquals(M05BAttributionV2Protocol.COOLDOWN_MAX_NS, cooldown.long("maximum_duration_ns"))

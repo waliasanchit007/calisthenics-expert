@@ -48,6 +48,15 @@ SESSION_REFERENCE = re.compile(
 )
 IDENTITY_TOKEN = re.compile(r"^[A-Za-z0-9._+-]{1,128}$")
 DEVICE_TOKEN = re.compile(r"^[A-Za-z0-9._-]+$")
+DEVICE_KEYS = {
+    "device_class",
+    "device_identity",
+    "manufacturer",
+    "model",
+    "api_level",
+    "android_release",
+    "os_build",
+}
 REFERENCE_KEYS = {
     "record_kind",
     "protocol_sha256",
@@ -266,19 +275,26 @@ class AttributionV2HostCheck:
         _validate_observation_schema(observation)
         protocol_bytes = _read_protocol(self.root)
         protocol_sha256 = _sha256(protocol_bytes)
-        codes = _derive_blockers(observation, protocol_sha256, prepared_identity)
+        authorized_device = _read_authorized_device_pin(self.root)
+        codes = _derive_blockers(
+            observation, protocol_sha256, prepared_identity, authorized_device
+        )
         device_codes = _string_list(observation.get("blocking_codes"))
         if device_codes != sorted(set(device_codes)) or device_codes != sorted(codes):
             codes.add("BLOCKING_CODES.MISMATCH")
         sorted_codes = sorted(codes)
-        sanitized_observation = _sanitize_observation(observation, prepared_identity)
+        sanitized_observation = _sanitize_observation(
+            observation, prepared_identity, authorized_device
+        )
         result: dict[str, object] = {
             "evidence_schema_version": "2.0.0",
             "record_kind": HOST_EVIDENCE_KIND,
             "sanitized": True,
             "non_participant_observation": True,
             "protocol_sha256": protocol_sha256,
-            "device": dict(_sanitize_device(_mapping(observation, "device"))),
+            "device": dict(
+                _sanitize_device(_mapping(observation, "device"), authorized_device)
+            ),
             "identity": dict(prepared_identity),
             "observation": sanitized_observation,
             "blocking_codes": sorted_codes,
@@ -352,7 +368,8 @@ def verify_recorded_attribution_v2_ledger(
         ) from error
     if not isinstance(evidence, Mapping):
         raise AttributionV2CheckError("recorded v2 evidence must be an object")
-    _validate_host_evidence(evidence)
+    authorized_device = _read_authorized_device_pin(root)
+    _validate_host_evidence(evidence, authorized_device)
     if evidence.get("protocol_sha256") != protocol_sha256 or evidence.get(
         "protocol_sha256"
     ) != ledger.get("protocol_sha256"):
@@ -366,9 +383,9 @@ def verify_recorded_attribution_v2_ledger(
         raise AttributionV2CheckError(
             "v2 ledger identity binding disagrees with evidence"
         )
-    if ledger.get("device") is not None and dict(_mapping(ledger, "device")) != dict(
-        _mapping(evidence, "device")
-    ):
+    if not isinstance(ledger.get("device"), Mapping) or dict(
+        _mapping(ledger, "device")
+    ) != dict(_mapping(evidence, "device")):
         raise AttributionV2CheckError(
             "v2 ledger device binding disagrees with evidence"
         )
@@ -378,6 +395,8 @@ def verify_recorded_attribution_v2_ledger(
         raise AttributionV2CheckError("recorded v2 protocol digest was not recomputed")
     if recomputed["blocking_codes"] != evidence.get("blocking_codes"):
         raise AttributionV2CheckError("recorded v2 blockers were not recomputed")
+    if recomputed["device"] != evidence.get("device"):
+        raise AttributionV2CheckError("recorded v2 device was not recomputed")
     if recomputed["physical_evidence_status"] != evidence.get(
         "physical_evidence_status"
     ):
@@ -395,6 +414,7 @@ def _derive_blockers(
     observation: Mapping[str, object],
     protocol_sha256: str,
     prepared_identity: Mapping[str, object],
+    authorized_device: Mapping[str, object],
 ) -> set[str]:
     blockers: set[str] = set()
     if observation.get("protocol_sha256") != protocol_sha256:
@@ -402,7 +422,9 @@ def _derive_blockers(
     identity = _mapping(observation, "identity")
     if dict(identity) != dict(prepared_identity):
         blockers.add("ATTRIBUTION.CANDIDATE_IDENTITY")
-    if not _authorized_device(_mapping(observation, "device")):
+    if not _authorized_device(_mapping(observation, "device")) or dict(
+        _mapping(observation, "device")
+    ) != dict(authorized_device):
         blockers.add("ATTRIBUTION.CANDIDATE_IDENTITY")
 
     source = _mapping(observation, "source_arm")
@@ -1008,10 +1030,14 @@ def _validate_observation_schema(observation: Mapping[str, object]) -> None:
 
 
 def _sanitize_observation(
-    observation: Mapping[str, object], prepared_identity: Mapping[str, object]
+    observation: Mapping[str, object],
+    prepared_identity: Mapping[str, object],
+    authorized_device: Mapping[str, object],
 ) -> dict[str, object]:
     projected = dict(observation)
-    projected["device"] = dict(_sanitize_device(_mapping(observation, "device")))
+    projected["device"] = dict(
+        _sanitize_device(_mapping(observation, "device"), authorized_device)
+    )
     projected["identity"] = _sanitize_identity(
         _mapping(observation, "identity"), prepared_identity
     )
@@ -1043,7 +1069,9 @@ def _sanitize_observation(
     return projected
 
 
-def _sanitize_device(device: Mapping[str, object]) -> Mapping[str, object]:
+def _sanitize_device(
+    device: Mapping[str, object], authorized_device: Mapping[str, object]
+) -> Mapping[str, object]:
     identity = device.get("device_identity")
     manufacturer = device.get("manufacturer")
     model = device.get("model")
@@ -1051,16 +1079,13 @@ def _sanitize_device(device: Mapping[str, object]) -> Mapping[str, object]:
         isinstance(identity, str)
         and _valid_device_identity(identity, manufacturer, model)
         and _authorized_device(device)
+        and dict(device) == dict(authorized_device)
     ):
-        return {
-            "device_class": "physical_device",
-            "device_identity": "samsung/SM-S938B/attribution-v2/verified",
-            "manufacturer": "samsung",
-            "model": "SM-S938B",
-            "api_level": 36,
-            "android_release": "16",
-            "os_build": "BP4A.251205.006",
-        }
+        return dict(authorized_device)
+    return _invalid_device_sentinel()
+
+
+def _invalid_device_sentinel() -> dict[str, object]:
     return {
         "device_class": "physical_device",
         "device_identity": "invalid/invalid/invalid/invalid",
@@ -1116,7 +1141,9 @@ def _valid_device_identity(
     )
 
 
-def _validate_host_evidence(evidence: Mapping[str, object]) -> None:
+def _validate_host_evidence(
+    evidence: Mapping[str, object], authorized_device: Mapping[str, object]
+) -> None:
     required = {
         "evidence_schema_version",
         "record_kind",
@@ -1148,20 +1175,20 @@ def _validate_host_evidence(evidence: Mapping[str, object]) -> None:
     ):
         raise AttributionV2CheckError("host evidence protocol digest is invalid")
     device = _mapping(evidence, "device")
-    if set(device) != {
-        "device_class",
-        "device_identity",
-        "manufacturer",
-        "model",
-        "api_level",
-        "android_release",
-        "os_build",
-    } or (
-        dict(device) != dict(_sanitize_device({})) and not _authorized_device(device)
+    if set(device) != DEVICE_KEYS or (
+        dict(device) != dict(authorized_device)
+        and dict(device) != _invalid_device_sentinel()
     ):
         raise AttributionV2CheckError("host evidence device binding is invalid")
     _validate_identity(_mapping(evidence, "identity"))
-    _validate_observation_schema(_mapping(evidence, "observation"))
+    observation = _mapping(evidence, "observation")
+    _validate_observation_schema(observation)
+    nested_device = _mapping(observation, "device")
+    if set(nested_device) != DEVICE_KEYS or (
+        dict(nested_device) != dict(authorized_device)
+        and dict(nested_device) != _invalid_device_sentinel()
+    ):
+        raise AttributionV2CheckError("host evidence nested device binding is invalid")
     if _string_list(evidence.get("blocking_codes")) != sorted(
         set(_string_list(evidence.get("blocking_codes")))
     ):
@@ -1268,6 +1295,25 @@ def _read_protocol(root: Path) -> bytes:
         raise AttributionV2CheckError(
             "canonical attribution v2 protocol is unavailable"
         ) from error
+
+
+def _read_authorized_device_pin(root: Path) -> dict[str, object]:
+    try:
+        protocol = load_strict_json(_read_protocol(root).decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise AttributionV2CheckError(
+            "canonical attribution v2 protocol is invalid"
+        ) from error
+    if not isinstance(protocol, Mapping):
+        raise AttributionV2CheckError("canonical attribution v2 protocol is invalid")
+    pin = protocol.get("authorized_device")
+    if (
+        not isinstance(pin, Mapping)
+        or set(pin) != DEVICE_KEYS
+        or not _authorized_device(pin)
+    ):
+        raise AttributionV2CheckError("canonical attribution v2 device pin is invalid")
+    return dict(pin)
 
 
 def _read_exact_bytes(path: Path, reference: Mapping[str, object]) -> bytes:

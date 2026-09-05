@@ -413,11 +413,70 @@ def test_host_sanitizes_authorized_shaped_device_identity_and_free_text() -> Non
     result = _classify(observation)
     serialized = json.dumps(result, sort_keys=True)
 
-    assert result["physical_evidence_status"] == "recorded"
+    assert result["physical_evidence_status"] == "blocked"
+    assert "ATTRIBUTION.CANDIDATE_IDENTITY" in result["blocking_codes"]
     assert "SERIAL-PRIVATE" not in serialized
     assert "participant-media-landmark" not in serialized
     assert "PRIVATE-PATH-PARTICIPANT" not in serialized
     assert "PARTICIPANT.MEDIA.LANDMARK" not in serialized
+
+
+def test_host_requires_exact_protocol_device_pin_and_sanitizes_mismatch() -> None:
+    from copy import deepcopy
+
+    protocol = json.loads(
+        (ROOT / "docs/protocols/m05b-attribution-v2.protocol.json").read_text(encoding="utf-8")
+    )
+    observation = deepcopy(_valid_observation())
+    pin = protocol["authorized_device"]
+    observation["device"]["os_build"] = pin["os_build"][:-1] + "4"
+
+    result = _classify(observation)
+
+    assert result["physical_evidence_status"] == "blocked"
+    assert "ATTRIBUTION.CANDIDATE_IDENTITY" in result["blocking_codes"]
+    assert result["device"] == check_m05b_attribution_v2._invalid_device_sentinel()  # type: ignore[attr-defined]
+    assert result["device"] != pin
+
+
+def test_host_blocks_shape_authorized_other_product_and_uses_sentinel() -> None:
+    from copy import deepcopy
+
+    observation = deepcopy(_valid_observation())
+    observation["device"]["device_identity"] = "samsung/SM-S938B/pa3q/otherproduct"
+
+    result = _classify(observation)
+
+    assert result["physical_evidence_status"] == "blocked"
+    assert "ATTRIBUTION.CANDIDATE_IDENTITY" in result["blocking_codes"]
+    assert result["device"] == check_m05b_attribution_v2._invalid_device_sentinel()  # type: ignore[attr-defined]
+
+
+def test_host_preserves_exact_protocol_device_pin_and_is_a_classification_fixed_point() -> None:
+    result = _classify(_valid_observation())
+    pin = json.loads(
+        (ROOT / "docs/protocols/m05b-attribution-v2.protocol.json").read_text(encoding="utf-8")
+    )["authorized_device"]
+
+    assert result["physical_evidence_status"] == "recorded"
+    assert result["device"] == pin
+    assert result["observation"]["device"] == pin
+    assert (
+        check_m05b_attribution_v2.AttributionV2HostCheck(ROOT).classify(
+            result["observation"], _valid_identity()
+        )
+        == result
+    )
+
+
+def test_android_attribution_gate_reads_display_build_not_entropy_losing_id() -> None:
+    gate = (
+        ROOT
+        / "apps/diagnostic-harness/androidApp/src/androidTest/kotlin/com/calisthenics/diagnostic/composition/M05BAttributionV2DeviceGateTest.kt"
+    ).read_text(encoding="utf-8")
+
+    assert "osBuild = Build.DISPLAY" in gate
+    assert "osBuild = Build.ID" not in gate
 
 
 def test_host_rejects_absolute_or_non_export_session_references() -> None:
@@ -809,7 +868,9 @@ def _valid_observation() -> dict[str, object]:
     return {
         "evidence_schema_version": "2.0.0",
         "record_kind": "m05b_attribution_v2_device_observation",
-        "protocol_sha256": "b2cd9efec89186806b0195db1dcbfa130450973ebbb25a256696c736eaf96707",
+        "protocol_sha256": hashlib.sha256(
+            (ROOT / "docs/protocols/m05b-attribution-v2.protocol.json").read_bytes()
+        ).hexdigest(),
         "sanitized": True,
         "non_participant_observation": True,
         "device": {
@@ -819,7 +880,7 @@ def _valid_observation() -> dict[str, object]:
             "model": "SM-S938B",
             "api_level": 36,
             "android_release": "16",
-            "os_build": "BP4A.251205.006",
+            "os_build": "BP4A.251205.006.S938BXXSBCZG3",
         },
         "identity": _valid_identity(),
         "source_arm": source,

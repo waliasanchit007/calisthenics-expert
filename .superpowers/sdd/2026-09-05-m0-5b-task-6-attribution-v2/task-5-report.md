@@ -269,3 +269,89 @@ Each mutation was applied after GREEN, killed by its named regression with exit 
 ### Self-review
 
 No Critical or Important concern remains in the supplied rereview scope. Previously closed transfer ordering, protocol binding, exact rational rates, source any-target semantics, fixed argv, and device-summary non-authority behavior were preserved. No unrelated files were modified; no Task 6, device/ADB execution, push, PR, merge, tag, branch/worktree deletion, participant data, or paid credits were used.
+
+## Final correction: protocol-pinned device provenance
+
+Base: `554d42a77fb34661062d1893a3048b16e2ef1feb`. This was one bounded regression-first correction round; Task 6 remains unstarted.
+
+### RED evidence before production edits
+
+The exact-pin host regressions were added and run before the implementation change:
+
+```text
+.venv/bin/python -m pytest -q reference/tests/test_check_m05b_attribution_v2.py -k 'exact_protocol_device_pin or shape_authorized_other_product or preserves_exact_protocol_device_pin or display_build'
+exit 1: 4 failures
+- the protocol had no authorized_device pin (KeyError: authorized_device) for the mismatch and exact-pin cases;
+- a shape-authorized other product was recorded instead of blocked;
+- the Android gate still referenced Build.ID instead of Build.DISPLAY.
+
+.venv/bin/python -m pytest -q reference/tests/test_m05b_attribution_v2_contract.py -k 'canonical_protocol_pins or protocol_device_pin_matches'
+exit 1: 2 failures
+- both protocol pin tests failed with KeyError: authorized_device.
+
+.venv/bin/python -m pytest -q reference/tests/test_device_evidence_ledger.py -k attribution_v2_ledger_reopens_recorded_host_evidence
+exit 1: the null top-level ledger device binding was accepted (DID NOT RAISE).
+```
+
+### Correction
+
+- Added the closed, deterministic seven-field authorized-device pin to the canonical protocol:
+  `physical_device; samsung/SM-S938B/pa3q/pa3qxins; samsung; SM-S938B; API 36; Android 16; BP4A.251205.006.S938BXXSBCZG3`.
+- Updated the v2 schema, canonical Kotlin protocol digest, pending ledger digest, and parity assertions. The canonical protocol digest is `b37ba96527e958e993d9ccc73dde9579aa28af22c19f37590675a04a5a8c7822`.
+- The Android gate now reads `Build.DISPLAY` for `osBuild`, retaining the exact reviewed build suffix.
+- Host admission now reads the pin from the canonical protocol and requires exact raw-object equality in addition to shape authorization. Mismatches use existing `ATTRIBUTION.CANDIDATE_IDENTITY` blocking behavior.
+- Sanitization now publishes the exact reviewed pin only when that exact raw pin was observed; all mismatch/garbage paths publish the existing invalid sentinel. No plausible device value is fabricated.
+- Reopened evidence accepts only the exact pin or exact sentinel at both top-level and nested device locations, requires ledger/evidence device binding, and recomputes the device projection for fixed-point/idempotent verification.
+- Added bounded regressions for one-character build mismatch, authorized-shaped alternate product, exact-pin preservation, pin/sentinel ledger fixed points, protocol/study-readiness parity, Kotlin `Build.DISPLAY`, and null durable device binding.
+
+### GREEN evidence
+
+```text
+.venv/bin/python -m pytest -q reference/tests/test_check_m05b_attribution_v2.py reference/tests/test_device_evidence_ledger.py reference/tests/test_m05b_attribution_v2.py reference/tests/test_validator_code_emission.py reference/tests/test_m05b_attribution_v2_contract.py
+100 passed in 3.18s
+
+.venv/bin/python -m ruff format --check reference tools/check_m05b_attribution_v2.py
+71 files already formatted
+
+.venv/bin/python -m ruff check reference tools/check_m05b_attribution_v2.py
+All checks passed!
+
+MYPYPATH=reference/src .venv/bin/python -m mypy --strict tools/check_m05b_attribution_v2.py
+Success: no issues found in 1 source file
+
+./gradlew --no-daemon :shared:jvmTest --tests '*M05BAttributionV2ProtocolParityTest*' --tests '*M05BAttributionV2JsonTest*' --tests '*M05BAttributionV2Test*' :androidApp:testDebugUnitTest --tests '*M05BAttributionV2RunnerTest*' :androidApp:compileDebugAndroidTestKotlin
+BUILD SUCCESSFUL in 13s; 56 actionable tasks
+
+git diff --check
+success
+```
+
+The Gradle invocation produced only the existing Kotlin hierarchy-template and compiler warnings. It did not run adb or physical-device tests.
+
+### Targeted mutation proof
+
+After GREEN, the exact-pin comparison was removed from `_derive_blockers` while retaining shape authorization. The named regression was then run:
+
+```text
+.venv/bin/python -m pytest -q reference/tests/test_check_m05b_attribution_v2.py -k shape_authorized_other_product
+exit 1: expected a blocked candidate-identity result, but the shape-authorized alternate product was recorded.
+```
+
+The production comparison was restored and the restored checker hash was `0f419a04581f1b9e1c25c3cbdcbbef7c34bf524e`.
+
+### Changed files
+
+- `tools/check_m05b_attribution_v2.py`
+- `reference/tests/test_check_m05b_attribution_v2.py`
+- `reference/tests/test_device_evidence_ledger.py`
+- `reference/tests/test_m05b_attribution_v2_contract.py`
+- `contracts/tooling/m05b_attribution_protocol.v2.schema.json`
+- `docs/protocols/m05b-attribution-v2.protocol.json`
+- `docs/evidence/m05b-attribution-v2/s25-attribution-v2-ledger.json`
+- `apps/diagnostic-harness/androidApp/src/androidTest/kotlin/com/calisthenics/diagnostic/composition/M05BAttributionV2DeviceGateTest.kt`
+- `apps/diagnostic-harness/shared/src/jvmTest/kotlin/com/calisthenics/diagnostic/study/M05BAttributionV2ProtocolParityTest.kt`
+- `.superpowers/sdd/2026-09-05-m0-5b-task-6-attribution-v2/task-5-report.md`
+
+### Self-review
+
+No Critical or Important concern remains from the supplied provenance review. Chronology, measured-only span, verify-before-rename, protocol binding, exact rational rates, source any-target semantics, fixed argv, and device-declared summary non-authority remain preserved. No unrelated cleanup, participant data, paid credits, adb/device execution, push, PR, merge, tag, branch/worktree deletion, or Task 6 work was performed.

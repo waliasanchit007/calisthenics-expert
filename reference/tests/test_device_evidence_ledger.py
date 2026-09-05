@@ -422,6 +422,17 @@ def test_attribution_v2_ledger_reopens_recorded_host_evidence(tmp_path: Path) ->
     assert verified["physical_evidence_status"] == "recorded"
     assert verified["blocking_codes"] == []
 
+    missing_device_ledger = deepcopy(ledger)
+    missing_device_ledger["device"] = None
+    ledger_path.write_text(json.dumps(missing_device_ledger) + "\n", encoding="utf-8")
+    with pytest.raises(
+        check_m05b_attribution_v2.AttributionV2CheckError,
+        match="v2 ledger device binding disagrees",
+    ):
+        check_m05b_attribution_v2.verify_recorded_attribution_v2_ledger(
+            tmp_path, ATTRIBUTION_V2_LEDGER
+        )
+
     forged_device = deepcopy(evidence)
     forged_device["device"] = dict(evidence["device"])
     forged_device["device"]["device_identity"] = "SERIAL-PRIVATE/SM-S938B/participant/media"
@@ -480,6 +491,46 @@ def test_attribution_v2_ledger_reopens_recorded_host_evidence(tmp_path: Path) ->
     ):
         check_m05b_attribution_v2.verify_recorded_attribution_v2_ledger(
             tmp_path, ATTRIBUTION_V2_LEDGER
+        )
+
+
+def test_attribution_v2_ledger_is_fixed_point_for_pin_and_sentinel_paths(tmp_path: Path) -> None:
+    from copy import deepcopy
+
+    from tests.test_check_m05b_attribution_v2 import _valid_identity, _valid_observation
+
+    _copy_protocol(ROOT, tmp_path)
+    prepared = _valid_identity()
+    pin_observation = _valid_observation()
+    blocked_observation = deepcopy(pin_observation)
+    blocked_observation["device"]["os_build"] = "BP4A.251205.006.S938BXXSBCZG4"
+
+    for index, observation in enumerate((pin_observation, blocked_observation)):
+        evidence = check_m05b_attribution_v2.AttributionV2HostCheck(tmp_path).classify(
+            observation, prepared
+        )
+        relative = f"docs/evidence/m05b-attribution-v2/fixed-point-{index}.json"
+        evidence_path = tmp_path / relative
+        evidence_path.parent.mkdir(parents=True, exist_ok=True)
+        evidence_path.write_text(json.dumps(evidence, sort_keys=True) + "\n", encoding="utf-8")
+        ledger = _v2_ledger(
+            evidence,
+            relative,
+            hashlib.sha256(evidence_path.read_bytes()).hexdigest(),
+        )
+        ledger_path = tmp_path / ATTRIBUTION_V2_LEDGER
+        ledger_path.parent.mkdir(parents=True, exist_ok=True)
+        ledger_path.write_text(json.dumps(ledger, sort_keys=True) + "\n", encoding="utf-8")
+
+        reopened = check_m05b_attribution_v2.verify_recorded_attribution_v2_ledger(
+            tmp_path, ATTRIBUTION_V2_LEDGER
+        )
+        assert reopened == evidence
+        assert (
+            check_m05b_attribution_v2.AttributionV2HostCheck(tmp_path).classify(
+                reopened["observation"], prepared
+            )
+            == evidence
         )
 
 

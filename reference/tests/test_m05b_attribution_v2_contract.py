@@ -75,6 +75,15 @@ def test_canonical_protocol_pins_all_preregistered_values() -> None:
         "warmup_elapsed_ns": 2_000_000_000,
     }
     assert protocol["arm_cap_ns"] == 60_000_000_000
+    assert protocol["authorized_device"] == {
+        "api_level": 36,
+        "android_release": "16",
+        "device_class": "physical_device",
+        "device_identity": "samsung/SM-S938B/pa3q/pa3qxins",
+        "manufacturer": "samsung",
+        "model": "SM-S938B",
+        "os_build": "BP4A.251205.006.S938BXXSBCZG3",
+    }
     assert protocol["cooldown"] == {
         "maximum_duration_ns": 600_000_000_000,
         "sampling_interval_ns": 1_000_000_000,
@@ -85,6 +94,21 @@ def test_canonical_protocol_pins_all_preregistered_values() -> None:
         "domain": "session_relative_monotonic",
         "unit": "nanoseconds",
     }
+
+
+def test_v2_protocol_device_pin_matches_study_readiness_platform_scope() -> None:
+    protocol = json.loads(PROTOCOL_PATH.read_text(encoding="utf-8"))
+    study_readiness = json.loads(
+        (ROOT / "docs/protocols/study-readiness.m05.v1.json").read_text(encoding="utf-8")
+    )
+    pin = protocol["authorized_device"]
+    scope = study_readiness["platform_scope"]
+
+    assert pin["model"] == scope["device_model"]
+    assert pin["api_level"] == 36
+    assert pin["android_release"] == "16"
+    assert pin["os_build"] == scope["os_build"]
+    assert pin["device_identity"] == "samsung/SM-S938B/pa3q/pa3qxins"
 
 
 def test_canonical_protocol_validates_against_the_released_v2_schema() -> None:
