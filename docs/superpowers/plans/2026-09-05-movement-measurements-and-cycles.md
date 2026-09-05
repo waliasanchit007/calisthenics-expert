@@ -18,6 +18,12 @@ Claude-work design challenge for cycle semantics. No routine independent impleme
 - Measurements are projected image-plane estimates, not anatomical truth. Invert scale-pad before
   computing image geometry. Missing/nonfinite/padded/ambiguous joints must not produce measurements.
 - Raw observations remain250ms capture-fresh. Display500ms hold is never an analyzer input.
+- A UI measurement expiry does not alone prove a capture gap: a fresh result may still be in
+  flight. Clear stale measurements immediately without advancing the analyzer; allow a pending
+  result only until last accepted capture +250ms capture-gap limit +250ms freshness limit.
+  Repeated UI ticks do not renew this deadline. The next fresh sample must still satisfy the
+  existing <250ms capture-gap check. Explicit no-pose results invalidate immediately. This derived
+  wait is not permission to analyze a 500ms-old pose or bridge actual missing detections.
 - Calibration and cycle parameters are experimental and visible; no fixed anatomical top/bottom
   angle is to be invented. Count remains candidate calibrated cycles, not verified full-ROM reps.
 - Tracking loss invalidates unfinished cycles. Reacquisition must begin from the calibrated extended

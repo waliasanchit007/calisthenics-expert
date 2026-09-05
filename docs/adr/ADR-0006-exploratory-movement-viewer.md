@@ -50,8 +50,11 @@ projected arm measurements and a manually selected, per-session calibrated pull-
 Its purpose is visible movement learning, not an assertion that the formal study has passed.
 Calibration requires a practice motion and explicit operator confirmation; frozen observed angle
 endpoints are not definitions of correct technique. Count only candidate calibrated motion cycles,
-never verified reps. Raw fresh observations alone feed the analyzer; missing joints, stale frames
-and tracking gaps invalidate unfinished cycles. State remains transient and clears on stop.
+never verified reps. Raw fresh observations alone feed the analyzer; missing joints and confirmed
+tracking gaps invalidate unfinished cycles. Stale display measurements clear immediately, but UI
+expiry alone is not a confirmed capture gap while a fresh result can still arrive within the
+existing capture-gap and freshness limits. No timer or held display pose advances the analyzer.
+State remains transient and clears on stop.
 The concrete experimental parameters and limits are in the movement-measurements-and-cycles plan.
 ADR-0005's formal study and
 participant gates remain intact. This software policy does not itself grant an individual human
