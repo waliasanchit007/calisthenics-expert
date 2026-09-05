@@ -494,6 +494,44 @@ def test_attribution_v2_ledger_reopens_recorded_host_evidence(tmp_path: Path) ->
         )
 
 
+def test_attribution_v2_ledger_rejects_schema_valid_identity_binding_mismatch(
+    tmp_path: Path,
+) -> None:
+    from copy import deepcopy
+
+    from tests.test_check_m05b_attribution_v2 import _valid_identity, _valid_observation
+
+    _copy_protocol(ROOT, tmp_path)
+    observation = _valid_observation()
+    evidence = check_m05b_attribution_v2.AttributionV2HostCheck(tmp_path).classify(
+        observation, _valid_identity()
+    )
+    relative = "docs/evidence/m05b-attribution-v2/identity-mismatch.json"
+    evidence_path = tmp_path / relative
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+
+    forged_evidence = deepcopy(evidence)
+    forged_evidence["identity"] = dict(evidence["identity"])
+    forged_evidence["identity"]["runtime_version"] = "17"
+    evidence_path.write_text(json.dumps(forged_evidence, sort_keys=True) + "\n", encoding="utf-8")
+    ledger = _v2_ledger(
+        evidence,
+        relative,
+        hashlib.sha256(evidence_path.read_bytes()).hexdigest(),
+    )
+    ledger_path = tmp_path / ATTRIBUTION_V2_LEDGER
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    ledger_path.write_text(json.dumps(ledger, sort_keys=True) + "\n", encoding="utf-8")
+
+    with pytest.raises(
+        check_m05b_attribution_v2.AttributionV2CheckError,
+        match="v2 ledger identity binding disagrees with evidence",
+    ):
+        check_m05b_attribution_v2.verify_recorded_attribution_v2_ledger(
+            tmp_path, ATTRIBUTION_V2_LEDGER
+        )
+
+
 def test_attribution_v2_ledger_is_fixed_point_for_pin_and_sentinel_paths(tmp_path: Path) -> None:
     from copy import deepcopy
 
