@@ -27,6 +27,21 @@ class M05BAttributionV2ProtocolParityTest {
             M05BAttributionV2Protocol.SOURCE_MEASURED_CALLBACKS,
             protocol.getValue("source").jsonObject.int("measured_callbacks"),
         )
+        assertEquals(M05BAttributionV2Protocol.RAW_CALLBACK_MAXIMUM, protocol.int("raw_callback_maximum"))
+        assertEquals(M05BAttributionV2Protocol.SESSION_ARTIFACTS, protocol.stringList("session_artifacts"))
+        val environment = protocol.getValue("environment_operands").jsonObject
+        assertEquals(
+            M05BAttributionV2Protocol.ENVIRONMENT_BOUNDARY_FIELDS,
+            environment.stringList("boundary_fields"),
+        )
+        assertEquals(
+            M05BAttributionV2Protocol.ENVIRONMENT_SNAPSHOT_FIELDS,
+            environment.stringList("snapshot_fields"),
+        )
+        assertEquals(
+            M05BAttributionV2Protocol.ENVIRONMENT_ENFORCED_PREDICATES,
+            environment.stringList("enforced_predicates"),
+        )
         val backend = protocol.getValue("backend").jsonObject
         assertEquals(M05BAttributionV2Protocol.BACKEND_WARMUP_COMPLETIONS, backend.int("warmup_completed"))
         assertEquals(M05BAttributionV2Protocol.BACKEND_WARMUP_ELAPSED_NS, backend.long("warmup_elapsed_ns"))

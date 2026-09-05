@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
+import com.calisthenics.diagnostic.contract.Uuid
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
@@ -23,6 +24,7 @@ import com.calisthenics.diagnostic.study.AttributionV2RunIdentity
 import com.calisthenics.diagnostic.study.M05BAttributionV2Protocol
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertIs
 import org.junit.Test
 
@@ -57,6 +59,9 @@ class M05BAttributionV2DeviceGateTest {
                 delegate = model.delegate.lowercase(),
             )
             val thermalManager = checkNotNull(context.getSystemService(PowerManager::class.java))
+            val environment = AndroidM05BAttributionV2Environment(context, thermalManager)
+            val storage = AndroidM05BAttributionV2ArtifactStorage(File(roots.diagnosticHarnessRoot))
+            val nextSessionSuffix = AtomicInteger(1)
             val runner = M05BAttributionV2Runner(
                 M05BAttributionV2Runner.Dependencies(
                     protocolSha256 = CANONICAL_PROTOCOL_SHA256,
@@ -80,19 +85,25 @@ class M05BAttributionV2DeviceGateTest {
                             cameraCapability = capability,
                             permissionGranted = true,
                             thermalStatus = { thermalManager.currentThermalStatus },
+                            storage = storage,
+                            sessionIdProvider = {
+                                Uuid("00000000-0000-4000-8000-${nextSessionSuffix.getAndIncrement().toString(16).padStart(12, '0')}")
+                            },
+                            identity = identity,
                         )
                     },
                     selector = M05BAttributionV2Selector { timestamps, cadence ->
                         com.calisthenics.diagnostic.study.productionSelectorTimestamps(timestamps, cadence)
                     },
                     thermal = AndroidM05BAttributionV2Thermal(thermalManager),
-                    storage = AndroidM05BAttributionV2ArtifactStorage(File(roots.diagnosticHarnessRoot)),
+                    storage = storage,
                     statusSink = M05BAttributionV2StatusSink { record ->
                         instrumentation.sendStatus(
                             STATUS_CODE,
                             Bundle().apply { putString(STATUS_TAG, record) },
                         )
                     },
+                    environmentSnapshot = environment::snapshot,
                 ),
             )
             runner.run(UUID.randomUUID().toString())
@@ -127,6 +138,6 @@ class M05BAttributionV2DeviceGateTest {
     companion object {
         const val STATUS_TAG = "M05BAttributionV2Evidence"
         const val STATUS_CODE = 4
-        const val CANONICAL_PROTOCOL_SHA256 = "b37ba96527e958e993d9ccc73dde9579aa28af22c19f37590675a04a5a8c7822"
+        const val CANONICAL_PROTOCOL_SHA256 = "22e1e09686ac6f49e8d495877248bb421d6e095de85b2f800d6865216cf9f35f"
     }
 }

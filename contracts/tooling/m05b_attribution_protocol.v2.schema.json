@@ -4,9 +4,9 @@
   "title": "M0.5B attribution protocol v2",
   "type": "object",
   "additionalProperties": false,
-  "required": ["protocol_version", "record_kind", "target_cadences_fps", "source", "backend", "arm_cap_ns", "authorized_device", "cooldown", "replicate_orders", "terminal_classes", "clock"],
+  "required": ["protocol_version", "record_kind", "target_cadences_fps", "source", "backend", "arm_cap_ns", "authorized_device", "cooldown", "environment_operands", "raw_callback_maximum", "replicate_orders", "session_artifacts", "terminal_classes", "clock"],
   "properties": {
-    "protocol_version": {"const": "2.0.0"},
+    "protocol_version": {"const": "2.1.0"},
     "record_kind": {"const": "m05b_attribution_v2_protocol"},
     "target_cadences_fps": {"const": [10, 15, 30]},
     "source": {
@@ -52,7 +52,19 @@
         "maximum_duration_ns": {"const": 600000000000}
       }
     },
+    "environment_operands": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["boundary_fields", "enforced_predicates", "snapshot_fields"],
+      "properties": {
+        "boundary_fields": {"const": ["arm_started_ns", "arm_ended_ns"]},
+        "enforced_predicates": {"const": ["battery_power", "not_charging", "wifi_transport", "screen_keep_awake", "not_device_idle", "valid_monotonic_boundaries", "thermal_recovery", "static_camera_frame_config"]},
+        "snapshot_fields": {"const": ["thermal_status", "battery_temperature_c", "battery_level_percent", "power_source", "charging", "wifi_transport", "screen_keep_awake", "device_idle", "negotiated_camera_fps_range", "delivered_width", "delivered_height", "delivered_format"]}
+      }
+    },
+    "raw_callback_maximum": {"const": 1800},
     "replicate_orders": {"const": [[10, 15, 30], [30, 15, 10]]},
+    "session_artifacts": {"const": ["manifest", "frames", "telemetry"]},
     "terminal_classes": {
       "const": ["admitted_completed", "admitted_inference_failed", "cadence_only", "backpressure_only", "cadence_and_backpressure", "preprocessing_failed", "session_stopping", "admission_state_divergence"]
     },

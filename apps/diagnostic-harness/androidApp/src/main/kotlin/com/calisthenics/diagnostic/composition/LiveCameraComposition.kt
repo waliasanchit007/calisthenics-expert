@@ -98,6 +98,7 @@ import com.calisthenics.diagnostic.study.M05AdmissionEvidence
 import com.calisthenics.diagnostic.study.M05AdmissionResult
 import com.calisthenics.diagnostic.study.M05BBoundArtifact
 import com.calisthenics.diagnostic.study.M05BBoundAttemptEntry
+import com.calisthenics.diagnostic.study.AttributionV2RunIdentity
 import com.calisthenics.diagnostic.study.M05BDurableAdmissionBoundary
 import com.calisthenics.diagnostic.study.M05BExecutionOrder
 import com.calisthenics.diagnostic.study.M05BObservedStart
@@ -1951,6 +1952,10 @@ class LiveCameraComposition internal constructor(
             /** Internal attribution-v2 Arm 0B seam; ordinary production callers retain production admission. */
             frameAdmissionFactory: (Int) -> com.calisthenics.diagnostic.live.LiveFrameAdmissionPort =
                 DEFAULT_LIVE_FRAME_ADMISSION_FACTORY,
+            /** Reserved synthetic session IDs used by the attribution-v2 non-participant gate. */
+            sessionIdProvider: () -> Uuid = M05SessionIdGenerator::next,
+            /** Exact identity bound into the attribution-v2 published manifest, when applicable. */
+            attributionV2Identity: AttributionV2RunIdentity? = null,
         ): LiveCameraComposition {
             val roots = when (val result = AndroidStorageRoots.from(context)) {
                 is StorageRootsResult.Ready -> result.roots
@@ -2177,10 +2182,22 @@ class LiveCameraComposition internal constructor(
                             deferAbortUntilFence = true,
                         ).also { exporter = it }
                     },
+                    sessionIdProvider = sessionIdProvider,
                     manifestMetadata = LiveManifestMetadata(
                         harnessGitSha = BuildConfig.PROBE_GIT_SHA,
                         provenance = provenance,
-                        attributionIdentity = mapOf(
+                        attributionIdentity = attributionV2Identity?.let { identity ->
+                            mapOf(
+                                "app_git_sha" to identity.appGitSha,
+                                "probe_git_sha" to identity.probeGitSha,
+                                "app_apk_sha256" to identity.appApkSha256,
+                                "test_apk_sha256" to identity.testApkSha256,
+                                "model_sha256" to identity.modelSha256,
+                                "runtime_version" to identity.runtimeVersion,
+                                "backend_version" to identity.backendVersion,
+                                "delegate" to identity.delegate,
+                            )
+                        } ?: mapOf(
                             "app_git_sha" to BuildConfig.PROBE_GIT_SHA,
                             "probe_git_sha" to BuildConfig.PROBE_GIT_SHA,
                             "apk_sha256" to Sha256Digest.hex(File(context.applicationInfo.sourceDir).readBytes()),

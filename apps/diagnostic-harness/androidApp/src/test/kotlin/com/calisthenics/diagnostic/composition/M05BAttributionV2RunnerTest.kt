@@ -152,6 +152,26 @@ class M05BAttributionV2RunnerTest {
     }
 
     @Test
+    fun terminalWithoutAdmissionBecomesDivergenceInsteadOfCrashing() {
+        val callbacks = attributionV2BackendTerminalCallbacks(
+            admissions = listOf(observedAdmission(11L)),
+            terminals = listOf(
+                AttributionV2ObservedTerminal(
+                    callbackId = 99L,
+                    terminal = CallbackTerminalDisposition.INFERENCE_COMPLETED,
+                    completedNs = 2_000L,
+                    phase = AttributionV2CallbackPhase.MEASURED,
+                ),
+            ),
+            cadenceFps = 10,
+            byId = mapOf(11L to observedAdmission(11L)),
+        )
+
+        assertEquals(AttributionV2TerminalClass.ADMISSION_STATE_DIVERGENCE, callbacks.single().terminalClass)
+        assertEquals(null, callbacks.single().admissionObservedSessionNs)
+    }
+
+    @Test
     fun endToEndRunDeclaresMeasuredOnlyCaptureSpan() {
         val callbacks = listOf(
             testCallback(0L, 0L, AttributionV2CallbackPhase.WARMUP),

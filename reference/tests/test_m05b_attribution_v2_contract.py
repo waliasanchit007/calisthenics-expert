@@ -51,6 +51,41 @@ V2_CODES = {
 }
 
 
+def _contract_environment_snapshot() -> dict[str, object]:
+    return {
+        "thermal_status": 0,
+        "battery_temperature_c": 25.0,
+        "battery_level_percent": 80.0,
+        "power_source": "battery",
+        "charging": False,
+        "wifi_transport": True,
+        "screen_keep_awake": True,
+        "device_idle": False,
+        "negotiated_camera_fps_range": {"lower": 30, "upper": 30},
+        "delivered_width": 1280,
+        "delivered_height": 720,
+        "delivered_format": "YUV_420_888",
+    }
+
+
+def _contract_session_bundle(session_id: str) -> dict[str, object]:
+    root = f"exports/{session_id}"
+    return {
+        "session_reference": root,
+        "manifest": {
+            "relative_path": f"{root}/manifest.json",
+            "length_bytes": 1,
+            "sha256": "a" * 64,
+        },
+        "frames": {"relative_path": f"{root}/frames.ndjson", "length_bytes": 1, "sha256": "b" * 64},
+        "telemetry": {
+            "relative_path": f"{root}/telemetry.ndjson",
+            "length_bytes": 1,
+            "sha256": "c" * 64,
+        },
+    }
+
+
 def test_v2_tooling_schemas_are_valid_draft_2020_12_contracts() -> None:
     Draft202012Validator.check_schema(load_m05b_attribution_protocol_v2_schema())
     Draft202012Validator.check_schema(load_m05b_attribution_observation_v2_schema())
@@ -62,13 +97,42 @@ def test_canonical_protocol_pins_all_preregistered_values() -> None:
 
     assert raw.endswith(b"\n")
     assert raw == (json.dumps(protocol, sort_keys=True, separators=(",", ":")) + "\n").encode()
-    assert protocol["protocol_version"] == "2.0.0"
+    assert protocol["protocol_version"] == "2.1.0"
     assert protocol["record_kind"] == "m05b_attribution_v2_protocol"
     assert protocol["target_cadences_fps"] == [10, 15, 30]
     assert protocol["source"] == {
         "measured_callbacks": 300,
         "warmup_callbacks": 30,
     }
+    assert protocol["raw_callback_maximum"] == 1800
+    assert protocol["environment_operands"] == {
+        "boundary_fields": ["arm_started_ns", "arm_ended_ns"],
+        "snapshot_fields": [
+            "thermal_status",
+            "battery_temperature_c",
+            "battery_level_percent",
+            "power_source",
+            "charging",
+            "wifi_transport",
+            "screen_keep_awake",
+            "device_idle",
+            "negotiated_camera_fps_range",
+            "delivered_width",
+            "delivered_height",
+            "delivered_format",
+        ],
+        "enforced_predicates": [
+            "battery_power",
+            "not_charging",
+            "wifi_transport",
+            "screen_keep_awake",
+            "not_device_idle",
+            "valid_monotonic_boundaries",
+            "thermal_recovery",
+            "static_camera_frame_config",
+        ],
+    }
+    assert protocol["session_artifacts"] == ["manifest", "frames", "telemetry"]
     assert protocol["backend"] == {
         "measured_completions": 100,
         "warmup_completed": 20,
@@ -134,7 +198,7 @@ def test_protocol_schema_rejects_changed_sample_count_and_unknown_terminal_class
 def test_observation_schema_is_closed_and_requires_non_participant_sanitization() -> None:
     validator = Draft202012Validator(load_m05b_attribution_observation_v2_schema())
     observation = {
-        "evidence_schema_version": "2.0.0",
+        "evidence_schema_version": "2.1.0",
         "record_kind": "m05b_attribution_v2_device_observation",
         "protocol_sha256": "a" * 64,
         "sanitized": True,
@@ -168,6 +232,12 @@ def test_observation_schema_is_closed_and_requires_non_participant_sanitization(
             "thermal_status": 0,
             "initial_cooldown_thermal_statuses": [],
             "initial_cooldown_recovered": None,
+            "environment": {
+                "arm_started_ns": 0,
+                "arm_ended_ns": 60_000_000_000,
+                "start": _contract_environment_snapshot(),
+                "end": _contract_environment_snapshot(),
+            },
         },
         "backend_arm": None,
         "selector_arm": None,
@@ -201,6 +271,15 @@ def test_observation_schema_is_closed_and_requires_non_participant_sanitization(
                         ],
                         "submitted_inference_ids": [],
                         "pending_inference_ids": [],
+                        "environment": {
+                            "arm_started_ns": 0,
+                            "arm_ended_ns": 60_000_000_000,
+                            "start": _contract_environment_snapshot(),
+                            "end": _contract_environment_snapshot(),
+                        },
+                        "session_bundle": _contract_session_bundle(
+                            "00000000-0000-4000-8000-000000000001"
+                        ),
                     }
                 ],
             }
@@ -233,6 +312,24 @@ def test_observation_schema_is_closed_and_requires_non_participant_sanitization(
     assert list(validator.iter_errors(observation))
 
 
+def test_observation_schema_allows_the_protocol_raw_callback_maximum() -> None:
+    from reference.tests.test_check_m05b_attribution_v2 import _valid_observation
+
+    observation = _valid_observation()
+    callback = dict(observation["backend_arm"]["terminal_callbacks"][-1])
+    callback["callback_id"] = 120
+    callback["capture_timestamp_ns"] = 120
+    callback["completion_timestamp_ns"] = 13_000_000_000
+    callback["admission_observed_session_ns"] = 12_990_000_000
+    observation["backend_arm"]["terminal_callbacks"].extend([dict(callback) for _ in range(181)])
+    observation["backend_arm"]["delivered_callback_ids"].extend(range(120, 301))
+    observation["backend_arm"]["submitted_inference_ids"].extend(range(120, 301))
+
+    validator = Draft202012Validator(load_m05b_attribution_observation_v2_schema())
+
+    assert not list(validator.iter_errors(observation))
+
+
 def test_pending_ledger_binds_the_exact_canonical_protocol_bytes() -> None:
     protocol_bytes = PROTOCOL_PATH.read_bytes()
     ledger = json.loads(LEDGER_PATH.read_text(encoding="utf-8"))
@@ -240,7 +337,7 @@ def test_pending_ledger_binds_the_exact_canonical_protocol_bytes() -> None:
     assert ledger == {
         "evidence_file": None,
         "evidence_sha256": None,
-        "ledger_schema_version": "2.0.0",
+        "ledger_schema_version": "2.1.0",
         "missing_precondition": "attribution_v2_physical_evidence_not_recorded",
         "protocol_file": "docs/protocols/m05b-attribution-v2.protocol.json",
         "protocol_sha256": hashlib.sha256(protocol_bytes).hexdigest(),

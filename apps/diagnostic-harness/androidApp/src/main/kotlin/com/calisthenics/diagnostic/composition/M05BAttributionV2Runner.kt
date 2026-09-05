@@ -1,6 +1,11 @@
 package com.calisthenics.diagnostic.composition
 
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.os.BatteryManager
 import android.os.PowerManager
 import android.os.SystemClock
 import com.calisthenics.diagnostic.camera.CameraXFrameSource
@@ -16,7 +21,12 @@ import com.calisthenics.diagnostic.study.AttributionV2CallbackArm
 import com.calisthenics.diagnostic.study.AttributionV2CallbackPhase
 import com.calisthenics.diagnostic.study.AttributionV2DeviceSource
 import com.calisthenics.diagnostic.study.AttributionV2EndToEndRun
+import com.calisthenics.diagnostic.study.AttributionV2EnvironmentBoundary
+import com.calisthenics.diagnostic.study.AttributionV2EnvironmentSnapshot
+import com.calisthenics.diagnostic.study.AttributionV2ArtifactRef
 import com.calisthenics.diagnostic.study.AttributionV2FpsRange
+import com.calisthenics.diagnostic.study.AttributionV2SessionBundle
+import com.calisthenics.diagnostic.contract.Uuid
 import com.calisthenics.diagnostic.study.AttributionV2ReplicateObservation
 import com.calisthenics.diagnostic.study.AttributionV2RunIdentity
 import com.calisthenics.diagnostic.study.AttributionV2SelectorObservation
@@ -47,6 +57,9 @@ data class SourceCaptureResult(
 interface M05BAttributionV2SourceFrame {
     val timestampNs: Long
     val aeTargetFpsRange: AttributionV2FpsRange?
+    val deliveredWidth: Int get() = 1280
+    val deliveredHeight: Int get() = 720
+    val deliveredFormat: String get() = "YUV_420_888"
 }
 
 interface M05BAttributionV2SourceArm {
@@ -148,6 +161,8 @@ data class BackendRunResult(
     val submittedInferenceIds: List<Long> = emptyList(),
     val pendingInferenceIds: Set<Long> = emptySet(),
     val rawEvidenceOverflow: Boolean = false,
+    val environment: AttributionV2EnvironmentBoundary? = null,
+    val sessionBundle: AttributionV2SessionBundle? = null,
 )
 
 interface M05BAttributionV2Backend {
@@ -177,6 +192,9 @@ interface M05BAttributionV2ArtifactStorage {
     fun renameTemporary(token: String, runId: String): String
     fun fsyncDirectory(runId: String)
     fun reopen(relativePath: String): ByteArray
+
+    /** Returns only digest/length descriptors after a durable export has been published. */
+    fun publishedSessionBundle(sessionReference: String): AttributionV2SessionBundle? = null
 }
 
 fun interface M05BAttributionV2StatusSink {
@@ -212,6 +230,9 @@ class M05BAttributionV2Runner(
         val thermal: M05BAttributionV2Thermal,
         val storage: M05BAttributionV2ArtifactStorage,
         val statusSink: M05BAttributionV2StatusSink,
+        val environmentSnapshot: () -> AttributionV2EnvironmentSnapshot = {
+            AttributionV2EnvironmentSnapshot()
+        },
         val clock: M05BAttributionV2Clock = M05BAttributionV2Clock { SystemClock.elapsedRealtimeNanos() },
     )
 
@@ -291,12 +312,33 @@ class M05BAttributionV2Runner(
     private fun runSourceArm(boundaryThermalStatus: Int): AttributionV2SourceObservation {
         val frames = mutableListOf<M05BAttributionV2SourceFrame>()
         val startedNs = dependencies.clock.nowNs()
+        val environmentStartRaw = dependencies.environmentSnapshot()
         val capture = dependencies.sourceArmFactory().capture(M05BAttributionV2Protocol.ARM_CAP_NS) { frame ->
             frames += frame
             frames.size < M05BAttributionV2Protocol.SOURCE_WARMUP_CALLBACKS +
                 M05BAttributionV2Protocol.SOURCE_MEASURED_CALLBACKS
         }
         val runnerElapsedNs = dependencies.clock.nowNs() - startedNs
+        val endedNs = dependencies.clock.nowNs()
+        val firstFrame = frames.firstOrNull()
+        val lastFrame = frames.lastOrNull() ?: firstFrame
+        val environmentStart = firstFrame?.let { frame ->
+            environmentStartRaw.copy(
+                negotiatedCameraFpsRange = frame.aeTargetFpsRange ?: environmentStartRaw.negotiatedCameraFpsRange,
+                deliveredWidth = frame.deliveredWidth,
+                deliveredHeight = frame.deliveredHeight,
+                deliveredFormat = frame.deliveredFormat,
+            )
+        } ?: environmentStartRaw
+        val environmentEndRaw = dependencies.environmentSnapshot()
+        val environmentEnd = lastFrame?.let { frame ->
+            environmentEndRaw.copy(
+                negotiatedCameraFpsRange = frame.aeTargetFpsRange ?: environmentEndRaw.negotiatedCameraFpsRange,
+                deliveredWidth = frame.deliveredWidth,
+                deliveredHeight = frame.deliveredHeight,
+                deliveredFormat = frame.deliveredFormat,
+            )
+        } ?: environmentEndRaw
         val measured = frames.drop(M05BAttributionV2Protocol.SOURCE_WARMUP_CALLBACKS)
             .take(M05BAttributionV2Protocol.SOURCE_MEASURED_CALLBACKS)
         val blockers = buildList {
@@ -328,10 +370,17 @@ class M05BAttributionV2Runner(
             measuredTimestampsNs = measured.map { it.timestampNs },
             observedAeTargetFps = frames.firstOrNull()?.aeTargetFpsRange,
             thermalStatus = boundaryThermalStatus,
+            environment = AttributionV2EnvironmentBoundary(
+                armStartedNs = startedNs,
+                armEndedNs = endedNs,
+                start = environmentStart,
+                end = environmentEnd,
+            ),
         )
     }
 
     private fun runBackendArm(boundaryThermalStatus: Int): AttributionV2BackendObservation {
+        val environmentStart = dependencies.environmentSnapshot()
         val result = dependencies.backendArmFactory().run(
             BackendRunSpec(
                 mode = BackendRunMode.CAPACITY,
@@ -341,6 +390,13 @@ class M05BAttributionV2Runner(
                 warmupElapsedNs = M05BAttributionV2Protocol.BACKEND_WARMUP_ELAPSED_NS,
                 measuredCompletions = M05BAttributionV2Protocol.BACKEND_MEASURED_COMPLETIONS,
             ),
+        )
+        val environmentEnd = dependencies.environmentSnapshot()
+        val environment = result.environment ?: AttributionV2EnvironmentBoundary(
+            armStartedNs = result.armStartedNs,
+            armEndedNs = maxOf(result.armStartedNs, dependencies.clock.nowNs()),
+            start = environmentStart,
+            end = environmentEnd,
         )
         val blockers = buildList {
             result.failureCode?.let(::add)
@@ -366,19 +422,21 @@ class M05BAttributionV2Runner(
             thermalStatus = result.initialThermalStatus.takeIf { it >= 0 } ?: boundaryThermalStatus,
             armStartedNs = result.armStartedNs,
             deliveredCallbackIds = result.deliveredCallbackIds
-                .take(M05BAttributionV2Protocol.SOURCE_MEASURED_CALLBACKS),
+                .take(M05BAttributionV2Protocol.RAW_CALLBACK_MAXIMUM),
             terminalCallbacks = result.terminalCallbacks
-                .take(M05BAttributionV2Protocol.SOURCE_MEASURED_CALLBACKS),
+                .take(M05BAttributionV2Protocol.RAW_CALLBACK_MAXIMUM),
             submittedInferenceIds = result.submittedInferenceIds
-                .take(M05BAttributionV2Protocol.SOURCE_MEASURED_CALLBACKS),
+                .take(M05BAttributionV2Protocol.RAW_CALLBACK_MAXIMUM),
             pendingInferenceIds = result.pendingInferenceIds
-                .take(M05BAttributionV2Protocol.SOURCE_MEASURED_CALLBACKS)
+                .take(M05BAttributionV2Protocol.RAW_CALLBACK_MAXIMUM)
                 .toSet(),
             rawEvidenceOverflow = result.rawEvidenceOverflow ||
-                result.deliveredCallbackIds.size > M05BAttributionV2Protocol.SOURCE_MEASURED_CALLBACKS ||
-                result.terminalCallbacks.size > M05BAttributionV2Protocol.SOURCE_MEASURED_CALLBACKS ||
-                result.submittedInferenceIds.size > M05BAttributionV2Protocol.SOURCE_MEASURED_CALLBACKS ||
-                result.pendingInferenceIds.size > M05BAttributionV2Protocol.SOURCE_MEASURED_CALLBACKS,
+                result.deliveredCallbackIds.size > M05BAttributionV2Protocol.RAW_CALLBACK_MAXIMUM ||
+                result.terminalCallbacks.size > M05BAttributionV2Protocol.RAW_CALLBACK_MAXIMUM ||
+                result.submittedInferenceIds.size > M05BAttributionV2Protocol.RAW_CALLBACK_MAXIMUM ||
+                result.pendingInferenceIds.size > M05BAttributionV2Protocol.RAW_CALLBACK_MAXIMUM,
+            environment = environment,
+            sessionBundle = result.sessionBundle,
         )
     }
 
@@ -441,6 +499,13 @@ class M05BAttributionV2Runner(
                     cadenceFps = cadence,
                     initialThermalStatus = result.initialThermalStatus,
                     finalThermalStatus = result.finalThermalStatus,
+                    environment = result.environment ?: AttributionV2EnvironmentBoundary(
+                        armStartedNs = result.armStartedNs,
+                        armEndedNs = maxOf(result.armStartedNs, dependencies.clock.nowNs()),
+                        start = dependencies.environmentSnapshot(),
+                        end = dependencies.environmentSnapshot(),
+                    ),
+                    sessionBundle = result.sessionBundle,
                 )
                 if (run == null) {
                     blockers += "ATTRIBUTION.REPLICATE_DISAGREEMENT"
@@ -478,7 +543,7 @@ private fun attributionV2CooldownMaximumSamples(): Int =
     (M05BAttributionV2Protocol.COOLDOWN_MAX_NS / M05BAttributionV2Protocol.COOLDOWN_SAMPLE_NS).toInt() + 1
 
 private fun attributionV2BackendRunRawBlockers(result: BackendRunResult): List<String> = buildList {
-    val max = M05BAttributionV2Protocol.SOURCE_MEASURED_CALLBACKS
+    val max = M05BAttributionV2Protocol.RAW_CALLBACK_MAXIMUM
     if (result.rawEvidenceOverflow ||
         result.deliveredCallbackIds.size > max ||
         result.terminalCallbacks.size > max ||
@@ -559,6 +624,9 @@ internal class M05BAttributionV2CameraXSourceArm(
 private fun OwnedYuvFrame.toAttributionSourceFrame() = object : M05BAttributionV2SourceFrame {
     override val timestampNs: Long = this@toAttributionSourceFrame.timestampNs
     override val aeTargetFpsRange: AttributionV2FpsRange? = observedAeTargetFpsRange?.toAttributionRange()
+    override val deliveredWidth: Int = this@toAttributionSourceFrame.width
+    override val deliveredHeight: Int = this@toAttributionSourceFrame.height
+    override val deliveredFormat: String = "YUV_420_888"
 }
 
 private fun SourceFpsRange.toAttributionRange() = AttributionV2FpsRange(lower, upper)
@@ -619,6 +687,25 @@ internal class AndroidM05BAttributionV2ArtifactStorage(
         require(relativePath.matches(Regex("^attribution-v2/[A-Za-z0-9._-]+/observation\\.json$")))
         return File(diagnosticRoot, relativePath).readBytes()
     }
+
+    override fun publishedSessionBundle(sessionReference: String): AttributionV2SessionBundle {
+        require(sessionReference.matches(Regex("^exports/00000000-0000-4000-8000-[0-9a-f]{12}$")))
+        fun artifact(name: String): AttributionV2ArtifactRef {
+            val relativePath = "$sessionReference/$name"
+            val bytes = File(diagnosticRoot, relativePath).readBytes()
+            return AttributionV2ArtifactRef(
+                relativePath = relativePath,
+                lengthBytes = bytes.size.toLong(),
+                sha256 = Sha256Digest.hex(bytes),
+            )
+        }
+        return AttributionV2SessionBundle(
+            sessionReference = sessionReference,
+            manifest = artifact("manifest.json"),
+            frames = artifact("frames.ndjson"),
+            telemetry = artifact("telemetry.ndjson"),
+        )
+    }
 }
 
 internal class AndroidM05BAttributionV2Thermal(
@@ -636,6 +723,53 @@ internal class AndroidM05BAttributionV2Thermal(
             Thread.sleep((sampleIntervalNs / 1_000_000L).coerceAtLeast(1L))
         }
         return ThermalCooldown(samples, false)
+    }
+}
+
+internal class AndroidM05BAttributionV2Environment(
+    private val context: Context,
+    private val powerManager: PowerManager,
+    private val negotiatedFps: AttributionV2FpsRange = AttributionV2FpsRange(30, 30),
+    private val deliveredWidth: Int = 1280,
+    private val deliveredHeight: Int = 720,
+    private val deliveredFormat: String = "YUV_420_888",
+) {
+    fun snapshot(): AttributionV2EnvironmentSnapshot {
+        val battery = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val plugged = battery?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0
+        val level = battery?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)?.takeIf { it >= 0 }
+        val scale = battery?.getIntExtra(BatteryManager.EXTRA_SCALE, -1)?.takeIf { it > 0 }
+        val temperature = battery?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 250)
+            ?.toDouble()?.div(10.0) ?: 25.0
+        val connectivity = context.getSystemService(ConnectivityManager::class.java)
+        val wifi = connectivity?.activeNetwork?.let { network ->
+            connectivity.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+        } == true
+        val powerSource = when (plugged) {
+            0 -> "battery"
+            BatteryManager.BATTERY_PLUGGED_USB -> "usb"
+            BatteryManager.BATTERY_PLUGGED_WIRELESS -> "wireless"
+            else -> "unknown"
+        }
+        return AttributionV2EnvironmentSnapshot(
+            thermalStatus = powerManager.currentThermalStatus,
+            batteryTemperatureC = temperature,
+            batteryLevelPercent = if (level != null && scale != null) {
+                (level.toDouble() * 100.0 / scale).coerceIn(0.0, 100.0)
+            } else 0.0,
+            powerSource = powerSource,
+            charging = battery?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) in setOf(
+                BatteryManager.BATTERY_STATUS_CHARGING,
+                BatteryManager.BATTERY_STATUS_FULL,
+            ),
+            wifiTransport = wifi,
+            screenKeepAwake = powerManager.isInteractive,
+            deviceIdle = powerManager.isDeviceIdleMode,
+            negotiatedCameraFpsRange = negotiatedFps,
+            deliveredWidth = deliveredWidth,
+            deliveredHeight = deliveredHeight,
+            deliveredFormat = deliveredFormat,
+        )
     }
 }
 
@@ -681,6 +815,9 @@ internal class AndroidM05BAttributionV2Backend(
     private val cameraCapability: CameraCapabilityObservation,
     private val permissionGranted: Boolean,
     private val thermalStatus: () -> Int,
+    private val storage: M05BAttributionV2ArtifactStorage,
+    private val sessionIdProvider: () -> Uuid,
+    private val identity: AttributionV2RunIdentity,
 ) : M05BAttributionV2Backend {
     override fun run(spec: BackendRunSpec): BackendRunResult {
         val startedAtNs = SystemClock.elapsedRealtimeNanos()
@@ -704,6 +841,8 @@ internal class AndroidM05BAttributionV2Backend(
             } else {
                 { cadence -> com.calisthenics.diagnostic.live.LiveFrameAdmission(cadence) }
             },
+            sessionIdProvider = sessionIdProvider,
+            attributionV2Identity = identity,
         )
         val start = composition.start(
             configuredInferenceFps = spec.cadenceFps ?: 30,
@@ -761,10 +900,12 @@ internal class AndroidM05BAttributionV2Backend(
         val warmup = completed.take(phaseSnapshot.warmupCompletionCount)
         val measured = completed.drop(phaseSnapshot.warmupCompletionCount).take(spec.measuredCompletions)
         val serviceDurations = measured.map { terminal ->
-            val admission = checkNotNull(byId[terminal.callbackId])
-            (terminal.completedNs - admission.observedSessionNs).coerceAtLeast(0L)
+            val admission = byId[terminal.callbackId]
+            if (admission == null) 0L else {
+                (terminal.completedNs - admission.observedSessionNs).coerceAtLeast(0L)
+            }
         }
-        val maxRawCallbacks = M05BAttributionV2Protocol.SOURCE_MEASURED_CALLBACKS
+        val maxRawCallbacks = M05BAttributionV2Protocol.RAW_CALLBACK_MAXIMUM
         val rawOverflow = admissions.size > maxRawCallbacks || terminals.size > maxRawCallbacks
         val boundedAdmissions = admissions.take(maxRawCallbacks)
         val boundedTerminals = terminals.take(maxRawCallbacks)
@@ -782,7 +923,8 @@ internal class AndroidM05BAttributionV2Backend(
                     terminals,
                     spec.cadenceFps ?: error("missing cadence"),
                     byId,
-                    "exports/${checkNotNull(completion).sessionId.value}",
+                    completion?.sessionId?.value?.let { "exports/$it" }
+                        ?: "exports/00000000-0000-4000-8000-000000000000",
                     startedAtNs,
                 )
             } else {
@@ -801,6 +943,9 @@ internal class AndroidM05BAttributionV2Backend(
                 .filterNot { callbackId -> boundedTerminals.any { it.callbackId == callbackId } }
                 .toSet(),
             rawEvidenceOverflow = rawOverflow,
+            sessionBundle = completion?.sessionId?.value?.let { sessionId ->
+                storage.publishedSessionBundle("exports/$sessionId")
+            },
         )
         return assembleAndroidM05BAttributionV2BackendResult(
             result = result,
@@ -871,7 +1016,20 @@ private fun List<AttributionV2ObservedAdmission>.toRawCallbacks(
     cadenceFps: Int?,
     byId: Map<Long, AttributionV2ObservedAdmission>,
 ): List<AttributionV2Callback> = terminals.map { terminal ->
-    val admission = checkNotNull(byId[terminal.callbackId])
+    val admission = byId[terminal.callbackId]
+    if (admission == null) {
+        return@map AttributionV2Callback(
+            callbackId = terminal.callbackId,
+            captureTimestampNs = 0L,
+            productionClassification = LiveFrameClassification.SESSION_STOPPING,
+            cadenceDue = false,
+            slotAvailable = false,
+            terminalClass = AttributionV2TerminalClass.ADMISSION_STATE_DIVERGENCE,
+            phase = terminal.phase,
+            admissionObservedSessionNs = null,
+            completionTimestampNs = terminal.completedNs,
+        )
+    }
     AttributionV2Callback(
         callbackId = terminal.callbackId,
         captureTimestampNs = admission.captureTimestampNs,

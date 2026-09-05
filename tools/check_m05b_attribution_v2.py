@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import os
@@ -44,7 +45,7 @@ SAFE_RELATIVE = re.compile(
     r"^(?!/)(?![A-Za-z]:[\\/])(?!.*(?:^|/)\.\.(?:/|$))[A-Za-z0-9._/-]+$"
 )
 SESSION_REFERENCE = re.compile(
-    r"^exports/(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-f]{64})$"
+    r"^exports/00000000-0000-4000-8000-[0-9a-f]{12}$"
 )
 IDENTITY_TOKEN = re.compile(r"^[A-Za-z0-9._+-]{1,128}$")
 DEVICE_TOKEN = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -208,6 +209,117 @@ def transfer_reference(
         temporary.unlink(missing_ok=True)
 
 
+def transfer_session_bundle(
+    serial: str,
+    package: str,
+    bundle: Mapping[str, object],
+    destination_root: Path,
+    *,
+    expected_identity: Mapping[str, object] | None = None,
+    expected_cadence: int | None = None,
+    expected_counts: Mapping[str, int] | None = None,
+) -> dict[str, int]:
+    """Transfer and reopen the reserved synthetic manifest, frames, and telemetry bundle."""
+    session_reference = bundle.get("session_reference")
+    if not isinstance(session_reference, str) or not SESSION_REFERENCE.fullmatch(
+        session_reference
+    ) or not session_reference.startswith("exports/00000000-0000-4000-8000-"):
+        raise AttributionV2CheckError("session bundle identity is not reserved synthetic")
+    session_id = session_reference.removeprefix("exports/")
+    destination = destination_root / session_id
+    names = {"manifest": "manifest.json", "frames": "frames.ndjson", "telemetry": "telemetry.ndjson"}
+    counts: dict[str, int] = {}
+    for name, suffix in names.items():
+        reference = bundle.get(name)
+        if not isinstance(reference, Mapping):
+            raise AttributionV2CheckError("session bundle is missing an artifact descriptor")
+        relative = reference.get("relative_path")
+        expected_relative = f"exports/{session_id}/{suffix}"
+        if relative != expected_relative:
+            raise AttributionV2CheckError("session bundle artifact path is not session-bound")
+        target = destination / suffix
+        transfer_reference(
+            serial,
+            package,
+            expected_relative,
+            target,
+            expected_length=_nonnegative_int(reference.get("length_bytes")),
+            expected_sha256=reference.get("sha256")
+            if isinstance(reference.get("sha256"), str)
+            else None,
+        )
+        data = _read_exact_bytes(target, reference)
+        if name == "manifest":
+            try:
+                manifest = load_strict_json(data.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                raise AttributionV2CheckError("session manifest is malformed") from error
+            if not isinstance(manifest, Mapping) or manifest.get("session_id") != session_id:
+                raise AttributionV2CheckError("session manifest identity mismatch")
+            if expected_cadence is not None:
+                cadence = manifest.get("cadence")
+                configured = cadence.get("configured_inference_fps") if isinstance(cadence, Mapping) else None
+                if configured != expected_cadence:
+                    raise AttributionV2CheckError("session manifest cadence mismatch")
+            if expected_identity is not None:
+                manifest_identity = manifest.get("build_identity")
+                if not isinstance(manifest_identity, Mapping):
+                    context = manifest.get("study_context")
+                    manifest_identity = context.get("m05b_attribution_identity") if isinstance(context, Mapping) else None
+                if not isinstance(manifest_identity, Mapping) or dict(manifest_identity) != dict(expected_identity):
+                    raise AttributionV2CheckError("session manifest candidate identity mismatch")
+            counts[name] = len(data)
+        else:
+            lines = data.splitlines(keepends=True)
+            if not data.endswith(b"\n") or any(not line.endswith(b"\n") for line in lines):
+                raise AttributionV2CheckError(f"session {name} stream is not LF-terminated")
+            for line in lines:
+                try:
+                    record = load_strict_json(line[:-1].decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                    raise AttributionV2CheckError(f"session {name} stream is malformed") from error
+                if not isinstance(record, Mapping):
+                    raise AttributionV2CheckError(f"session {name} record is not an object")
+                if record.get("session_id") not in {None, session_id}:
+                    raise AttributionV2CheckError(f"session {name} identity mismatch")
+            counts[name] = len(lines)
+            if expected_counts is not None:
+                _validate_telemetry_counts(lines, expected_counts)
+    return counts
+
+
+def _validate_telemetry_counts(lines: list[bytes], expected: Mapping[str, int]) -> None:
+    records: list[Mapping[str, object]] = []
+    for line in lines:
+        try:
+            record = load_strict_json(line[:-1].decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise AttributionV2CheckError("session telemetry is malformed") from error
+        if isinstance(record, Mapping):
+            records.append(record)
+    delivered = sum(
+        record.get("stage") == "CAMERA_CALLBACK" and record.get("disposition") == "RECEIVED"
+        for record in records
+    )
+    submitted = sum(record.get("disposition") in {"SUBMITTED", "SUBMIT"} for record in records)
+    terminal = sum(
+        record.get("terminal") is True
+        or record.get("disposition") in {
+            "COMPLETED",
+            "INFERENCE_COMPLETED",
+            "INFERENCE_FAILED",
+            "BACKPRESSURE",
+            "CADENCE_SELECTION",
+            "PREPROCESSING_FAILED",
+            "SESSION_STOPPING",
+        }
+        for record in records
+    )
+    actual = {"delivered": delivered, "submitted": submitted, "terminal": terminal}
+    if any(expected.get(key) != value for key, value in actual.items() if key in expected):
+        raise AttributionV2CheckError("session telemetry counts do not bind to raw callbacks")
+
+
 def check_attribution_v2(
     transcript: str,
     *,
@@ -241,8 +353,63 @@ def check_attribution_v2(
             ) from error
         if not isinstance(observation, Mapping):
             raise AttributionV2CheckError("transferred observation must be an object")
+        _transfer_observation_session_bundles(
+            serial,
+            package,
+            cast(Mapping[str, object], observation),
+            Path(temporary) / "exports",
+            prepared_identity,
+        )
         return AttributionV2HostCheck(root).classify(
             cast(Mapping[str, object], observation), prepared_identity
+        )
+
+
+def _transfer_observation_session_bundles(
+    serial: str,
+    package: str,
+    observation: Mapping[str, object],
+    destination_root: Path,
+    prepared_identity: Mapping[str, object],
+) -> None:
+    backend = observation.get("backend_arm")
+    bundles: list[tuple[Mapping[str, object], int | None, Mapping[str, int]]] = []
+    if isinstance(backend, Mapping) and isinstance(backend.get("session_bundle"), Mapping):
+        bundles.append(
+            (
+                cast(Mapping[str, object], backend["session_bundle"]),
+                None,
+                {
+                    "delivered": len(_integer_list(backend.get("delivered_callback_ids"))),
+                    "submitted": len(_integer_list(backend.get("submitted_inference_ids"))),
+                    "terminal": len(_mapping_list(backend.get("terminal_callbacks"))),
+                },
+            )
+        )
+    for replicate in _mapping_list(observation.get("end_to_end_replicates")):
+        for run in _mapping_list(replicate.get("runs")):
+            bundle = run.get("session_bundle")
+            if isinstance(bundle, Mapping):
+                bundles.append(
+                    (
+                        cast(Mapping[str, object], bundle),
+                        _nonnegative_int(run.get("cadence_fps")),
+                        {
+                            "delivered": len(_integer_list(run.get("delivered_callback_ids"))),
+                            "submitted": len(_integer_list(run.get("submitted_inference_ids"))),
+                            "terminal": len(_mapping_list(run.get("terminal_callbacks"))),
+                        },
+                    )
+                )
+    for bundle, cadence, counts in bundles:
+        transfer_session_bundle(
+            serial,
+            package,
+            bundle,
+            destination_root,
+            expected_identity=prepared_identity,
+            expected_cadence=cadence,
+            expected_counts=counts,
         )
 
 
@@ -272,7 +439,14 @@ class AttributionV2HostCheck:
     def classify(
         self, observation: Mapping[str, object], prepared_identity: Mapping[str, object]
     ) -> dict[str, object]:
-        _validate_observation_schema(observation)
+        schema_errors = _observation_schema_errors(observation)
+        if schema_errors and not all(_is_environment_schema_error(error) for error in schema_errors):
+            raise AttributionV2CheckError("observation schema validation failed")
+        schema_safe_observation = (
+            _fill_missing_environment_operands(observation) if schema_errors else observation
+        )
+        if schema_safe_observation.get("record_kind") != OBSERVATION_KIND:
+            raise AttributionV2CheckError("observation has the wrong record_kind")
         protocol_bytes = _read_protocol(self.root)
         protocol_sha256 = _sha256(protocol_bytes)
         authorized_device = _read_authorized_device_pin(self.root)
@@ -284,10 +458,10 @@ class AttributionV2HostCheck:
             codes.add("BLOCKING_CODES.MISMATCH")
         sorted_codes = sorted(codes)
         sanitized_observation = _sanitize_observation(
-            observation, prepared_identity, authorized_device
+            schema_safe_observation, prepared_identity, authorized_device
         )
         result: dict[str, object] = {
-            "evidence_schema_version": "2.0.0",
+            "evidence_schema_version": "2.1.0",
             "record_kind": HOST_EVIDENCE_KIND,
             "sanitized": True,
             "non_participant_observation": True,
@@ -318,7 +492,7 @@ def verify_recorded_attribution_v2_ledger(
         or ledger.get("record_kind") != "s25_attribution_v2_ledger"
     ):
         raise AttributionV2CheckError("v2 ledger has the wrong record kind")
-    if ledger.get("ledger_schema_version") != "2.0.0":
+    if ledger.get("ledger_schema_version") != "2.1.0":
         raise AttributionV2CheckError("v2 ledger has the wrong schema version")
     protocol_bytes = _read_protocol(root)
     protocol_sha256 = _sha256(protocol_bytes)
@@ -464,6 +638,8 @@ def _derive_blockers(
 
     replicates_value = observation.get("end_to_end_replicates")
     replicates = _mapping_list(replicates_value)
+    blockers.update(_derive_environment(source, backend, replicates))
+    blockers.update(_derive_session_bundle_codes(observation, backend, replicates))
     replicate_codes = _derive_replicates(
         replicates,
         source,
@@ -488,6 +664,107 @@ def _derive_blockers(
         if issue.code in V2_CODES:
             blockers.add(issue.code)
     return blockers
+
+
+def _derive_session_bundle_codes(
+    observation: Mapping[str, object],
+    backend: Mapping[str, object] | None,
+    replicates: list[Mapping[str, object]],
+) -> set[str]:
+    codes: set[str] = set()
+    bundles: list[tuple[Mapping[str, object], str]] = []
+    if backend is not None:
+        bundle = backend.get("session_bundle")
+        if isinstance(bundle, Mapping):
+            bundles.append((cast(Mapping[str, object], bundle), "backend"))
+        else:
+            codes.add("ATTRIBUTION.CALLBACK_CONSERVATION")
+    for replicate in replicates:
+        for run in _mapping_list(replicate.get("runs")):
+            bundle = run.get("session_bundle")
+            if not isinstance(bundle, Mapping):
+                codes.add("ATTRIBUTION.CALLBACK_CONSERVATION")
+                continue
+            bundles.append((cast(Mapping[str, object], bundle), str(run.get("session_reference"))))
+    for bundle, owner in bundles:
+        reference = bundle.get("session_reference")
+        if not isinstance(reference, str) or not SESSION_REFERENCE.fullmatch(reference):
+            codes.add("ATTRIBUTION.CALLBACK_CONSERVATION")
+        elif owner != "backend" and reference != owner:
+            codes.add("ATTRIBUTION.CALLBACK_CONSERVATION")
+        for name in ("manifest", "frames", "telemetry"):
+            descriptor = bundle.get(name)
+            if not isinstance(descriptor, Mapping):
+                codes.add("ATTRIBUTION.CALLBACK_CONSERVATION")
+                continue
+            relative = descriptor.get("relative_path")
+            if (
+                not isinstance(relative, str)
+                or not _safe_relative(relative)
+                or not relative.startswith(f"{reference}/")
+                or type(descriptor.get("length_bytes")) is not int
+                or cast(int, descriptor["length_bytes"]) < 0
+                or not isinstance(descriptor.get("sha256"), str)
+                or SHA256.fullmatch(cast(str, descriptor["sha256"])) is None
+            ):
+                codes.add("ATTRIBUTION.CALLBACK_CONSERVATION")
+    return codes
+
+
+def _derive_environment(
+    source: Mapping[str, object],
+    backend: Mapping[str, object] | None,
+    replicates: list[Mapping[str, object]],
+) -> set[str]:
+    codes: set[str] = set()
+    arms: list[Mapping[str, object]] = [source]
+    if backend is not None:
+        arms.append(backend)
+    arms.extend(
+        run
+        for replicate in replicates
+        for run in _mapping_list(replicate.get("runs"))
+    )
+    static_config: tuple[object, ...] | None = None
+    for arm in arms:
+        environment = arm.get("environment")
+        if not isinstance(environment, Mapping):
+            codes.add("ATTRIBUTION.ENVIRONMENT_MISMATCH")
+            continue
+        started = _nonnegative_int(environment.get("arm_started_ns"))
+        ended = _nonnegative_int(environment.get("arm_ended_ns"))
+        if started is None or ended is None or ended < started:
+            codes.add("ATTRIBUTION.ENVIRONMENT_MISMATCH")
+        snapshots = [environment.get("start"), environment.get("end")]
+        for snapshot in snapshots:
+            if not isinstance(snapshot, Mapping):
+                codes.add("ATTRIBUTION.ENVIRONMENT_MISMATCH")
+                continue
+            if (
+                snapshot.get("power_source") != "battery"
+                or snapshot.get("charging") is not False
+                or snapshot.get("wifi_transport") is not True
+                or snapshot.get("screen_keep_awake") is not True
+                or snapshot.get("device_idle") is not False
+            ):
+                codes.add("ATTRIBUTION.ENVIRONMENT_MISMATCH")
+            config = (
+                snapshot.get("negotiated_camera_fps_range"),
+                snapshot.get("delivered_width"),
+                snapshot.get("delivered_height"),
+                snapshot.get("delivered_format"),
+            )
+            if static_config is None:
+                static_config = config
+            elif config != static_config:
+                codes.add("ATTRIBUTION.ENVIRONMENT_MISMATCH")
+        start_snapshot = snapshots[0]
+        end_snapshot = snapshots[1]
+        if isinstance(start_snapshot, Mapping) and isinstance(end_snapshot, Mapping):
+            if start_snapshot.get("thermal_status") != end_snapshot.get("thermal_status"):
+                codes.add("ATTRIBUTION.THERMAL_STATE_MISMATCH")
+                codes.add("ATTRIBUTION.ENVIRONMENT_MISMATCH")
+    return codes
 
 
 def _derive_source(source: Mapping[str, object]) -> set[str]:
@@ -705,7 +982,10 @@ def _derive_end_to_end_run(
     run: Mapping[str, object], source_thermal: int | None
 ) -> tuple[set[str], int, int, int]:
     codes: set[str] = set()
-    callbacks = _mapping_list(run.get("terminal_callbacks"))
+    callbacks = _ordered_callbacks(_mapping_list(run.get("terminal_callbacks")))
+    if callbacks is None:
+        return {"ATTRIBUTION.ADMISSION_STATE_DIVERGENCE"}, 0, 0, 0
+    cadence = _nonnegative_int(run.get("cadence_fps"))
     arm_started = _nonnegative_int(run.get("arm_started_ns"))
     if not _valid_arm_two_chronology(callbacks, arm_started):
         codes.add("ATTRIBUTION.ADMISSION_STATE_DIVERGENCE")
@@ -717,6 +997,10 @@ def _derive_end_to_end_run(
     ):
         codes.add("ATTRIBUTION.ADMISSION_STATE_DIVERGENCE")
     if any(not _valid_end_to_end_operands(callback) for callback in callbacks):
+        codes.add("ATTRIBUTION.ADMISSION_STATE_DIVERGENCE")
+    if cadence not in TARGET_CADENCES_FPS or not _host_replayed_predicates_match(
+        callbacks, cadence
+    ):
         codes.add("ATTRIBUTION.ADMISSION_STATE_DIVERGENCE")
 
     measured_callbacks = [
@@ -777,13 +1061,24 @@ def _derive_end_to_end_run(
         codes.add("ATTRIBUTION.THERMAL_STATE_MISMATCH")
     if initial != final:
         codes.add("ATTRIBUTION.ENVIRONMENT_MISMATCH")
+    selected_captures = (
+        selector_timestamps(
+            [cast(int, item.get("capture_timestamp_ns")) for item in callbacks],
+            cadence,
+        )
+        if cadence in TARGET_CADENCES_FPS
+        else []
+    )
     return (
         codes,
         sum(
             callback.get("terminal_class") == "admitted_completed"
             for callback in measured_completions
         ),
-        sum(callback.get("cadence_due") is True for callback in measured_callbacks),
+        sum(
+            callback.get("capture_timestamp_ns") in selected_captures
+            for callback in measured_callbacks
+        ),
         span,
     )
 
@@ -797,6 +1092,57 @@ def _valid_end_to_end_operands(callback: Mapping[str, object]) -> bool:
         and completion is not None
         and completion >= admission
     )
+
+
+def _ordered_callbacks(
+    callbacks: list[Mapping[str, object]],
+) -> list[Mapping[str, object]] | None:
+    callback_ids = [callback.get("callback_id") for callback in callbacks]
+    if any(type(callback_id) is not int for callback_id in callback_ids):
+        return None
+    if len(callback_ids) != len(set(callback_ids)):
+        return None
+    return sorted(callbacks, key=lambda callback: cast(int, callback["callback_id"]))
+
+
+def _host_replayed_predicates_match(
+    callbacks: list[Mapping[str, object]], cadence: int
+) -> bool:
+    captures = [callback.get("capture_timestamp_ns") for callback in callbacks]
+    if any(type(timestamp) is not int for timestamp in captures):
+        return False
+    typed_captures = cast(list[int], captures)
+    if any(second <= first for first, second in pairwise(typed_captures)):
+        return False
+    selected = selector_timestamps(typed_captures, cadence)
+    return all(
+        callback.get("cadence_due") is (capture in selected)
+        and callback.get("terminal_class") == _host_terminal_class(callback)
+        for callback, capture in zip(callbacks, captures)
+    )
+
+
+def _host_terminal_class(callback: Mapping[str, object]) -> str | None:
+    production = callback.get("production_classification")
+    if production == "session_stopping":
+        return "session_stopping"
+    if production == "preprocessing_failed":
+        return "preprocessing_failed"
+    if production == "submit":
+        terminal = callback.get("terminal_class")
+        return terminal if terminal in {
+            "admitted_completed",
+            "admitted_inference_failed",
+        } else None
+    cadence_due = callback.get("cadence_due")
+    slot_available = callback.get("slot_available")
+    if cadence_due is False and slot_available is True:
+        return "cadence_only"
+    if cadence_due is True and slot_available is False:
+        return "backpressure_only"
+    if cadence_due is False and slot_available is False:
+        return "cadence_and_backpressure"
+    return None
 
 
 def _valid_arm_two_chronology(
@@ -899,7 +1245,7 @@ def _validation_adapter(
             }
         )
     return {
-        "protocol_version": "2.0.0" if protocol_matches else "invalid",
+        "protocol_version": "2.1.0" if protocol_matches else "invalid",
         "identity_matches": True,
         "environment_matches": all(
             run.get("initial_thermal_status") == run.get("final_thermal_status")
@@ -1017,16 +1363,71 @@ def _terminal_matches(callback: Mapping[str, object]) -> bool:
 
 
 def _validate_observation_schema(observation: Mapping[str, object]) -> None:
-    errors = sorted(
+    errors = _observation_schema_errors(observation)
+    if errors:
+        raise AttributionV2CheckError("observation schema validation failed")
+    if observation.get("record_kind") != OBSERVATION_KIND:
+        raise AttributionV2CheckError("observation has the wrong record_kind")
+
+
+def _observation_schema_errors(observation: Mapping[str, object]) -> list[object]:
+    return sorted(
         Draft202012Validator(load_m05b_attribution_observation_v2_schema()).iter_errors(
             observation
         ),
         key=lambda error: list(error.absolute_path),
     )
-    if errors:
-        raise AttributionV2CheckError("observation schema validation failed")
-    if observation.get("record_kind") != OBSERVATION_KIND:
-        raise AttributionV2CheckError("observation has the wrong record_kind")
+
+
+def _is_environment_schema_error(error: object) -> bool:
+    message = getattr(error, "message", "")
+    path = list(getattr(error, "absolute_path", ()))
+    return "environment" in path and "required property" in message
+
+
+def _fill_missing_environment_operands(
+    observation: Mapping[str, object],
+) -> dict[str, object]:
+    value = copy.deepcopy(dict(observation))
+    snapshot = {
+        "thermal_status": 0,
+        "battery_temperature_c": 25.0,
+        "battery_level_percent": 80.0,
+        "power_source": "unknown",
+        "charging": True,
+        "wifi_transport": False,
+        "screen_keep_awake": False,
+        "device_idle": True,
+        "negotiated_camera_fps_range": {"lower": 30, "upper": 30},
+        "delivered_width": 1,
+        "delivered_height": 1,
+        "delivered_format": "YUV_420_888",
+    }
+
+    def complete_arm(arm: object) -> None:
+        if not isinstance(arm, dict):
+            return
+        environment = arm.setdefault("environment", {})
+        if not isinstance(environment, dict):
+            environment = {}
+            arm["environment"] = environment
+        environment.setdefault("arm_started_ns", 0)
+        environment.setdefault("arm_ended_ns", 0)
+        for key in ("start", "end"):
+            current = environment.setdefault(key, {})
+            if not isinstance(current, dict):
+                current = {}
+                environment[key] = current
+            for field, default in snapshot.items():
+                current.setdefault(field, copy.deepcopy(default))
+
+    complete_arm(value.get("source_arm"))
+    complete_arm(value.get("backend_arm"))
+    for replicate in value.get("end_to_end_replicates", []):
+        if isinstance(replicate, dict):
+            for run in replicate.get("runs", []):
+                complete_arm(run)
+    return value
 
 
 def _sanitize_observation(
@@ -1119,10 +1520,8 @@ def _sanitize_identity(
 
 def _sanitize_session_reference(value: object) -> str:
     if not isinstance(value, str) or not SESSION_REFERENCE.fullmatch(value):
-        return "exports/" + "0" * 64
-    if re.fullmatch(r"exports/[0-9a-f]{64}", value):
-        return value
-    return "exports/" + _sha256(value.encode("utf-8"))
+        return "exports/00000000-0000-4000-8000-000000000000"
+    return value
 
 
 def _valid_device_identity(
@@ -1159,7 +1558,7 @@ def _validate_host_evidence(
     }
     if (
         set(evidence) != required
-        or evidence.get("evidence_schema_version") != "2.0.0"
+        or evidence.get("evidence_schema_version") != "2.1.0"
         or evidence.get("record_kind") != HOST_EVIDENCE_KIND
     ):
         raise AttributionV2CheckError("host evidence schema is closed or invalid")

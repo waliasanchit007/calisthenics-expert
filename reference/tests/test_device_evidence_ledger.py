@@ -580,7 +580,7 @@ def _copy_protocol(source: Path, destination: Path) -> None:
 
 def _v2_ledger(evidence: dict[str, object], relative: str, digest: str) -> dict[str, object]:
     return {
-        "ledger_schema_version": "2.0.0",
+        "ledger_schema_version": "2.1.0",
         "record_kind": "s25_attribution_v2_ledger",
         "status": evidence["physical_evidence_status"],
         "missing_precondition": None,

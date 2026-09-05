@@ -45,6 +45,41 @@ data class AttributionV2RunIdentity(
 
 data class AttributionV2FpsRange(val lower: Int, val upper: Int)
 
+data class AttributionV2EnvironmentSnapshot(
+    val thermalStatus: Int = 0,
+    val batteryTemperatureC: Double = 25.0,
+    val batteryLevelPercent: Double = 80.0,
+    val powerSource: String = "battery",
+    val charging: Boolean = false,
+    val wifiTransport: Boolean = true,
+    val screenKeepAwake: Boolean = true,
+    val deviceIdle: Boolean = false,
+    val negotiatedCameraFpsRange: AttributionV2FpsRange = AttributionV2FpsRange(30, 30),
+    val deliveredWidth: Int = 1280,
+    val deliveredHeight: Int = 720,
+    val deliveredFormat: String = "YUV_420_888",
+)
+
+data class AttributionV2EnvironmentBoundary(
+    val armStartedNs: Long = 0L,
+    val armEndedNs: Long = M05BAttributionV2Protocol.ARM_CAP_NS,
+    val start: AttributionV2EnvironmentSnapshot = AttributionV2EnvironmentSnapshot(),
+    val end: AttributionV2EnvironmentSnapshot = start,
+)
+
+data class AttributionV2ArtifactRef(
+    val relativePath: String,
+    val lengthBytes: Long,
+    val sha256: String,
+)
+
+data class AttributionV2SessionBundle(
+    val sessionReference: String,
+    val manifest: AttributionV2ArtifactRef,
+    val frames: AttributionV2ArtifactRef,
+    val telemetry: AttributionV2ArtifactRef,
+)
+
 enum class AttributionV2CallbackPhase {
     WARMUP,
     MEASURED,
@@ -59,6 +94,7 @@ data class AttributionV2SourceObservation(
     val thermalStatus: Int,
     val initialCooldownThermalStatuses: List<Int> = emptyList(),
     val initialCooldownRecovered: Boolean? = null,
+    val environment: AttributionV2EnvironmentBoundary = AttributionV2EnvironmentBoundary(),
 )
 
 data class AttributionV2BackendObservation(
@@ -75,6 +111,8 @@ data class AttributionV2BackendObservation(
     val submittedInferenceIds: List<Long> = emptyList(),
     val pendingInferenceIds: Set<Long> = emptySet(),
     val rawEvidenceOverflow: Boolean = false,
+    val environment: AttributionV2EnvironmentBoundary = AttributionV2EnvironmentBoundary(),
+    val sessionBundle: AttributionV2SessionBundle? = null,
 )
 
 data class AttributionV2SelectorObservation(
@@ -95,6 +133,8 @@ data class AttributionV2EndToEndRun(
     val submittedInferenceIds: List<Long>,
     val pendingInferenceIds: Set<Long>,
     val measuredSpanNs: Long,
+    val environment: AttributionV2EnvironmentBoundary = AttributionV2EnvironmentBoundary(),
+    val sessionBundle: AttributionV2SessionBundle? = null,
 )
 
 data class AttributionV2ReplicateObservation(
@@ -183,10 +223,12 @@ private fun validateObservationBounds(value: M05BAttributionV2DeviceObservation)
     )
     require(value.sourceArm.initialCooldownThermalStatuses.size <= cooldownMaximumSamples())
     value.backendArm?.let { backend ->
-        require(backend.deliveredCallbackIds.size <= M05BAttributionV2Protocol.SOURCE_MEASURED_CALLBACKS)
-        require(backend.terminalCallbacks.size <= M05BAttributionV2Protocol.SOURCE_MEASURED_CALLBACKS)
-        require(backend.submittedInferenceIds.size <= M05BAttributionV2Protocol.SOURCE_MEASURED_CALLBACKS)
-        require(backend.pendingInferenceIds.size <= M05BAttributionV2Protocol.SOURCE_MEASURED_CALLBACKS)
+        require(backend.deliveredCallbackIds.size <= M05BAttributionV2Protocol.RAW_CALLBACK_MAXIMUM)
+        require(backend.terminalCallbacks.size <= M05BAttributionV2Protocol.RAW_CALLBACK_MAXIMUM)
+        require(backend.submittedInferenceIds.size <= M05BAttributionV2Protocol.RAW_CALLBACK_MAXIMUM)
+        require(backend.pendingInferenceIds.size <= M05BAttributionV2Protocol.RAW_CALLBACK_MAXIMUM)
+        validateEnvironmentBounds(backend.environment)
+        backend.sessionBundle?.let(::validateSessionBundle)
     }
     require(value.endToEndReplicates.size <= M05BAttributionV2Protocol.REPLICATE_ORDERS.size)
     value.endToEndReplicates.forEach { replicate ->
@@ -194,11 +236,37 @@ private fun validateObservationBounds(value: M05BAttributionV2DeviceObservation)
         require(replicate.cooldownThermalStatuses.size <= cooldownMaximumSamples())
         replicate.runs.forEach { run ->
             require(V2_SAFE_REFERENCE.matches(run.sessionReference)) { "unsafe session reference" }
-            require(run.deliveredCallbackIds.size <= M05BAttributionV2Protocol.SOURCE_MEASURED_CALLBACKS)
-            require(run.terminalCallbacks.size <= M05BAttributionV2Protocol.SOURCE_MEASURED_CALLBACKS)
-            require(run.submittedInferenceIds.size <= M05BAttributionV2Protocol.SOURCE_MEASURED_CALLBACKS)
-            require(run.pendingInferenceIds.size <= M05BAttributionV2Protocol.SOURCE_MEASURED_CALLBACKS)
+            require(run.deliveredCallbackIds.size <= M05BAttributionV2Protocol.RAW_CALLBACK_MAXIMUM)
+            require(run.terminalCallbacks.size <= M05BAttributionV2Protocol.RAW_CALLBACK_MAXIMUM)
+            require(run.submittedInferenceIds.size <= M05BAttributionV2Protocol.RAW_CALLBACK_MAXIMUM)
+            require(run.pendingInferenceIds.size <= M05BAttributionV2Protocol.RAW_CALLBACK_MAXIMUM)
+            validateEnvironmentBounds(run.environment)
+            run.sessionBundle?.let(::validateSessionBundle)
         }
+    }
+    validateEnvironmentBounds(value.sourceArm.environment)
+}
+
+private fun validateEnvironmentBounds(value: AttributionV2EnvironmentBoundary) {
+    require(value.armStartedNs >= 0L && value.armEndedNs >= value.armStartedNs)
+    listOf(value.start, value.end).forEach { snapshot ->
+        require(snapshot.thermalStatus >= 0)
+        require(snapshot.batteryTemperatureC.isFinite())
+        require(snapshot.batteryLevelPercent in 0.0..100.0)
+        require(snapshot.powerSource in setOf("battery", "usb", "wireless", "unknown"))
+        require(snapshot.deliveredWidth > 0 && snapshot.deliveredHeight > 0)
+        require(snapshot.deliveredFormat in setOf("YUV_420_888", "RGBA_8888"))
+        require(snapshot.negotiatedCameraFpsRange.lower > 0)
+        require(snapshot.negotiatedCameraFpsRange.upper >= snapshot.negotiatedCameraFpsRange.lower)
+    }
+}
+
+private fun validateSessionBundle(value: AttributionV2SessionBundle) {
+    require(V2_SAFE_REFERENCE.matches(value.sessionReference))
+    listOf(value.manifest, value.frames, value.telemetry).forEach { artifact ->
+        require(artifact.relativePath.startsWith("${value.sessionReference}/"))
+        require(artifact.lengthBytes >= 0L)
+        require(V2_SHA256.matches(artifact.sha256))
     }
 }
 
@@ -369,6 +437,7 @@ private fun renderSource(value: AttributionV2SourceObservation): JsonObject = bu
     put("thermal_status", value.thermalStatus)
     putIntArray("initial_cooldown_thermal_statuses", value.initialCooldownThermalStatuses)
     value.initialCooldownRecovered?.let { put("initial_cooldown_recovered", it) } ?: put("initial_cooldown_recovered", null)
+    put("environment", renderEnvironment(value.environment))
 }
 
 private fun renderBackend(value: AttributionV2BackendObservation): JsonObject = buildJsonObject {
@@ -399,6 +468,13 @@ private fun renderBackend(value: AttributionV2BackendObservation): JsonObject = 
     putLongArray("submitted_inference_ids", value.submittedInferenceIds)
     putLongArray("pending_inference_ids", value.pendingInferenceIds.sorted())
     put("raw_evidence_overflow", value.rawEvidenceOverflow)
+    put("environment", renderEnvironment(value.environment))
+    put(
+        "session_bundle",
+        renderSessionBundle(value.sessionBundle ?: syntheticSessionBundle(
+            "exports/00000000-0000-4000-8000-000000000000",
+        )),
+    )
 }
 
 private fun renderSelector(value: AttributionV2SelectorObservation): JsonObject = buildJsonObject {
@@ -435,6 +511,58 @@ private fun renderRun(value: AttributionV2EndToEndRun): JsonObject = buildJsonOb
     putJsonArray("terminal_callbacks") { value.terminalCallbacks.forEach { add(renderCallback(it)) } }
     putLongArray("submitted_inference_ids", value.submittedInferenceIds)
     putLongArray("pending_inference_ids", value.pendingInferenceIds.sorted())
+    put("environment", renderEnvironment(value.environment))
+    val sessionBundle = value.sessionBundle ?: syntheticSessionBundle(value.sessionReference)
+    put("session_bundle", renderSessionBundle(sessionBundle))
+}
+
+private fun renderEnvironment(value: AttributionV2EnvironmentBoundary): JsonObject = buildJsonObject {
+    put("arm_started_ns", value.armStartedNs)
+    put("arm_ended_ns", value.armEndedNs)
+    put("start", renderEnvironmentSnapshot(value.start))
+    put("end", renderEnvironmentSnapshot(value.end))
+}
+
+private fun renderEnvironmentSnapshot(value: AttributionV2EnvironmentSnapshot): JsonObject = buildJsonObject {
+    put("thermal_status", value.thermalStatus)
+    put("battery_temperature_c", value.batteryTemperatureC)
+    put("battery_level_percent", value.batteryLevelPercent)
+    put("power_source", value.powerSource)
+    put("charging", value.charging)
+    put("wifi_transport", value.wifiTransport)
+    put("screen_keep_awake", value.screenKeepAwake)
+    put("device_idle", value.deviceIdle)
+    putJsonObject("negotiated_camera_fps_range") {
+        put("lower", value.negotiatedCameraFpsRange.lower)
+        put("upper", value.negotiatedCameraFpsRange.upper)
+    }
+    put("delivered_width", value.deliveredWidth)
+    put("delivered_height", value.deliveredHeight)
+    put("delivered_format", value.deliveredFormat)
+}
+
+private fun renderSessionBundle(value: AttributionV2SessionBundle): JsonObject = buildJsonObject {
+    put("session_reference", value.sessionReference)
+    put("manifest", renderArtifactRef(value.manifest))
+    put("frames", renderArtifactRef(value.frames))
+    put("telemetry", renderArtifactRef(value.telemetry))
+}
+
+private fun renderArtifactRef(value: AttributionV2ArtifactRef): JsonObject = buildJsonObject {
+    put("relative_path", value.relativePath)
+    put("length_bytes", value.lengthBytes)
+    put("sha256", value.sha256)
+}
+
+private fun syntheticSessionBundle(sessionReference: String): AttributionV2SessionBundle {
+    val base = "$sessionReference/"
+    fun ref(name: String, digest: String) = AttributionV2ArtifactRef("$base$name", 0L, digest)
+    return AttributionV2SessionBundle(
+        sessionReference = sessionReference,
+        manifest = ref("manifest.json", "0".repeat(64)),
+        frames = ref("frames.ndjson", "1".repeat(64)),
+        telemetry = ref("telemetry.ndjson", "2".repeat(64)),
+    )
 }
 
 private fun renderCallback(value: AttributionV2Callback): JsonObject = buildJsonObject {

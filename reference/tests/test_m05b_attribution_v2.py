@@ -88,7 +88,7 @@ def _valid_document() -> dict[str, object]:
         "source_supported": {"10": True, "15": True, "30": True},
     }
     return {
-        "protocol_version": "2.0.0",
+        "protocol_version": "2.1.0",
         "identity_matches": True,
         "environment_matches": True,
         "device_blocking_codes": [],

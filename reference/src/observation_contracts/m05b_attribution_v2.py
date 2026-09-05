@@ -70,7 +70,7 @@ def selector_timestamps(timestamps_ns: Sequence[int], cadence_fps: int) -> list[
 def validate_attribution_v2(document: Mapping[str, object], path: str) -> list[ValidationIssue]:
     """Recompute v2 blockers; no device-supplied success Boolean is consumed."""
     blockers: set[str] = set()
-    if document.get("protocol_version") != "2.0.0":
+    if document.get("protocol_version") != "2.1.0":
         blockers.add("ATTRIBUTION.PROTOCOL_DIGEST")
     if document.get("identity_matches") is not True:
         blockers.add("ATTRIBUTION.CANDIDATE_IDENTITY")
