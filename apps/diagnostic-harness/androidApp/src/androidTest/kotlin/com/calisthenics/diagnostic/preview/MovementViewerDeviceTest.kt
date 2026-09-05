@@ -32,10 +32,30 @@ class MovementViewerDeviceTest {
             val deadline = System.nanoTime() + 20_000_000_000L
             while (controller.snapshot().completed < 2 && controller.snapshot().failure == null && System.nanoTime() < deadline) Thread.sleep(100)
             assertNull(controller.snapshot().failure)
-            Thread.sleep(5_000)
+            var detectedSamples = 0
+            var visibleSamples = 0
+            var heldSamples = 0
+            var rawStaleSamples = 0
+            var overlayDisappearances = 0
+            var previouslyVisible = false
+            repeat(100) {
+                scenario.onActivity { activity ->
+                    if (activity.snapshot?.observation?.posePresent == true) detectedSamples++
+                    if (activity.snapshot?.message == "Frame stale") rawStaleSamples++
+                    val overlay = activity.overlay
+                    val visible = overlay != null && overlay.alpha > 0f
+                    if (visible) visibleSamples++
+                    if (overlay?.held == true) heldSamples++
+                    if (previouslyVisible && !visible) overlayDisappearances++
+                    previouslyVisible = visible
+                }
+                Thread.sleep(50)
+            }
             val observed = controller.snapshot()
             instrumentation.sendStatus(0, android.os.Bundle().apply {
-                putString("stream", "Viewer timings only: previewFps=${controller.previewFps()}, ${observed.performance}\n")
+                putString("stream", "Viewer timings only: previewFps=${controller.previewFps()}, ${observed.performance}; " +
+                    "displaySamples=100, detected=$detectedSamples, visible=$visibleSamples, held=$heldSamples, " +
+                    "rawStale=$rawStaleSamples, disappearances=$overlayDisappearances\n")
             })
             assertTrue(observed.completed >= 2, "real front-camera model callbacks must complete")
             assertTrue((controller.previewFps() ?: 0.0) > 0.0, "must observe native preview callbacks, not requested FPS")
@@ -45,6 +65,7 @@ class MovementViewerDeviceTest {
                 assertEquals(androidx.camera.view.PreviewView.StreamState.STREAMING, native.previewStreamState.value)
                 assertNotNull(native.sensorToViewTransform)
                 it.stopViewer()
+                assertNull(it.overlay, "Stop must clear the held overlay as well as raw observations")
             }
             Thread.sleep(750)
             assertNull(controller.snapshot().observation)

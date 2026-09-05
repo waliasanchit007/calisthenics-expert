@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -28,6 +29,9 @@ class MovementViewerActivity : ComponentActivity() {
     private var input by mutableStateOf(ViewerInput.SYNTHETIC)
     private var nativePreview by mutableStateOf<PreviewView?>(null)
     internal var attestedCameraScope by mutableStateOf(false)
+    private val overlayPresenter = ViewerOverlayPresenter()
+    internal var overlay by mutableStateOf<ViewerOverlay?>(null)
+        private set
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -41,14 +45,14 @@ class MovementViewerActivity : ComponentActivity() {
                     current.snapshots().collect { latest ->
                         if (controller === current) {
                             // Derive expiry at display time, including results already old on arrival.
-                            snapshot = current.snapshot()
+                            updateViewerSnapshot(current.snapshot(), latest.observation)
                             if (latest.failure != null) finishWithFailure(latest)
                         }
                     }
                 }
                 while (controller === current) {
                     val latest = current.snapshot()
-                    snapshot = latest
+                    updateViewerSnapshot(latest)
                     if (latest.failure != null) { finishWithFailure(latest); break }
                     // Expiry/metric refresh only: completions above are event-driven.
                     delay(50)
@@ -60,9 +64,10 @@ class MovementViewerActivity : ComponentActivity() {
             }
             val view = nativePreview
             val target = view?.let { unmirroredFrontPreviewTransform(it.sensorToViewTransform, it.width) }
-            val geometry = observation?.frame?.analysisTransform
+            val displayedPose = overlay?.observation
+            val geometry = displayedPose?.frame?.analysisTransform
             val livePoints = if (view != null && view.width > 0 && view.height > 0 && geometry != null) {
-                observation.landmarks.mapNotNull { landmark ->
+                displayedPose.landmarks.mapNotNull { landmark ->
                     mapPreviewPoint(landmark.x, landmark.y, geometry, target)?.let {
                         landmark.index to ViewerPoint(it.x / view.width, it.y / view.height)
                     }
@@ -71,7 +76,8 @@ class MovementViewerActivity : ComponentActivity() {
             MovementViewerScreen(
                 state = MovementViewerUiState(
                     active = controller != null,
-                    message = snapshot?.message ?: "Ready to explore",
+                    message = if (overlay?.held == true) "Tracking gap · holding last pose briefly"
+                        else snapshot?.message ?: "Ready to explore",
                     source = if (input == ViewerInput.SYNTHETIC) "Packaged synthetic figure" else "Front camera",
                     width = observation?.frame?.width ?: 1,
                     height = observation?.frame?.height ?: 1,
@@ -89,6 +95,7 @@ class MovementViewerActivity : ComponentActivity() {
                 onAttestation = { attestedCameraScope = it },
                 livePreview = view?.let { native -> { modifier -> AndroidView(factory = { native }, modifier = modifier) } },
                 livePoints = livePoints,
+                liveOverlayAlpha = overlay?.alpha ?: 0f,
             )
         }
     }
@@ -97,6 +104,8 @@ class MovementViewerActivity : ComponentActivity() {
         if (controller != null) return controller
         if (selected == ViewerInput.CAMERA && (!attestedCameraScope || !hasCameraPermission())) return null
         input = selected
+        overlayPresenter.clear()
+        overlay = null
         snapshot = null
         if (selected == ViewerInput.SYNTHETIC) window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
         else window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
@@ -118,7 +127,19 @@ class MovementViewerActivity : ComponentActivity() {
         snapshot = latest.copy(observation = null)
     }
 
+    private fun updateViewerSnapshot(latest: ViewerSnapshot, candidate: ViewerObservation? = latest.observation) {
+        snapshot = latest
+        if (controller != null && input == ViewerInput.CAMERA && latest.failure == null) {
+            overlay = overlayPresenter.present(candidate, SystemClock.elapsedRealtimeNanos())
+        } else {
+            overlayPresenter.clear()
+            overlay = null
+        }
+    }
+
     fun stopViewer() {
+        overlayPresenter.clear()
+        overlay = null
         controller?.close()
         controller = null
         nativePreview = null

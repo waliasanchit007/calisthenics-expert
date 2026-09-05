@@ -47,6 +47,7 @@ fun MovementViewerScreen(
     onAttestation: (Boolean) -> Unit,
     livePreview: (@Composable (Modifier) -> Unit)? = null,
     livePoints: Map<Int, ViewerPoint> = emptyMap(),
+    liveOverlayAlpha: Float = 1f,
 ) {
     MaterialTheme(colorScheme = darkColorScheme(primary = Color(0xFF72E8BF))) {
         Surface(Modifier.fillMaxSize()) {
@@ -72,9 +73,11 @@ fun MovementViewerScreen(
                             }.toMap()
                             for ((a, b) in skeletonEdges) {
                                 val from = points[a]; val to = points[b]
-                                if (from != null && to != null) drawLine(Color(0xFF72E8BF), from, to, strokeWidth = 2.dp.toPx())
+                                if (from != null && to != null) drawLine(Color(0xFF72E8BF), from, to, strokeWidth = 2.dp.toPx(),
+                                    alpha = if (livePreview != null) liveOverlayAlpha else 1f)
                             }
-                            points.values.forEach { drawCircle(Color.White, 3.dp.toPx(), it) }
+                            points.values.forEach { drawCircle(Color.White, 3.dp.toPx(), it,
+                                alpha = if (livePreview != null) liveOverlayAlpha else 1f) }
                         }
                     }
                 }
@@ -82,7 +85,7 @@ fun MovementViewerScreen(
                 Text("${state.source} · ${state.landmarks.size}/33 landmark observations")
                 Text("Completed ${state.completed} · submitted ${state.submitted} · skipped ${state.skipped}", style = MaterialTheme.typography.bodySmall)
                 Text(state.performance, style = MaterialTheme.typography.bodySmall)
-                Text(if (livePreview != null) "Continuous preview · latest pose, not frame-synchronized. Overlay hides when older than 250 ms. No recording or upload." else "Paired synthetic frames follow inference. Images and landmarks clear on stop. No recording or upload.", style = MaterialTheme.typography.bodySmall)
+                Text(if (livePreview != null) "Continuous preview · latest pose, not frame-synchronized. Short tracking gaps hold the last pose; it fades out by 500 ms from capture. No recording or upload." else "Paired synthetic frames follow inference. Images and landmarks clear on stop. No recording or upload.", style = MaterialTheme.typography.bodySmall)
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Button(onClick = onSynthetic, enabled = !state.active) { Text("Try synthetic figure") }
                     OutlinedButton(onClick = onStop, enabled = state.active) { Text("Stop") }
