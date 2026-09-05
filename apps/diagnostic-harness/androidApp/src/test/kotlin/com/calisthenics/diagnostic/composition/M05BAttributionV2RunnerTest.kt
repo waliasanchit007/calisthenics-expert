@@ -108,6 +108,17 @@ class M05BAttributionV2RunnerTest {
     }
 
     @Test
+    fun endToEndRunDeclaresMeasuredOnlyCaptureSpan() {
+        val callbacks = listOf(
+            testCallback(0L, 0L, AttributionV2CallbackPhase.WARMUP),
+            testCallback(1L, 10L, AttributionV2CallbackPhase.MEASURED),
+            testCallback(2L, 30L, AttributionV2CallbackPhase.MEASURED),
+        )
+
+        assertEquals(20L, attributionV2MeasuredSpanNs(callbacks))
+    }
+
+    @Test
     fun nonInferenceTerminalObservedDuringWarmupSerializesWarmupPhase() {
         val phaseMachine = M05BAttributionV2BackendPhaseMachine(
             warmupCompletions = M05BAttributionV2Protocol.BACKEND_WARMUP_COMPLETIONS,
@@ -508,6 +519,22 @@ class M05BAttributionV2RunnerTest {
     ) : M05BAttributionV2SourceFrame
 
 }
+
+private fun testCallback(
+    callbackId: Long,
+    captureTimestampNs: Long,
+    phase: AttributionV2CallbackPhase,
+) = AttributionV2Callback(
+    callbackId = callbackId,
+    captureTimestampNs = captureTimestampNs,
+    productionClassification = LiveFrameClassification.SUBMIT,
+    cadenceDue = true,
+    slotAvailable = true,
+    terminalClass = AttributionV2TerminalClass.ADMITTED_COMPLETED,
+    phase = phase,
+    admissionObservedSessionNs = 0L,
+    completionTimestampNs = 1L,
+)
 
 private fun successfulBackendRun(
     warmupCompletions: Int = M05BAttributionV2Protocol.BACKEND_WARMUP_COMPLETIONS,

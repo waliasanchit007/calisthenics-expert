@@ -685,6 +685,8 @@ def _derive_end_to_end_run(
     codes: set[str] = set()
     callbacks = _mapping_list(run.get("terminal_callbacks"))
     arm_started = _nonnegative_int(run.get("arm_started_ns"))
+    if not _valid_arm_two_chronology(callbacks, arm_started):
+        codes.add("ATTRIBUTION.ADMISSION_STATE_DIVERGENCE")
     phases = _replay_arm_two_phases(callbacks, arm_started)
     if len(phases) != len(callbacks):
         codes.add("ATTRIBUTION.ADMISSION_STATE_DIVERGENCE")
@@ -733,12 +735,16 @@ def _derive_end_to_end_run(
     ):
         codes.add("ATTRIBUTION.INFERENCE_FAILURE")
 
-    captures = _integer_list(
-        [callback.get("capture_timestamp_ns") for callback in callbacks]
+    measured_captures = _integer_list(
+        [callback.get("capture_timestamp_ns") for callback in measured_callbacks]
     )
-    span = captures[-1] - captures[0] if len(captures) >= 2 else 0
-    if len(captures) != len(callbacks) or any(
-        second <= first for first, second in pairwise(captures)
+    span = (
+        measured_captures[-1] - measured_captures[0]
+        if len(measured_captures) >= 2
+        else 0
+    )
+    if len(measured_captures) != len(measured_callbacks) or any(
+        second <= first for first, second in pairwise(measured_captures)
     ):
         codes.add("ATTRIBUTION.END_TO_END_NOT_DISTINCT")
     if _nonnegative_int(run.get("measured_span_ns")) != span:
@@ -768,6 +774,23 @@ def _valid_end_to_end_operands(callback: Mapping[str, object]) -> bool:
         and admission is not None
         and completion is not None
         and completion >= admission
+    )
+
+
+def _valid_arm_two_chronology(
+    callbacks: list[Mapping[str, object]], arm_started: int | None
+) -> bool:
+    if arm_started is None:
+        return False
+    timestamps = [
+        _nonnegative_int(callback.get("completion_timestamp_ns"))
+        for callback in callbacks
+    ]
+    valid_timestamps = [timestamp for timestamp in timestamps if timestamp is not None]
+    return (
+        len(valid_timestamps) == len(callbacks)
+        and all(timestamp >= arm_started for timestamp in valid_timestamps)
+        and all(second >= first for first, second in pairwise(valid_timestamps))
     )
 
 
@@ -1029,7 +1052,15 @@ def _sanitize_device(device: Mapping[str, object]) -> Mapping[str, object]:
         and _valid_device_identity(identity, manufacturer, model)
         and _authorized_device(device)
     ):
-        return dict(device)
+        return {
+            "device_class": "physical_device",
+            "device_identity": "samsung/SM-S938B/attribution-v2/verified",
+            "manufacturer": "samsung",
+            "model": "SM-S938B",
+            "api_level": 36,
+            "android_release": "16",
+            "os_build": "BP4A.251205.006",
+        }
     return {
         "device_class": "physical_device",
         "device_identity": "invalid/invalid/invalid/invalid",

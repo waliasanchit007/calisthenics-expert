@@ -190,3 +190,82 @@ Each mutation was run against its named focused test, exited `1` for the expecte
 ### Fix-round self-review
 
 No unresolved Critical or Important concern remains from the supplied review. The changes preserve fixed argv, binary-safe transfer, fail-closed admission, sanitized non-participant evidence, independent host recomputation, and durable ledger binding. The existing pending physical ledger was not manufactured into recorded evidence. No participant data, paid credits, adb/device execution, push, PR, merge, tag, branch/worktree deletion, or Task 6 work was performed.
+
+## Final regression-first correction: chronology, measured span, and device projection
+
+Base: `9634eab4d9625e477f3abe3d904618dff6538905`. This was one bounded final correction round; Task 6 remains unstarted.
+
+### RED evidence
+
+The new Python regressions were run before production edits:
+
+```text
+.venv/bin/python -m pytest -q reference/tests/test_check_m05b_attribution_v2.py -k 'terminal_completion_before_arm_start or excludes_warmup_capture_window or authorized_shaped_device_identity'
+exit 1: 3 failures
+- pre-arm completion was still recorded;
+- warm-up-only capture shift was blocked because the host used the all-callback span;
+- an authorized-shaped serial/private identity and adversarial device strings were serialized.
+```
+
+The producer regression was also run before the helper existed:
+
+```text
+./gradlew --no-daemon :androidApp:testDebugUnitTest --tests '*M05BAttributionV2RunnerTest.endToEndRunDeclaresMeasuredOnlyCaptureSpan'
+exit 1: unresolved reference 'attributionV2MeasuredSpanNs'
+```
+
+### Correction
+
+- Arm 2 chronology now requires every raw terminal completion timestamp to be present, at or after `arm_started_ns`, and monotonic nondecreasing in event-array order. Equal timestamps remain valid. Invalid chronology derives `ATTRIBUTION.ADMISSION_STATE_DIVERGENCE`.
+- Host measured span now uses only callbacks independently replayed as measured. Synthetic valid fixtures and fractional-rate fixtures were updated to declare measured-only spans.
+- The Android producer now computes `measuredSpanNs` from the first and last measured-phase callback captures through the shared `attributionV2MeasuredSpanNs` helper.
+- Authorized device observations are projected to fixed canonical non-sensitive values (`samsung/SM-S938B/attribution-v2/verified`, fixed release/build), never copied verbatim. Authorization and ledger recomputation remain valid while serial-like, private-path, participant, media, and landmark strings are excluded.
+
+### GREEN evidence
+
+```text
+.venv/bin/python -m pytest -q reference/tests/test_check_m05b_attribution_v2.py -k 'terminal_completion_before_arm_start or excludes_warmup_capture_window or authorized_shaped_device_identity'
+3 passed
+
+.venv/bin/python -m pytest -q reference/tests/test_check_m05b_attribution_v2.py reference/tests/test_device_evidence_ledger.py reference/tests/test_m05b_attribution_v2.py reference/tests/test_validator_code_emission.py reference/tests/test_m05b_attribution_v2_contract.py
+94 passed in 2.52s
+
+.venv/bin/python -m ruff format --check reference tools/check_m05b_attribution_v2.py
+71 files already formatted
+
+.venv/bin/python -m ruff check reference tools/check_m05b_attribution_v2.py
+All checks passed!
+
+MYPYPATH=reference/src .venv/bin/python -m mypy --strict tools/check_m05b_attribution_v2.py
+Success: no issues found in 1 source file
+
+./gradlew --no-daemon :shared:jvmTest --tests '*M05BAttributionV2JsonTest*' --tests '*M05BAttributionV2Test*' :androidApp:testDebugUnitTest --tests '*M05BAttributionV2RunnerTest*'
+BUILD SUCCESSFUL in 6s; 48 actionable tasks
+
+git diff --check
+success
+```
+
+Gradle emitted only the pre-existing Kotlin hierarchy-template warnings. No adb or physical-device tests were run.
+
+### Targeted mutation proof
+
+Each mutation was applied after GREEN, killed by its named regression with exit `1`, and restored byte-for-byte. The restored host checker hash was `01c8913f555b294cf05b41911813a8939a82e9f9`; the restored producer hash was `613b54dbbf7246033e128b063d4b4db5f3a263c8`.
+
+| Mutation | Named command/failure | Restore |
+| --- | --- | --- |
+| Remove Arm 2 chronology enforcement | `-k terminal_completion_before_arm_start`; invalid pre-arm completion was admitted | yes |
+| Restore host all-callback span | `-k excludes_warmup_capture_window`; valid warm-up-only shift was rejected | yes |
+| Restore raw authorized-device copying | `-k authorized_shaped_device_identity`; serial/private string appeared in serialized evidence | yes |
+
+### Changed files
+
+- `tools/check_m05b_attribution_v2.py`
+- `reference/tests/test_check_m05b_attribution_v2.py`
+- `apps/diagnostic-harness/androidApp/src/main/kotlin/com/calisthenics/diagnostic/composition/M05BAttributionV2Runner.kt`
+- `apps/diagnostic-harness/androidApp/src/test/kotlin/com/calisthenics/diagnostic/composition/M05BAttributionV2RunnerTest.kt`
+- `.superpowers/sdd/2026-09-05-m0-5b-task-6-attribution-v2/task-5-report.md`
+
+### Self-review
+
+No Critical or Important concern remains in the supplied rereview scope. Previously closed transfer ordering, protocol binding, exact rational rates, source any-target semantics, fixed argv, and device-summary non-authority behavior were preserved. No unrelated files were modified; no Task 6, device/ADB execution, push, PR, merge, tag, branch/worktree deletion, participant data, or paid credits were used.

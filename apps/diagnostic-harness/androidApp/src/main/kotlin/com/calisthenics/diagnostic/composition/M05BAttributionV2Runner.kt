@@ -831,10 +831,15 @@ private fun List<AttributionV2ObservedAdmission>.toEndToEndRun(
         terminalCallbacks = terminalCallbacks,
         submittedInferenceIds = submitted,
         pendingInferenceIds = submitted.filterNot(terminalIds::contains).toSet(),
-        measuredSpanNs = terminalCallbacks.map { it.captureTimestampNs }.let { timestamps ->
-            if (timestamps.size < 2) 0L else timestamps.last() - timestamps.first()
-        },
+        measuredSpanNs = attributionV2MeasuredSpanNs(terminalCallbacks),
     )
+}
+
+internal fun attributionV2MeasuredSpanNs(callbacks: List<AttributionV2Callback>): Long {
+    val measuredCaptures = callbacks
+        .filter { it.phase == AttributionV2CallbackPhase.MEASURED }
+        .map { it.captureTimestampNs }
+    return if (measuredCaptures.size < 2) 0L else measuredCaptures.last() - measuredCaptures.first()
 }
 
 private fun List<AttributionV2ObservedAdmission>.toRawCallbacks(

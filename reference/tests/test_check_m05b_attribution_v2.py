@@ -308,6 +308,23 @@ def test_host_replays_arm_two_phase_and_span_assertions_from_raw_terminals() -> 
     assert "ATTRIBUTION.ADMISSION_STATE_DIVERGENCE" in result["blocking_codes"]
 
 
+def test_host_rejects_arm_two_terminal_completion_before_arm_start() -> None:
+    from copy import deepcopy
+
+    observation = deepcopy(_valid_observation())
+    for replicate in observation["end_to_end_replicates"]:
+        for run in replicate["runs"]:
+            run["arm_started_ns"] = 2
+            callback = run["terminal_callbacks"][20]
+            callback["admission_observed_session_ns"] = 0
+            callback["completion_timestamp_ns"] = 1
+
+    result = _classify(observation)
+
+    assert result["physical_evidence_status"] == "blocked"
+    assert "ATTRIBUTION.ADMISSION_STATE_DIVERGENCE" in result["blocking_codes"]
+
+
 def test_host_recomputes_arm_two_measured_span_from_ordered_capture_timestamps() -> None:
     from copy import deepcopy
 
@@ -317,6 +334,37 @@ def test_host_recomputes_arm_two_measured_span_from_ordered_capture_timestamps()
     result = _classify(observation)
 
     assert "ATTRIBUTION.END_TO_END_NOT_DISTINCT" in result["blocking_codes"]
+
+
+def test_host_excludes_warmup_capture_window_from_measured_span_and_rates() -> None:
+    from copy import deepcopy
+
+    observation = deepcopy(_valid_observation())
+    for replicate in observation["end_to_end_replicates"]:
+        for run in replicate["runs"]:
+            callbacks = run["terminal_callbacks"]
+            measured = callbacks[20:]
+            for index, callback in enumerate(callbacks[:20]):
+                callback["capture_timestamp_ns"] = 500_000_000 + index * 1_000_000
+            run["measured_span_ns"] = (
+                measured[-1]["capture_timestamp_ns"] - measured[0]["capture_timestamp_ns"]
+            )
+
+    result = _classify(observation)
+
+    assert result["physical_evidence_status"] == "recorded"
+    assert result["blocking_codes"] == []
+
+    for replicate in observation["end_to_end_replicates"]:
+        for run in replicate["runs"]:
+            callbacks = run["terminal_callbacks"]
+            run["measured_span_ns"] = (
+                callbacks[-1]["capture_timestamp_ns"] - callbacks[0]["capture_timestamp_ns"]
+            )
+
+    forged = _classify(observation)
+
+    assert "ATTRIBUTION.END_TO_END_NOT_DISTINCT" in forged["blocking_codes"]
 
 
 def test_host_blocks_any_arm_two_inference_failure_from_raw_terminals() -> None:
@@ -351,6 +399,27 @@ def test_host_evidence_is_structurally_sanitized_against_free_form_leakage() -> 
     assert result["observation"]["device"]["device_identity"].count("/") == 3
 
 
+def test_host_sanitizes_authorized_shaped_device_identity_and_free_text() -> None:
+    from copy import deepcopy
+
+    observation = deepcopy(_valid_observation())
+    observation["device"] = {
+        **observation["device"],
+        "device_identity": "samsung/SM-S938B/SERIAL-PRIVATE/participant-media-landmark",
+        "android_release": "16-PRIVATE-PATH-PARTICIPANT",
+        "os_build": "BP4A.PARTICIPANT.MEDIA.LANDMARK",
+    }
+
+    result = _classify(observation)
+    serialized = json.dumps(result, sort_keys=True)
+
+    assert result["physical_evidence_status"] == "recorded"
+    assert "SERIAL-PRIVATE" not in serialized
+    assert "participant-media-landmark" not in serialized
+    assert "PRIVATE-PATH-PARTICIPANT" not in serialized
+    assert "PARTICIPANT.MEDIA.LANDMARK" not in serialized
+
+
 def test_host_rejects_absolute_or_non_export_session_references() -> None:
     from copy import deepcopy
 
@@ -366,15 +435,22 @@ def test_host_adapter_preserves_fractional_rate_ordering_without_flooring() -> N
 
     observation = _valid_observation()
     replicates = deepcopy(observation["end_to_end_replicates"])
-    spans = {10: 1_100_000_000, 15: 2_100_000_000, 30: 3_100_000_000}
-    counts = {10: 1, 15: 2, 30: 3}
+    spans = {10: 1_100_000_000, 15: 1_600_000_000, 30: 2_100_000_000}
+    counts = {10: 2, 15: 3, 30: 4}
     for replicate in replicates:
         for run in replicate["runs"]:
             cadence = run["cadence_fps"]
             callback_count = 20 + counts[cadence]
             run["terminal_callbacks"] = run["terminal_callbacks"][:callback_count]
             run["terminal_callbacks"] = [
-                dict(callback, capture_timestamp_ns=index * spans[cadence] // (callback_count - 1))
+                dict(
+                    callback,
+                    capture_timestamp_ns=(
+                        index
+                        if index < 20
+                        else 1_000_000_000 + (index - 20) * spans[cadence] // (counts[cadence] - 1)
+                    ),
+                )
                 for index, callback in enumerate(run["terminal_callbacks"])
             ]
             run["measured_span_ns"] = spans[cadence]
@@ -758,7 +834,7 @@ def _valid_replicate(order: list[int], prefix: int) -> dict[str, object]:
     runs = []
     for index, cadence in enumerate(order):
         callbacks = []
-        measured_span = {10: 20_000_000_000, 15: 10_000_000_000, 30: 5_000_000_000}[cadence]
+        all_span = {10: 20_000_000_000, 15: 10_000_000_000, 30: 5_000_000_000}[cadence]
         for callback_id in range(120):
             warmup = callback_id < 20
             completion = (
@@ -766,7 +842,7 @@ def _valid_replicate(order: list[int], prefix: int) -> dict[str, object]:
                 if warmup
                 else 4_000_000_000 + (callback_id - 20) * 10_000_000
             )
-            capture = callback_id * measured_span // 119
+            capture = callback_id * all_span // 119
             callbacks.append(
                 {
                     "callback_id": callback_id,
@@ -789,7 +865,7 @@ def _valid_replicate(order: list[int], prefix: int) -> dict[str, object]:
                 "arm_started_ns": 0,
                 "initial_thermal_status": 0,
                 "final_thermal_status": 0,
-                "measured_span_ns": measured_span,
+                "measured_span_ns": all_span - (20 * all_span // 119),
                 "delivered_callback_ids": list(range(120)),
                 "terminal_callbacks": callbacks,
                 "submitted_inference_ids": list(range(120)),
