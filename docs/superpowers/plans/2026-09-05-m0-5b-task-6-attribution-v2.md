@@ -599,7 +599,7 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
   observations, thermal boundary classes, arm order, measured counts, session references, and
   protocol/candidate identities needed for independent host recomputation.
 
-- [ ] **Step 4: Write RED runner tests for stopping and arm dependencies**
+- [x] **Step 4: Write RED runner tests for stopping and arm dependencies**
 
   With fake source, inference, clock, thermal status, and storage, require:
 
@@ -612,7 +612,7 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
   - every composition is fresh and every submitted inference reaches terminal closure;
   - the artifact is written once through temp/write/fsync/rename/directory-fsync before status output.
 
-- [ ] **Step 5: Run runner RED**
+- [x] **Step 5: Run runner RED**
 
   ```bash
   cd apps/diagnostic-harness
@@ -622,7 +622,7 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
 
   Expected: compilation failure because the runner and gate are absent.
 
-- [ ] **Step 6: Implement Arm 0A and Arm 0B**
+- [x] **Step 6: Implement Arm 0A and Arm 0B**
 
   Arm 0A owns `CameraXFrameSource` directly. `captureOwnedYuvFrame` has already closed the underlying
   CameraX image before delivering each immutable `OwnedYuvFrame`; Arm 0A records only timestamp and
@@ -632,14 +632,14 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
   `SingleFlightAttributionAdmission` and the observer. Warm-up records remain in the durable artifact
   with `phase="warmup"`; measured aggregates consume only `phase="measured"`.
 
-- [ ] **Step 7: Implement Arm 1 and conditional Arm 2**
+- [x] **Step 7: Implement Arm 1 and conditional Arm 2**
 
   Arm 1 calls `productionSelectorTimestamps(sourceArm.measuredTimestampsNs, cadence)` for each target
   and records the result as `authoritative=false`. Arm 2 runs only after source/backend support for
   all cadences and valid Arm 1 conformance, creates a fresh composition per cadence, and enforces
   thermal-class recovery before starting each run.
 
-- [ ] **Step 8: Implement reference-only instrumentation output**
+- [x] **Step 8: Implement reference-only instrumentation output**
 
   The device writes the complete bounded artifact below the app-private diagnostic root, computes
   its SHA-256 after reopening it, and emits only:
@@ -656,13 +656,13 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
 
   Use `InstrumentationRegistry.sendStatus`; never `println` as the routing channel.
 
-- [ ] **Step 9: Prove runner mutations**
+- [x] **Step 9: Prove runner mutations**
 
   Make the 30th warm-up callback measured; stop backend warm-up after only one condition; permit Arm
   2 after an Arm 0 blocker; reuse one composition; omit the reverse replicate; remove thermal
   recovery; emit before directory fsync. Require the correspondingly named test to fail for each.
 
-- [ ] **Step 10: Run GREEN checks and commit**
+- [x] **Step 10: Run GREEN checks and commit**
 
   ```bash
   cd apps/diagnostic-harness
@@ -693,14 +693,14 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
   registry version `1.6.0`, and exit classes 0 admitted, 1 malformed/infrastructure, 2 CLI usage,
   and 3 trustworthy blocker.
 
-- [ ] **Step 1: Write RED transcript and transfer tests**
+- [x] **Step 1: Write RED transcript and transfer tests**
 
   Cover missing/multiple status records, wrong suite, malformed JSON, non-zero instrumentation,
   unsafe relative path, digest/length mismatch, `adb` transport loss, unknown record kind/version,
   and absolute-path/device-serial leakage. Mock subprocesses and assert fixed argv arrays containing
   `adb -s SERIAL exec-out run-as PACKAGE cat RELATIVE_PATH`; never shell strings.
 
-- [ ] **Step 2: Run checker RED**
+- [x] **Step 2: Run checker RED**
 
   ```bash
   .venv/bin/python -m pytest -q reference/tests/test_check_m05b_attribution_v2.py
@@ -708,7 +708,7 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
 
   Expected: import/file failure because `check_m05b_attribution_v2.py` is absent.
 
-- [ ] **Step 3: Implement strict extraction and binary-safe transfer**
+- [x] **Step 3: Implement strict extraction and binary-safe transfer**
 
   Expose:
 
@@ -736,34 +736,34 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
   Transfer to a temporary file, fsync, hash/length-check, rename, and directory-fsync before parsing.
   Treat a transport loss after device publication as `awaiting_recovery`, not permission to rerun.
 
-- [ ] **Step 4: Write RED recomputation tests**
+- [x] **Step 4: Write RED recomputation tests**
 
   Provide valid synthetic v2 documents, then mutate each independent predicate: protocol digest,
   candidate identity, source sample count/configuration/timestamps, backend sample count/duration,
   selector sequence, callback class, conservation, terminal IDs, inference failures, arm dependency,
   replicate order/rates, thermal class, and device authorization. Assert the exact stable code.
 
-- [ ] **Step 5: Implement host recomputation**
+- [x] **Step 5: Implement host recomputation**
 
   Validate the observation schema, reopen the canonical protocol, recompute its digest, and call
   `validate_attribution_v2`. Recompute every count and rate from exact arrays; reject device-declared
   derived values that differ. Derive `recorded` only when the complete final predicate is true;
   otherwise derive `blocked` with exact sorted codes.
 
-- [ ] **Step 6: Implement ledger reopening**
+- [x] **Step 6: Implement ledger reopening**
 
   `pending` requires its named precondition and null evidence fields. `recorded` or `blocked` must
   open a safe repo-relative file under `docs/evidence/m05b-attribution-v2/`, hash exact bytes, validate
   the host evidence schema, recompute the verdict, and require status/blockers/identity/protocol
   fields to agree. A `recorded` ledger with any blocker fails validation.
 
-- [ ] **Step 7: Prove host mutations**
+- [x] **Step 7: Prove host mutations**
 
   Remove protocol rehashing, drop `admission_state_divergence` from conservation, replace exact
   backend durations with a median, accept one replicate, allow selector-only admission, and skip
   evidence digest comparison. Each mutation must fail its named focused test; restore byte-exactly.
 
-- [ ] **Step 8: Promote the complete v2 code family atomically**
+- [x] **Step 8: Promote the complete v2 code family atomically**
 
   Move every v2 code from `DRAFT_EMITTED_CODES` to `STABLE_EMITTED_CODES`, advance the registry from
   `1.5.0` to `1.6.0`, append the complete family in sorted order, and add the tooling release to
@@ -774,7 +774,7 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
   behavioral-oracle test must find every code in the focused tests. A partial release remains
   failing.
 
-- [ ] **Step 9: Run GREEN static/focused checks and commit**
+- [x] **Step 9: Run GREEN static/focused checks and commit**
 
   ```bash
   .venv/bin/python -m pytest -q \
@@ -805,7 +805,7 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
 - Produces: `make verify-harness-s25-m05b-attribution-v2`; Task 7/sustained prerequisite bound only
   to a host-verified recorded v2 ledger.
 
-- [ ] **Step 1: Write RED Make-contract tests**
+- [x] **Step 1: Write RED Make-contract tests**
 
   Require the new target to count exactly one `adb devices` row whose second field is `device`,
   reject emulator and USB serials, authorize S25 identity, require battery power, require clean HEAD
@@ -814,7 +814,7 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
   exit code, and invoke only the v2 host checker. Reject build/install/`pm clear`, ledger writes,
   success grep, wildcard device selection, or broad deletion in the target.
 
-- [ ] **Step 2: Run build-contract RED**
+- [x] **Step 2: Run build-contract RED**
 
   ```bash
   .venv/bin/python -m pytest -q reference/tests/test_m05b_attribution_v2_build_contract.py
@@ -822,31 +822,31 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
 
   Expected: target-not-found failure.
 
-- [ ] **Step 3: Implement the exact-candidate target**
+- [x] **Step 3: Implement the exact-candidate target**
 
   Clone the proven preamble from `verify-harness-s25-m05b-attribution`, but use new temporary names,
   new suite/checker, protocol digest, and v2 evidence paths. The recipe consumes the candidate; it
   never prepares or changes it.
 
-- [ ] **Step 4: Write RED Task 7 prerequisite tests**
+- [x] **Step 4: Write RED Task 7 prerequisite tests**
 
   Assert `verify-harness-s25-m05b-sustained` no longer reads the v1 ledger, opens the v2 ledger
   through `verify_recorded_attribution_v2_ledger`, and rejects `pending`, `blocked`, digest-mismatched,
   selector-only, or device-declared-success evidence.
 
-- [ ] **Step 5: Rewire the prerequisite and parent plan**
+- [x] **Step 5: Rewire the prerequisite and parent plan**
 
   Replace only the Task 6 prerequisite with the v2 verifier. Keep the existing envelope ledger and
   all exact-candidate safeguards. Amend the parent plan to reference the accepted v2 design and this
   implementation plan; preserve the v1 checkbox/evidence as an immutable blocked attempt.
 
-- [ ] **Step 6: Prove Make mutations**
+- [x] **Step 6: Prove Make mutations**
 
   Remove installed test-APK comparison, admit USB, omit the protocol digest, call the v1 suite, and
   replace the v2 ledger verifier with `status == recorded`. Each change must fail a named build-
   contract test; restore each one.
 
-- [ ] **Step 7: Run GREEN checks and commit**
+- [x] **Step 7: Run GREEN checks and commit**
 
   ```bash
   .venv/bin/python -m pytest -q \
@@ -864,13 +864,13 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
 
 **Files:**
 - Modify: `docs/superpowers/plans/2026-09-05-m0-5b-task-6-attribution-v2.md` (checkboxes only)
-- Modify ignored ledger: `.superpowers/sdd/2026-08-27-m0-5b-instrument-prerequisites/progress.md`
+- Modify ignored ledger: `.superpowers/sdd/2026-09-05-m0-5b-task-6-attribution-v2/progress.md`
 
 **Interfaces:**
 - Consumes: Tasks 1-6 commits.
 - Produces: one clean exact software candidate ready for physical preparation; no physical verdict.
 
-- [ ] **Step 1: Run the complete local verification boundary**
+- [x] **Step 1: Run the complete local verification boundary**
 
   ```bash
   make verify
@@ -883,12 +883,12 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
   Record exact exits, test counts, compiler versions, and framework/APK outputs in the ignored
   ledger. A success-looking line cannot override a non-zero command exit.
 
-- [ ] **Step 2: Run all named mutations as one audit**
+- [x] **Step 2: Run all named mutations as one audit**
 
   Re-run every mutation named in Tasks 1-6 against its focused test. Record mutation, intended
   oracle, failing test name, exit code, byte-exact restoration proof, and post-restoration GREEN.
 
-- [ ] **Step 3: Inspect exact scope and invariants**
+- [x] **Step 3: Inspect exact scope and invariants**
 
   ```bash
   git diff --check origin/main...HEAD
@@ -901,19 +901,19 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
   Confirm v1 evidence hashes are unchanged, no participant artifacts/model binaries are tracked,
   default live admission tests remain green, and the sustained gate has exactly one v2 prerequisite.
 
-- [ ] **Step 4: Request one bounded full-range review**
+- [x] **Step 4: Request one bounded full-range review**
 
   Review only the Task 6 v2 range against the accepted specification. Critical/Important findings
   block; Minor findings are recorded as debt. Permit at most one scoped re-review after fixes. The
   reviewer must independently inspect the diff and may not rely on this ledger's claims.
 
-- [ ] **Step 5: Resolve blocking findings regression-first**
+- [x] **Step 5: Resolve blocking findings regression-first**
 
   For every Critical/Important finding, add a failing regression, observe the intended failure,
   make the minimum correction, rerun focused/full gates, and use the one scoped re-review. Do not
   implement unrelated hardening from the review.
 
-- [ ] **Step 6: Commit the verified software checkpoint**
+- [x] **Step 6: Commit the verified software checkpoint**
 
   ```bash
   git add docs/superpowers/plans/2026-09-05-m0-5b-task-6-attribution-v2.md
