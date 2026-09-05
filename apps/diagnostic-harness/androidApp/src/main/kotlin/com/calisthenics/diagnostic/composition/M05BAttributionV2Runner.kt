@@ -768,7 +768,7 @@ internal class AndroidM05BAttributionV2Backend(
         val rawOverflow = admissions.size > maxRawCallbacks || terminals.size > maxRawCallbacks
         val boundedAdmissions = admissions.take(maxRawCallbacks)
         val boundedTerminals = terminals.take(maxRawCallbacks)
-        return BackendRunResult(
+        val result = BackendRunResult(
             elapsedNs = elapsedNs,
             stoppedByCap = phaseSnapshot.measuredCompletionCount < spec.measuredCompletions && elapsedNs >= spec.armCapNs,
             warmupCompletions = phaseSnapshot.warmupCompletionCount,
@@ -792,11 +792,6 @@ internal class AndroidM05BAttributionV2Backend(
             finalThermalStatus = thermalStatus(),
             armStartedNs = startedAtNs,
             deliveredCallbackIds = boundedAdmissions.map { it.callbackId },
-            terminalCallbacks = boundedAdmissions.toRawCallbacks(
-                boundedTerminals,
-                spec.cadenceFps,
-                byId,
-            ),
             submittedInferenceIds = boundedAdmissions
                 .filter { it.productionClassification == LiveFrameClassification.SUBMIT }
                 .map { it.callbackId },
@@ -807,8 +802,30 @@ internal class AndroidM05BAttributionV2Backend(
                 .toSet(),
             rawEvidenceOverflow = rawOverflow,
         )
+        return assembleAndroidM05BAttributionV2BackendResult(
+            result = result,
+            admissions = boundedAdmissions,
+            terminals = boundedTerminals,
+            cadenceFps = spec.cadenceFps,
+            byId = byId,
+        )
     }
 }
+
+internal fun assembleAndroidM05BAttributionV2BackendResult(
+    result: BackendRunResult,
+    admissions: List<AttributionV2ObservedAdmission>,
+    terminals: List<AttributionV2ObservedTerminal>,
+    cadenceFps: Int?,
+    byId: Map<Long, AttributionV2ObservedAdmission>,
+): BackendRunResult = result.copy(
+    terminalCallbacks = attributionV2BackendTerminalCallbacks(
+        admissions = admissions,
+        terminals = terminals,
+        cadenceFps = cadenceFps,
+        byId = byId,
+    ),
+)
 
 private fun List<AttributionV2ObservedAdmission>.toEndToEndRun(
     terminals: List<AttributionV2ObservedTerminal>,
@@ -841,6 +858,13 @@ internal fun attributionV2MeasuredSpanNs(callbacks: List<AttributionV2Callback>)
         .map { it.captureTimestampNs }
     return if (measuredCaptures.size < 2) 0L else measuredCaptures.last() - measuredCaptures.first()
 }
+
+internal fun attributionV2BackendTerminalCallbacks(
+    admissions: List<AttributionV2ObservedAdmission>,
+    terminals: List<AttributionV2ObservedTerminal>,
+    cadenceFps: Int?,
+    byId: Map<Long, AttributionV2ObservedAdmission>,
+): List<AttributionV2Callback> = admissions.toRawCallbacks(terminals, cadenceFps, byId)
 
 private fun List<AttributionV2ObservedAdmission>.toRawCallbacks(
     terminals: List<AttributionV2ObservedTerminal>,

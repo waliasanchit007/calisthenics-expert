@@ -108,6 +108,50 @@ class M05BAttributionV2RunnerTest {
     }
 
     @Test
+    fun concreteBackendResultAssemblyPreservesTerminalCallbacksAndPhases() {
+        val admissions = listOf(
+            observedAdmission(11L),
+            observedAdmission(12L),
+        )
+        val terminals = listOf(
+            AttributionV2ObservedTerminal(
+                callbackId = 11L,
+                terminal = CallbackTerminalDisposition.INFERENCE_COMPLETED,
+                completedNs = 2_000L,
+                phase = AttributionV2CallbackPhase.WARMUP,
+            ),
+            AttributionV2ObservedTerminal(
+                callbackId = 12L,
+                terminal = CallbackTerminalDisposition.INFERENCE_COMPLETED,
+                completedNs = 3_000L,
+                phase = AttributionV2CallbackPhase.MEASURED,
+            ),
+        )
+
+        val result = assembleAndroidM05BAttributionV2BackendResult(
+            result = BackendRunResult(
+                elapsedNs = 1L,
+                stoppedByCap = false,
+                warmupCompletions = 1,
+                warmupElapsedNs = 1L,
+                measuredServiceDurationsNs = listOf(1L),
+                inferenceFailures = 0,
+            ),
+            admissions = admissions,
+            terminals = terminals,
+            cadenceFps = null,
+            byId = admissions.associateBy { it.callbackId },
+        )
+        val callbacks = result.terminalCallbacks
+
+        assertEquals(listOf(11L, 12L), callbacks.map { it.callbackId })
+        assertEquals(
+            listOf(AttributionV2CallbackPhase.WARMUP, AttributionV2CallbackPhase.MEASURED),
+            callbacks.map { it.phase },
+        )
+    }
+
+    @Test
     fun endToEndRunDeclaresMeasuredOnlyCaptureSpan() {
         val callbacks = listOf(
             testCallback(0L, 0L, AttributionV2CallbackPhase.WARMUP),
@@ -389,6 +433,15 @@ class M05BAttributionV2RunnerTest {
     )
 
     private fun measuredFrames() = (0 until 330).map { SourceFrame(it * 33_333_333L) }
+
+    private fun observedAdmission(callbackId: Long) = AttributionV2ObservedAdmission(
+        callbackId = callbackId,
+        captureTimestampNs = callbackId * 100L,
+        observedSessionNs = callbackId * 1_000L,
+        productionClassification = LiveFrameClassification.SUBMIT,
+        productionPredicates = LiveAdmissionPredicates(cadenceDue = true, slotAvailable = true),
+        shadowSelections = emptyMap(),
+    )
 
     @Suppress("UNCHECKED_CAST")
     private fun rawCallbacksFromObservedTerminals(observation: AttributionV2Observation): List<AttributionV2Callback> {
