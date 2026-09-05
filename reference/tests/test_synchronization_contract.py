@@ -472,5 +472,5 @@ def test_bounded_profile_codes_are_additive_registry_entries() -> None:
         (ROOT / "contracts/tooling/validator_error_codes.v1.json").read_text(encoding="utf-8")
     )
 
-    assert registry["registry_version"] == "1.5.0"
+    assert registry["registry_version"] == "1.6.0"
     assert BOUNDED_PROFILE_CODES <= set(registry["codes"])

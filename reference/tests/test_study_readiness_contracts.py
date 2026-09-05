@@ -192,7 +192,7 @@ def test_study_error_code_release_block_remains_unique_and_contiguous() -> None:
         "STUDY.SYNTHETIC_DETECTION_PENDING",
         "STUDY.LOCATION_REGISTRY",
     ]
-    assert registry["registry_version"] == "1.5.0"
+    assert registry["registry_version"] == "1.6.0"
     start = registry["codes"].index(expected[0])
     assert registry["codes"][start : start + len(expected)] == expected
     for code in expected:

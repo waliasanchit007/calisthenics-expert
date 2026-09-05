@@ -152,7 +152,7 @@ def test_sustained_semantic_codes_are_completely_released_by_task8() -> None:
         "SOURCE.OUTCOME",
         "BLOCKING_CODES.MISMATCH",
     }
-    assert registry["registry_version"] == "1.5.0"
+    assert registry["registry_version"] == "1.6.0"
     assert draft_task8_codes <= released
 
 
