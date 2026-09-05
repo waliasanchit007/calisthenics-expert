@@ -938,19 +938,19 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
   canonical protocol, and v2 Make gate.
 - Produces: one immutable recorded or blocked v2 observation; Task 7 is unblocked only by recorded.
 
-- [ ] **Step 1: Prepare one exact candidate**
+- [x] **Step 1: Prepare one exact candidate**
 
   Verify clean local HEAD, fetch the model asset, create `local.properties`, run the existing exact
   preparation target once, and record app/test APK, Git, model, runtime, backend, and delegate
   identities. No source change, rebuild, reinstall, or package clear is allowed afterward.
 
-- [ ] **Step 2: Establish the physical boundary**
+- [x] **Step 2: Establish the physical boundary**
 
   Require exactly one authorized S25 over Wi-Fi ADB, physically unplug USB, verify every battery
   power-source flag is false, record the boundary thermal-status class, and attest no person is in
   the camera field. If any precondition fails, do not start an arm.
 
-- [ ] **Step 3: Run the protocol exactly once**
+- [x] **Step 3: Run the protocol exactly once**
 
   ```bash
   make verify-harness-s25-m05b-attribution-v2
@@ -960,31 +960,31 @@ GNU Make, and binary-safe `adb exec-out run-as` transfer.
   blocker; exit 1 is malformed/infrastructure and enters recovery analysis without an automatic
   rerun; exit 2 is CLI usage failure.
 
-- [ ] **Step 4: Independently validate the durable result**
+- [x] **Step 4: Independently validate the durable result**
 
   Reopen the host evidence, canonical protocol, all referenced device/session artifacts, and exact
   candidate identities. Recompute the evidence SHA and run the ledger verifier before editing the
   ledger. Confirm the evidence is sanitized and contains no participant fields, paths, serial, media,
   pose coordinates, or image bytes.
 
-- [ ] **Step 5: Record the immutable result**
+- [x] **Step 5: Record the immutable result**
 
   Write the exact sanitized host result once using a filename ending in `recorded` or `blocked` that
   matches the recomputed verdict. Advance the ledger with exact evidence/protocol hashes and derived
   blockers. Never edit the admitted evidence in place.
 
-- [ ] **Step 6: Enforce the branch outcome**
+- [x] **Step 6: Enforce the branch outcome**
 
   If recorded, mark Task 6 v2 complete and permit Task 7 envelope/order freeze on the same unchanged
   candidate. If blocked, leave Task 7 and sustained execution blocked and record the limiting
   subsystem. A backend/source/cadence change requires a new reviewed design and protocol version.
 
-- [ ] **Step 7: Run the recorded-state verification boundary**
+- [x] **Step 7: Run the recorded-state verification boundary**
 
   Run focused checker/ledger tests, `make verify`, JVM/iOS/Android gates, repository guard,
   `git diff --check`, and exact scope inspection. Record all exits and test counts.
 
-- [ ] **Step 8: Commit the evidence checkpoint**
+- [x] **Step 8: Commit the evidence checkpoint**
 
   ```bash
   git add docs/evidence/m05b-attribution-v2 \

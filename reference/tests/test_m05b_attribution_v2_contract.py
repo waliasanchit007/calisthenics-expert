@@ -330,19 +330,42 @@ def test_observation_schema_allows_the_protocol_raw_callback_maximum() -> None:
     assert not list(validator.iter_errors(observation))
 
 
-def test_pending_ledger_binds_the_exact_canonical_protocol_bytes() -> None:
+def test_blocked_ledger_binds_the_exact_protocol_evidence_and_candidate() -> None:
     protocol_bytes = PROTOCOL_PATH.read_bytes()
     ledger = json.loads(LEDGER_PATH.read_text(encoding="utf-8"))
+    evidence_file = (
+        "docs/evidence/m05b-attribution-v2/s25-ultra-SM-S938B-api36-attribution-v2-blocked.json"
+    )
+    evidence_bytes = (ROOT / evidence_file).read_bytes()
 
     assert ledger == {
-        "evidence_file": None,
-        "evidence_sha256": None,
+        "device": {
+            "android_release": "16",
+            "api_level": 36,
+            "device_class": "physical_device",
+            "device_identity": "samsung/SM-S938B/pa3q/pa3qxins",
+            "manufacturer": "samsung",
+            "model": "SM-S938B",
+            "os_build": "BP4A.251205.006.S938BXXSBCZG3",
+        },
+        "evidence_file": evidence_file,
+        "evidence_sha256": hashlib.sha256(evidence_bytes).hexdigest(),
+        "identity": {
+            "app_apk_sha256": ("496077525047863625404017bc11bab611590bed21f8d79609a3402abe16b8e1"),
+            "app_git_sha": "a94f22ec0cf4e2c85d8c8f9054eb751bbff5874e",
+            "backend_version": "1.0.0",
+            "delegate": "cpu",
+            "model_sha256": ("5134a3aad27a58b93da0088d431f366da362b44e3ccfbe3462b3827a839011b1"),
+            "probe_git_sha": "a94f22ec0cf4e2c85d8c8f9054eb751bbff5874e",
+            "runtime_version": "16",
+            "test_apk_sha256": ("bd5babb7ce03b6965abf42f0cd0a4c4e3e5ef289ae0f4e0a0e044b209a196f51"),
+        },
         "ledger_schema_version": "2.1.0",
-        "missing_precondition": "attribution_v2_physical_evidence_not_recorded",
+        "missing_precondition": None,
         "protocol_file": "docs/protocols/m05b-attribution-v2.protocol.json",
         "protocol_sha256": hashlib.sha256(protocol_bytes).hexdigest(),
         "record_kind": "s25_attribution_v2_ledger",
-        "status": "pending",
+        "status": "blocked",
     }
 
 

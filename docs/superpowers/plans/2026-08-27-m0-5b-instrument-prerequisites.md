@@ -390,7 +390,7 @@ the historical pose-only software rehearsal.
 - [x] **Step 2: Prove current code lacks full attribution and fixed sampling**
 - [x] **Step 3: Implement one monotonic-clock event stream and fixed one-second sampler**
 - [x] **Step 4: Fence finalization by cancel, join, terminal sample, then seal**
-- [ ] **Step 5: Execute the accepted attribution-v2 protocol from `docs/superpowers/specs/2026-09-05-m0-5b-task-6-attribution-v2-design.md` and `docs/superpowers/plans/2026-09-05-m0-5b-task-6-attribution-v2.md` on the exact final app version.** The v2 gate emits only device references, the host checker independently admits the result, and the v2 ledger under `docs/evidence/m05b-attribution-v2/` is recorded separately. The prior v1 short-attribution attempt and its blocked evidence/ledger under `docs/evidence/m05b-attribution/` remain immutable historical evidence and cannot satisfy Task 7. No app rebuild may occur afterward.
+- [x] **Step 5: Execute the accepted attribution-v2 protocol from `docs/superpowers/specs/2026-09-05-m0-5b-task-6-attribution-v2-design.md` and `docs/superpowers/plans/2026-09-05-m0-5b-task-6-attribution-v2.md` on the exact final app version.** The v2 gate emits only device references, the host checker independently admits the result, and the v2 ledger under `docs/evidence/m05b-attribution-v2/` is recorded separately. The prior v1 short-attribution attempt and its blocked evidence/ledger under `docs/evidence/m05b-attribution/` remain immutable historical evidence and cannot satisfy Task 7. No app rebuild may occur afterward.
 - [x] **Step 6: Mutate each stage disposition, sample sequence, unavailable encoding, and join fence**
 - [x] **Step 7: Run full local gates and commit `feat: record fixed M0.5B pipeline telemetry`**
 

@@ -381,15 +381,19 @@ def test_s25_m05b_attribution_ledger_reports_pending_or_verifies_a_physical_verd
     )
 
 
-def test_s25_m05b_attribution_v2_ledger_reopens_pending_entry() -> None:
+def test_s25_m05b_attribution_v2_ledger_reopens_blocked_host_evidence() -> None:
     verified = check_m05b_attribution_v2.verify_recorded_attribution_v2_ledger(
         ROOT, ATTRIBUTION_V2_LEDGER
     )
 
-    assert verified["status"] == "pending"
-    assert verified["missing_precondition"]
-    assert verified["evidence_file"] is None
-    assert verified["evidence_sha256"] is None
+    assert verified["physical_evidence_status"] == "blocked"
+    assert verified["satisfies_s25_attribution_v2_gate"] is False
+    assert set(verified["blocking_codes"]) == {
+        "ATTRIBUTION.BACKEND_SAMPLE_INSUFFICIENT",
+        "ATTRIBUTION.REPLICATE_DISAGREEMENT",
+        "ATTRIBUTION.SELECTOR_DIVERGENCE",
+        "ATTRIBUTION.SOURCE_CONFIGURATION",
+    }
 
 
 def test_attribution_v2_ledger_reopens_recorded_host_evidence(tmp_path: Path) -> None:
