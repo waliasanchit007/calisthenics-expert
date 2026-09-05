@@ -17,6 +17,8 @@ import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import com.calisthenics.diagnostic.ui.MovementViewerScreen
 import com.calisthenics.diagnostic.ui.MovementViewerUiState
+import com.calisthenics.diagnostic.ui.MovementMeasurementsPanel
+import com.calisthenics.diagnostic.ui.MovementPanelState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.Locale
@@ -31,6 +33,9 @@ class MovementViewerActivity : ComponentActivity() {
     internal var attestedCameraScope by mutableStateOf(false)
     private val overlayPresenter = ViewerOverlayPresenter()
     internal var overlay by mutableStateOf<ViewerOverlay?>(null)
+        private set
+    private val movementCoordinator = ViewerMovementCoordinator()
+    internal var movementState by mutableStateOf(MovementPanelState())
         private set
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -96,6 +101,25 @@ class MovementViewerActivity : ComponentActivity() {
                 livePreview = view?.let { native -> { modifier -> AndroidView(factory = { native }, modifier = modifier) } },
                 livePoints = livePoints,
                 liveOverlayAlpha = overlay?.alpha ?: 0f,
+                movementSummary = if (controller != null) "Candidate cycles ${movementState.experiment.candidateCycles} · " +
+                    movementState.experiment.phase.name.lowercase().replace('_',' ') else null,
+                movementPanel = {
+                    MovementMeasurementsPanel(movementState,
+                        onCalibrate = { side ->
+                            if (controller != null && input == ViewerInput.CAMERA) {
+                                movementCoordinator.startCalibration(side,SystemClock.elapsedRealtimeNanos())
+                                refreshMovementPanel()
+                            }
+                        },
+                        onConfirmRange = {
+                            if (controller != null && input == ViewerInput.CAMERA) {
+                                movementCoordinator.experiment.confirmCalibration()
+                                refreshMovementPanel()
+                            }
+                        },
+                        onReset = { movementCoordinator.experiment.reset(); refreshMovementPanel() },
+                    )
+                },
             )
         }
     }
@@ -104,6 +128,8 @@ class MovementViewerActivity : ComponentActivity() {
         if (controller != null) return controller
         if (selected == ViewerInput.CAMERA && (!attestedCameraScope || !hasCameraPermission())) return null
         input = selected
+        movementCoordinator.clear()
+        movementState = MovementPanelState(cameraActive = selected == ViewerInput.CAMERA)
         overlayPresenter.clear()
         overlay = null
         snapshot = null
@@ -129,6 +155,11 @@ class MovementViewerActivity : ComponentActivity() {
 
     private fun updateViewerSnapshot(latest: ViewerSnapshot, candidate: ViewerObservation? = latest.observation) {
         snapshot = latest
+        if (controller != null && latest.failure == null) {
+            // Only the raw freshness-filtered observation; never candidate or overlay-held data.
+            movementCoordinator.update(latest.observation,SystemClock.elapsedRealtimeNanos())
+        } else movementCoordinator.clear()
+        refreshMovementPanel()
         if (controller != null && input == ViewerInput.CAMERA && latest.failure == null) {
             overlay = overlayPresenter.present(candidate, SystemClock.elapsedRealtimeNanos())
         } else {
@@ -137,7 +168,15 @@ class MovementViewerActivity : ComponentActivity() {
         }
     }
 
+    private fun refreshMovementPanel() {
+        movementState = MovementPanelState(movementCoordinator.measurements,movementCoordinator.trace,
+            movementCoordinator.experiment.state,controller != null && input == ViewerInput.CAMERA,
+            SystemClock.elapsedRealtimeNanos())
+    }
+
     fun stopViewer() {
+        movementCoordinator.clear()
+        movementState = MovementPanelState()
         overlayPresenter.clear()
         overlay = null
         controller?.close()

@@ -48,6 +48,8 @@ fun MovementViewerScreen(
     livePreview: (@Composable (Modifier) -> Unit)? = null,
     livePoints: Map<Int, ViewerPoint> = emptyMap(),
     liveOverlayAlpha: Float = 1f,
+    movementSummary: String? = null,
+    movementPanel: (@Composable () -> Unit)? = null,
 ) {
     MaterialTheme(colorScheme = darkColorScheme(primary = Color(0xFF72E8BF))) {
         Surface(Modifier.fillMaxSize()) {
@@ -81,6 +83,7 @@ fun MovementViewerScreen(
                         }
                     }
                 }
+                movementSummary?.let { Text(it,style=MaterialTheme.typography.titleMedium,color=MaterialTheme.colorScheme.primary) }
                 Text(state.message, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
                 Text("${state.source} · ${state.landmarks.size}/33 landmark observations")
                 Text("Completed ${state.completed} · submitted ${state.submitted} · skipped ${state.skipped}", style = MaterialTheme.typography.bodySmall)
@@ -101,7 +104,8 @@ fun MovementViewerScreen(
                     OutlinedButton(onClick = onPermission, enabled = !state.active) { Text("Allow camera") }
                 }
                 Button(onClick = onCamera, enabled = !state.active && state.cameraPermission && state.attestedCameraScope) { Text("Start camera viewer") }
-                Text("Repetitions · holds · transitions\nNo movement classification or form claims yet.", style = MaterialTheme.typography.bodySmall)
+                movementPanel?.invoke()
+                Text("Repetitions · holds · transitions\nManual pull-up cycle experiment only. No automatic movement recognition or form claims.", style = MaterialTheme.typography.bodySmall)
             }
         }
     }

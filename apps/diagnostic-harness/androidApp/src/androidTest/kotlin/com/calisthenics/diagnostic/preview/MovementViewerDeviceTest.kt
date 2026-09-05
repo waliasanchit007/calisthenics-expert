@@ -102,7 +102,8 @@ class MovementViewerDeviceTest {
         val before = files()
         ActivityScenario.launch(MovementViewerActivity::class.java).use { scenario ->
             lateinit var controller: MovementViewerController
-            scenario.onActivity { controller = checkNotNull(it.startViewer(ViewerInput.SYNTHETIC)) }
+            lateinit var activity: MovementViewerActivity
+            scenario.onActivity { activity = it; controller = checkNotNull(it.startViewer(ViewerInput.SYNTHETIC)) }
             val end = System.nanoTime() + 30_000_000_000L
             var result = controller.snapshot()
             while (result.observation?.posePresent != true && result.failure == null && System.nanoTime() < end) {
@@ -113,8 +114,25 @@ class MovementViewerDeviceTest {
             assertTrue(result.observation?.posePresent == true, "packaged detector must actually fire")
             assertEquals(33, result.observation!!.landmarks.size)
             assertTrue(result.observation!!.frame.rgb.isNotEmpty())
+            var measurementsSeen = false
+            val measurementDeadline = System.nanoTime() + 5_000_000_000L
+            while (!measurementsSeen && System.nanoTime() < measurementDeadline) {
+                scenario.onActivity {
+                    measurementsSeen = it.movementState.measurements != null && it.movementState.trace.isNotEmpty()
+                    assertFalse(it.movementState.cameraActive, "synthetic demo must not enable pull-up calibration")
+                    assertEquals(0,it.movementState.experiment.candidateCycles)
+                }
+                if (!measurementsSeen) Thread.sleep(50)
+            }
+            assertTrue(measurementsSeen, "fresh real-model output must reach common movement measurements")
             scenario.moveToState(Lifecycle.State.CREATED)
             assertNull(controller.snapshot().observation)
+            InstrumentationRegistry.getInstrumentation().runOnMainSync {
+                assertNull(activity.movementState.measurements)
+                assertTrue(activity.movementState.trace.isEmpty())
+                assertNull(activity.movementState.experiment.range)
+                assertEquals(0,activity.movementState.experiment.candidateCycles)
+            }
             Thread.sleep(300)
             assertNull(controller.snapshot().observation, "late native result must not restore an image")
         }

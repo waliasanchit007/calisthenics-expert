@@ -39,8 +39,15 @@ shows observations (pose present, missing, stale), not reliable/unreliable medic
 Stop/background/error clears displayed image/landmarks and releases the camera and model.
 
 The central handoff's exercise-general product scope and privacy principles remain authoritative.
-ADR-0001's stable interpretation releases remain deferred. A later experimental analyzer may follow
-usable movement evidence, but it is not part of this viewer increment. ADR-0005's formal study and
+ADR-0001's stable interpretation releases remain deferred. The owner-approved follow-on adds live
+projected arm measurements and a manually selected, per-session calibrated pull-up cycle experiment.
+Its purpose is visible movement learning, not an assertion that the formal study has passed.
+Calibration requires a practice motion and explicit operator confirmation; frozen observed angle
+endpoints are not definitions of correct technique. Count only candidate calibrated motion cycles,
+never verified reps. Raw fresh observations alone feed the analyzer; missing joints, stale frames
+and tracking gaps invalidate unfinished cycles. State remains transient and clears on stop.
+The concrete experimental parameters and limits are in the movement-measurements-and-cycles plan.
+ADR-0005's formal study and
 participant gates remain intact. This software policy does not itself grant an individual human
 capture authorization, upload, retention, merge or tag. Individual authorization stays outside Git.
 
