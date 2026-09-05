@@ -4,6 +4,15 @@ This changelog records releases of the observation schemas and their supporting
 tooling contracts. Application, harness, model, and analysis-package versions
 are independent of these contracts.
 
+## [1.6.0] - 2026-09-05
+
+Backward-compatible validator-tooling release for independent M0.5B attribution-v2 host admission.
+
+- Promoted the complete additive `ATTRIBUTION.*` v2 blocker family to stable status.
+- Added closed observation validation, exact protocol/candidate bindings, raw callback recomputation,
+  durable evidence re-opening, and trustworthy blocked-result classification to the reference tooling.
+- The v1 attribution observation and its immutable blocked evidence remain unchanged.
+
 ## [1.5.0] - 2026-09-02
 
 Backward-compatible validator-tooling release for the admitted M0.5B instrument surfaces.

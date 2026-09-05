@@ -11,6 +11,7 @@ ROOT = Path(__file__).parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 
 import check_five_run_replay
+import check_m05b_attribution_v2
 import check_m05b_physical_purge
 import check_synchronized_video_run
 import record_process_kill_evidence
@@ -32,6 +33,8 @@ M05B_PHYSICAL_PURGE_LEDGER = "docs/evidence/m05b-purge/s25-ultra-physical-purge-
 SYNCHRONIZED_VIDEO_LEDGER = (
     "docs/evidence/synchronized-video/s25-ultra-synchronized-video-ledger.json"
 )
+ATTRIBUTION_V2_LEDGER = "docs/evidence/m05b-attribution-v2/s25-attribution-v2-ledger.json"
+PROTOCOL_RELATIVE = "docs/protocols/m05b-attribution-v2.protocol.json"
 
 
 def _copy_recorded_ledger(root: Path, ledger_relative: str, destination: Path) -> str:
@@ -376,6 +379,78 @@ def test_s25_m05b_attribution_ledger_reports_pending_or_verifies_a_physical_verd
     assert verified["satisfies_s25_attribution_gate"] is (
         verified["physical_evidence_status"] == "recorded"
     )
+
+
+def test_s25_m05b_attribution_v2_ledger_reopens_pending_entry() -> None:
+    verified = check_m05b_attribution_v2.verify_recorded_attribution_v2_ledger(
+        ROOT, ATTRIBUTION_V2_LEDGER
+    )
+
+    assert verified["status"] == "pending"
+    assert verified["missing_precondition"]
+    assert verified["evidence_file"] is None
+    assert verified["evidence_sha256"] is None
+
+
+def test_attribution_v2_ledger_reopens_recorded_host_evidence(tmp_path: Path) -> None:
+    from copy import deepcopy
+
+    from tests.test_check_m05b_attribution_v2 import _valid_identity, _valid_observation
+
+    _copy_protocol(ROOT, tmp_path)
+    observation = _valid_observation()
+    evidence = check_m05b_attribution_v2.AttributionV2HostCheck(tmp_path).classify(
+        observation, _valid_identity()
+    )
+    relative = "docs/evidence/m05b-attribution-v2/recorded.json"
+    evidence_path = tmp_path / relative
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+    evidence_path.write_text(json.dumps(evidence, sort_keys=True) + "\n", encoding="utf-8")
+    ledger = _v2_ledger(
+        evidence,
+        relative,
+        hashlib.sha256(evidence_path.read_bytes()).hexdigest(),
+    )
+    ledger_path = tmp_path / ATTRIBUTION_V2_LEDGER
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    ledger_path.write_text(json.dumps(ledger, sort_keys=True) + "\n", encoding="utf-8")
+
+    verified = check_m05b_attribution_v2.verify_recorded_attribution_v2_ledger(
+        tmp_path, ATTRIBUTION_V2_LEDGER
+    )
+
+    assert verified["physical_evidence_status"] == "recorded"
+    assert verified["blocking_codes"] == []
+
+    forged = deepcopy(ledger)
+    forged["status"] = "recorded"
+    forged["evidence_sha256"] = "0" * 64
+    ledger_path.write_text(json.dumps(forged) + "\n", encoding="utf-8")
+    with pytest.raises(check_m05b_attribution_v2.AttributionV2CheckError, match="sha256"):
+        check_m05b_attribution_v2.verify_recorded_attribution_v2_ledger(
+            tmp_path, ATTRIBUTION_V2_LEDGER
+        )
+
+
+def _copy_protocol(source: Path, destination: Path) -> None:
+    protocol = destination / "docs/protocols/m05b-attribution-v2.protocol.json"
+    protocol.parent.mkdir(parents=True, exist_ok=True)
+    protocol.write_bytes((source / PROTOCOL_RELATIVE).read_bytes())
+
+
+def _v2_ledger(evidence: dict[str, object], relative: str, digest: str) -> dict[str, object]:
+    return {
+        "ledger_schema_version": "2.0.0",
+        "record_kind": "s25_attribution_v2_ledger",
+        "status": evidence["physical_evidence_status"],
+        "missing_precondition": None,
+        "evidence_file": relative,
+        "evidence_sha256": digest,
+        "protocol_file": PROTOCOL_RELATIVE,
+        "protocol_sha256": evidence["protocol_sha256"],
+        "identity": evidence["identity"],
+        "device": evidence["device"],
+    }
 
 
 def test_s25_m05b_physical_purge_ledger_is_pending_or_reopens_recorded_evidence() -> None:

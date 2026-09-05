@@ -12,7 +12,7 @@ from observation_contracts.schema_loader import (
     load_m05b_attribution_observation_v2_schema,
     load_m05b_attribution_protocol_v2_schema,
 )
-from observation_contracts.validator_codes import DRAFT_EMITTED_CODES, STABLE_EMITTED_CODES
+from observation_contracts.validator_codes import STABLE_EMITTED_CODES
 
 ROOT = Path(__file__).parents[2]
 PROTOCOL_PATH = ROOT / "docs/protocols/m05b-attribution-v2.protocol.json"
@@ -224,7 +224,6 @@ def test_pending_ledger_binds_the_exact_canonical_protocol_bytes() -> None:
     }
 
 
-def test_v2_codes_are_complete_draft_vocabulary_not_partially_released() -> None:
+def test_v2_codes_are_promoted_as_one_complete_family() -> None:
     assert ATTRIBUTION_V2_DRAFT_CODES == V2_CODES
-    assert DRAFT_EMITTED_CODES == V2_CODES
-    assert V2_CODES.isdisjoint(STABLE_EMITTED_CODES)
+    assert V2_CODES <= STABLE_EMITTED_CODES

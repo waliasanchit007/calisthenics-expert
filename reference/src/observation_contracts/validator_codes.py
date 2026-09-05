@@ -153,12 +153,12 @@ STABLE_EMITTED_CODES = frozenset(
         "THERMAL.RANGE",
         "THERMAL.STATUS",
         "VERSION.UNKNOWN_MAJOR",
+        *ATTRIBUTION_V2_DRAFT_CODES,
     }
 )
 
-# Task 6 attribution-v2 codes remain draft until their complete behavioral oracle and host
-# admission surface land together. A partial registry release is prohibited.
-DRAFT_EMITTED_CODES = ATTRIBUTION_V2_DRAFT_CODES
+# The complete Task 6 attribution-v2 family is released atomically in registry 1.6.0.
+DRAFT_EMITTED_CODES = frozenset()
 
 # These strings are released admission-conjunct identifiers, not validator error codes. They are
 # classified here because their dotted form is intentionally indistinguishable to a lexical audit.
