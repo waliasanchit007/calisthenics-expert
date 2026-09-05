@@ -390,7 +390,7 @@ the historical pose-only software rehearsal.
 - [x] **Step 2: Prove current code lacks full attribution and fixed sampling**
 - [x] **Step 3: Implement one monotonic-clock event stream and fixed one-second sampler**
 - [x] **Step 4: Fence finalization by cancel, join, terminal sample, then seal**
-- [ ] **Step 5: Add a device gate for one short 10/15/30 attribution sequence proving each configured inference cadence changes admission while the camera request remains 30 FPS. Emit one typed record per cadence, use a pending/recorded ledger under `docs/evidence/m05b-attribution/`, and never let the command write the ledger. This physical step runs only after the Task 8 controller is built on the exact final app version; no app rebuild may occur afterward.**
+- [ ] **Step 5: Execute the accepted attribution-v2 protocol from `docs/superpowers/specs/2026-09-05-m0-5b-task-6-attribution-v2-design.md` and `docs/superpowers/plans/2026-09-05-m0-5b-task-6-attribution-v2.md` on the exact final app version.** The v2 gate emits only device references, the host checker independently admits the result, and the v2 ledger under `docs/evidence/m05b-attribution-v2/` is recorded separately. The prior v1 short-attribution attempt and its blocked evidence/ledger under `docs/evidence/m05b-attribution/` remain immutable historical evidence and cannot satisfy Task 7. No app rebuild may occur afterward.
 - [x] **Step 6: Mutate each stage disposition, sample sequence, unavailable encoding, and join fence**
 - [x] **Step 7: Run full local gates and commit `feat: record fixed M0.5B pipeline telemetry`**
 
@@ -423,9 +423,10 @@ the historical pose-only software rehearsal.
 - [x] **Step 3: Implement per-run admission and typed blocking observations**
 - [x] **Step 4: Add S25 gate that rejects emulator, charging, fake-unplug evidence, connectivity drift, device/build/model mismatch, and reordered cadence**
 - [ ] **Step 5: On the exact final app build, after the Task 8 controller and all other code are
-  complete and after Task 6's short attribution records are non-blocking, run the non-participant idle
-  derivation on the S25 and record/freeze the envelope and order immediately before Task 8's sustained
-  runs. Do not rebuild or change source between attribution, freeze, and sustained capture.**
+  complete and after Task 6's host-verified attribution-v2 ledger is recorded, run the non-participant
+  idle derivation on the S25 and record/freeze the envelope and order immediately before Task 8's
+  sustained runs. The immutable v1 blocked attribution attempt does not satisfy this prerequisite.
+  Do not rebuild or change source between attribution, freeze, and sustained capture.**
 - [x] **Step 6: Mutate every conjunct and require non-zero admission**
 - [x] **Step 7: Verify and commit `feat: freeze M0.5B run admission envelope`**
 
@@ -434,8 +435,9 @@ the historical pose-only software rehearsal.
 ### Task 8: Three sustained S25 characterizations
 
 **Dependencies:** Tasks 3, 4, 6, and 7. Task 7's software/admission contract is consumed during
-controller implementation; its physical envelope/order evidence and Task 6's recorded attribution
-ledger are required before any sustained device run.
+controller implementation; its physical envelope/order evidence and Task 6's host-verified recorded
+attribution-v2 ledger are required before any sustained device run. The historical v1 blocked ledger
+is not a substitute.
 
 **Files:**
 - Create: sustained-run contract/schema, Python validator, Kotlin record/renderer, host checker, device gate, and three evidence ledgers under `docs/evidence/m05b-sustained/`

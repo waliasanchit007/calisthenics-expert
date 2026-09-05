@@ -57,6 +57,28 @@ def test_sustained_gate_consumes_exact_candidate_and_never_mutates_device_state(
     assert "git status --porcelain" in recipe
 
 
+def test_sustained_gate_requires_host_verified_recorded_attribution_v2() -> None:
+    recipe = _recipe("verify-harness-s25-m05b-sustained")
+    attribution_start = recipe.index("verify_recorded_attribution_v2_ledger")
+    envelope_start = recipe.index("$(VENV_PYTHON) -c 'import json", attribution_start)
+    attribution_recipe = recipe[attribution_start:envelope_start]
+
+    assert "docs/evidence/m05b-attribution-v2/s25-attribution-v2-ledger.json" in recipe
+    assert "verify_recorded_attribution_v2_ledger" in recipe
+    assert "satisfies_s25_attribution_v2_gate" in recipe
+    assert "docs/evidence/m05b-attribution/s25-short-attribution-ledger.json" not in recipe
+    assert 'value.get("status")' not in attribution_recipe
+
+
+def test_sustained_gate_does_not_accept_device_declared_attribution_success() -> None:
+    recipe = _recipe("verify-harness-s25-m05b-sustained")
+    attribution_start = recipe.index("verify_recorded_attribution_v2_ledger")
+
+    assert "physical_evidence_status" in recipe[attribution_start:]
+    assert 'status == "recorded"' not in recipe[attribution_start:]
+    assert "satisfies_s25_attribution_v2_gate" in recipe[attribution_start:]
+
+
 def test_device_owns_attempt_recovery_from_published_exports_before_new_admission() -> None:
     source = RUN_STATE_STORE.read_text(encoding="utf-8")
 
