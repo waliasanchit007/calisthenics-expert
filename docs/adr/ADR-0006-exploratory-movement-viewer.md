@@ -218,6 +218,24 @@ COUNTING is explicitly ON, with candidate count visible. Practice itself remains
 Verify cause propagation with regressions and saved paired frames, unchanged counting with exact
 trace replay, and actual confirmation-button behavior with a synthetic no-camera UI test.
 
+### Operator-first screen (2026-09-06)
+
+Owner requested a UI overhaul: leave fast-changing measurements, joint counts, pipeline timing,
+raw state messages and diagnostic implementation details in the existing local logs. The normal
+screen contains the preview, a single short stage instruction, explicit practice confirmation,
+an experimental count when counting, and an always-visible Stop action. Session options hold
+synthetic input, recording controls and deletion. A short recording-state indicator remains visible;
+do not disguise recording failure or remove the operator's ability to stop collection.
+
+Move fresh self-test attestation and disclosure into a pre-start dialog, retaining camera permission,
+explicit per-session consent, local-only collection, no bystanders/audio/uploads and deletion confirmation.
+Transient framing/paused cues settle for 600ms in the presentation layer only. Actual measurement
+admission, log timing, experiment state, counts and READY/confirmation are not delayed or changed.
+This UI change does not resolve the separately diagnosed completed-practice finalization defect.
+Tests exercise rendered controls, consent before start, hidden volatile telemetry, brief versus
+persistent tracking loss and unchanged explicit confirmation. Use synthetic UI inspection, not
+remote activation of the user's camera.
+
 ADR-0005's formal study and
 participant gates remain intact. This software policy does not itself grant an individual human
 capture authorization, upload, retention, merge or tag. Individual authorization stays outside Git.

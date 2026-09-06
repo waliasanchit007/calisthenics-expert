@@ -3,6 +3,7 @@ package com.calisthenics.diagnostic.ui
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -16,6 +17,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.Role
 import com.calisthenics.diagnostic.contract.Landmark
 import com.calisthenics.diagnostic.viewer.ViewerGeometry
 import com.calisthenics.diagnostic.viewer.ViewerPoint
@@ -56,25 +58,69 @@ fun MovementViewerScreen(
     onDeleteRecordings: (() -> Unit)? = null,
 ) {
     var confirmDelete by remember { mutableStateOf(false) }
+    var showConsent by remember { mutableStateOf(false) }
+    var showOptions by remember { mutableStateOf(false) }
+    val recordingLabel = when {
+        diagnosticsStatus?.startsWith("Recording locally") == true -> "● Recording locally"
+        diagnosticsStatus?.startsWith("Starting local") == true -> "Starting local recording"
+        diagnosticsStatus?.startsWith("Recording failed") == true ||
+            diagnosticsStatus?.startsWith("Recording unavailable") == true -> "Recording unavailable"
+        diagnosticsStatus?.startsWith("Not recording") == true ||
+            diagnosticsStatus?.startsWith("Recording stopped") == true -> "Recording stopped"
+        diagnosticsStatus?.startsWith("Diagnostics ON") == true -> "Local logs on"
+        state.active -> "Not recording"
+        else -> "Camera stays off until you start"
+    }
     MaterialTheme(colorScheme = darkColorScheme(primary = Color(0xFF72E8BF))) {
         if (confirmDelete) AlertDialog(onDismissRequest = { confirmDelete=false },
             title = { Text("Delete local recordings?") },
-            text = { Text("Deletes this app's feedback sessions from this phone. Copies already on the Mac are not deleted.") },
+            text = { Text("Deletes feedback sessions from this phone. Copies on the Mac remain.") },
             confirmButton = { TextButton(onClick = { confirmDelete=false; onDeleteRecordings?.invoke() }) { Text("Delete") } },
             dismissButton = { TextButton(onClick = { confirmDelete=false }) { Text("Cancel") } })
-        Surface(Modifier.fillMaxSize()) {
-            Column(Modifier.safeDrawingPadding().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("CALISTHENICS • EXPLORER", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
-                Text("See your movement", style = MaterialTheme.typography.headlineLarge)
-                Text("Exercise-independent pose viewer · experimental", style = MaterialTheme.typography.bodyMedium)
-                diagnosticsStatus?.let { status ->
-                    Text(status, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall)
-                    onDisableDiagnostics?.let { disable -> TextButton(onClick = disable) { Text("Disable diagnostics") } }
+        if(showConsent) AlertDialog(onDismissRequest={showConsent=false},
+            title={Text("Before you start")},
+            text={Column(Modifier.verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(12.dp)) {
+                Text("Only you, a consenting adult, or an empty scene. Keep bystanders out of view.")
+                Text(if(feedbackRecordingEnabled)
+                    "Saves up to 3 minutes of camera-input images and movement logs locally for debugging and Mac retrieval. No audio or cloud uploads."
+                    else "On-device camera processing only. No app recording or uploads.")
+                Row(Modifier.toggleable(state.attestedCameraScope,role=Role.Checkbox,onValueChange=onAttestation),
+                    verticalAlignment=Alignment.CenterVertically) {
+                    Checkbox(state.attestedCameraScope,onCheckedChange=null)
+                    Text("I agree for this session")
                 }
-                Box(Modifier.fillMaxWidth().aspectRatio(1f).clipToBounds().background(Color(0xFF15232A)), contentAlignment = Alignment.Center) {
+            }},
+            confirmButton={TextButton(enabled=state.attestedCameraScope && state.cameraPermission,
+                onClick={showConsent=false; onCamera()}) {Text("Start self-test")}},
+            dismissButton={TextButton(onClick={showConsent=false; onAttestation(false)}) {Text("Cancel")}})
+        if(showOptions) AlertDialog(onDismissRequest={showOptions=false},
+            title={Text("Session options")},
+            text={Column(verticalArrangement=Arrangement.spacedBy(8.dp)) {
+                Text("Experimental pull-up counting. Not a form assessment.")
+                Text("Detailed tracking logs are collected for debugging; they do not need to stay on your screen.")
+                if(!state.active) TextButton(onClick={showOptions=false;onSynthetic()}) {Text("Try synthetic figure")}
+                onDisableDiagnostics?.let { disable ->
+                    TextButton(onClick={showOptions=false;disable()}) {Text("Stop local recording & logs")}
+                }
+                onDeleteRecordings?.let {
+                    TextButton(onClick={showOptions=false;confirmDelete=true}) {Text("Delete local recordings")}
+                }
+            }},
+            confirmButton={TextButton(onClick={showOptions=false}) {Text("Done")}})
+        Surface(Modifier.fillMaxSize()) {
+            Column(Modifier.safeDrawingPadding().padding(horizontal=16.dp,vertical=8.dp),
+                verticalArrangement=Arrangement.spacedBy(10.dp)) {
+                Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,
+                    horizontalArrangement=Arrangement.SpaceBetween) {
+                    Text("Movement",style=MaterialTheme.typography.titleLarge)
+                    TextButton(onClick={showOptions=true}) {Text("Options")}
+                }
+                Text(if(state.active || diagnosticsStatus!=null) recordingLabel else "Private self-test · no uploads",
+                    style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.primary)
+                Box(Modifier.fillMaxWidth().weight(1f).clipToBounds().background(Color(0xFF15232A)), contentAlignment = Alignment.Center) {
                     if (livePreview != null) livePreview(Modifier.fillMaxSize())
                     if (image == null && livePreview == null) {
-                        Text(state.message, color = Color(0xFFB8C7CD))
+                        Text(if(state.active) "Camera preview" else "Your movement, in view", color = Color(0xFFB8C7CD))
                     } else {
                         if (image != null && livePreview == null) Image(image, "${state.source} paired inference frame", Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
                         Canvas(Modifier.fillMaxSize()) {
@@ -97,34 +143,17 @@ fun MovementViewerScreen(
                         }
                     }
                 }
-                movementSummary?.let { Text(it,style=MaterialTheme.typography.titleMedium,color=MaterialTheme.colorScheme.primary) }
-                if (state.active) movementPanel?.invoke()
-                Text(state.message, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
-                Text("${state.source} · ${state.landmarks.size}/33 landmark observations")
-                Text("Completed ${state.completed} · submitted ${state.submitted} · skipped ${state.skipped}", style = MaterialTheme.typography.bodySmall)
-                Text(state.performance, style = MaterialTheme.typography.bodySmall)
-                Text(if (livePreview != null) "Continuous preview · latest pose, not frame-synchronized. Short tracking gaps hold the last pose; it fades out by 500 ms from capture. Recording status is shown above. No uploads." else "Paired synthetic frames follow inference. Display clears on stop. No uploads.", style = MaterialTheme.typography.bodySmall)
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Button(onClick = onSynthetic, enabled = !state.active) { Text("Try synthetic figure") }
-                    OutlinedButton(onClick = onStop, enabled = state.active) { Text("Stop") }
+                if(state.active) movementPanel?.invoke()
+                if(state.active) OutlinedButton(onClick=onStop,modifier=Modifier.fillMaxWidth()) {Text("Stop")}
+                else {
+                    if(state.message.startsWith("Error",ignoreCase=true) || state.message.contains("failed",ignoreCase=true))
+                        Text("Camera could not start. Check permission and try again.")
+                    Button(onClick={
+                        if(!state.cameraPermission) onPermission()
+                        else { onAttestation(false); showConsent=true }
+                    },modifier=Modifier.fillMaxWidth()) {Text(if(state.cameraPermission) "Start camera" else "Allow camera")}
+                    Text("Experimental · practice first, then count",style=MaterialTheme.typography.labelSmall)
                 }
-                HorizontalDivider()
-                Text("Movement self-test", style = MaterialTheme.typography.titleMedium)
-                Text("Authorized adult self-test only, or an empty/synthetic scene. Keep bystanders out of view. " +
-                    if (feedbackRecordingEnabled) "Starting the camera automatically saves up to 3 minutes of model-input images, landmarks and decision logs for local debugging and Mac retrieval. No audio or cloud uploads. Stop or disable collection any time. System screenshots remain allowed."
-                    else "No app image/video recording or uploads. System screenshots and screen recordings remain allowed.", style = MaterialTheme.typography.bodySmall)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(state.attestedCameraScope, onCheckedChange = onAttestation, enabled = !state.active)
-                    Text(if (feedbackRecordingEnabled) "Only me, a consenting adult, or an empty/synthetic scene is in view. I agree to local image and movement-log collection for this session."
-                        else "Only me, a consenting adult, or an empty/synthetic scene is in view. I agree to transient on-device processing without recording.", style = MaterialTheme.typography.bodySmall)
-                }
-                if (!state.cameraPermission) {
-                    OutlinedButton(onClick = onPermission, enabled = !state.active) { Text("Allow camera") }
-                }
-                Button(onClick = onCamera, enabled = !state.active && state.cameraPermission && state.attestedCameraScope) { Text("Start camera viewer") }
-                if (onDeleteRecordings != null) TextButton(onClick = { confirmDelete=true }) { Text("Delete local recordings") }
-                if (!state.active) movementPanel?.invoke()
-                Text("Repetitions · holds · transitions\nManual pull-up cycle experiment only. No automatic movement recognition or form claims.", style = MaterialTheme.typography.bodySmall)
             }
         }
     }
