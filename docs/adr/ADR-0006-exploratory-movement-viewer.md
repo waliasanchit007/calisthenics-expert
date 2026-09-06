@@ -236,6 +236,19 @@ Tests exercise rendered controls, consent before start, hidden volatile telemetr
 persistent tracking loss and unchanged explicit confirmation. Use synthetic UI inspection, not
 remote activation of the user's camera.
 
+### Preserve the first completed practice (2026-09-06)
+
+Owner approved fixing calibration that unnecessarily required another practice or lost an already
+completed one after releasing the bar. Evaluate the existing median-filtered full-cycle acceptance
+on each new accepted calibration sample; the ten-second window is an upper limit, not a mandatory
+wait. At the first qualifying return to extended, freeze that prefix's observed range and offer
+READY immediately. Later extra movement, tracking loss or releasing the bar cannot alter it.
+The operator still explicitly confirms that practice was full; no automatic confirmation or rep
+credit. Confidence, freshness, gap recovery, minimum spread, top/extended dwell and post-confirmation
+counting rules are unchanged. An incomplete prefix neither fails early nor crosses a tracking gap.
+Reset or choosing a new calibration clears the preserved result. This remains an exploratory
+observed-range estimate, not a validated physiological calibration or strict-rep claim.
+
 ADR-0005's formal study and
 participant gates remain intact. This software policy does not itself grant an individual human
 capture authorization, upload, retention, merge or tag. Individual authorization stays outside Git.

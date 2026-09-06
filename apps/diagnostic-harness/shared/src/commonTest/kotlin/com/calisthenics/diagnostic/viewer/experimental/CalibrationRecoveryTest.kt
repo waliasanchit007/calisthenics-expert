@@ -85,7 +85,8 @@ class CalibrationRecoveryTest {
             in 7_100..7_400 -> 100.0
             else -> 160.0
         })
-        assertEquals(ExperimentStage.CALIBRATING, experiment.state.stage)
+        // Completion is now offered at the observed return, before the later bad frame.
+        assertEquals(ExperimentStage.READY, experiment.state.stage)
         val bad = input(8_000, angle = 0.0, wrist = -.1)
         experiment.onSample(bad, bad.capturedNs)
         assertEquals(ExperimentStage.READY, experiment.state.stage)

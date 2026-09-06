@@ -233,6 +233,9 @@ class PullUpExperiment {
         if (rawCalibrationAngles.size > MEDIAN_WINDOW) rawCalibrationAngles.removeAt(0)
         if (rawCalibrationAngles.size == MEDIAN_WINDOW) {
             filteredCalibrationSamples += FilteredSample(timestamp, median(rawCalibrationAngles))
+            // Freeze the first complete observed practice, not the state at an arbitrary
+            // later deadline. Reuse the same acceptance checks; incomplete prefixes keep waiting.
+            finishCalibration(failIfIncomplete = false)
         }
     }
 
