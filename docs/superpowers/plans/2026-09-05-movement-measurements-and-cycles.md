@@ -77,6 +77,16 @@ and synthetic partial/spike/duplicate/stale/gap cases verify this increment sepa
 
 Offline feedback replay uses the actual Kotlin analyzer, not a second implementation:
 
+2026-09-06 calibration-recovery amendment: ADR-0006 now permits automatic recovery from a brief
+unusable selected-arm landmark frame within the existing <250 ms capture gap from the last usable
+capture. If the prior accepted prefix already passes the existing complete-practice checks, freeze
+its range for operator confirmation without using the rejected observation. Otherwise clear the
+practice prefix/median, reacquire three usable samples, and require a new uninterrupted practice
+cycle within the original deadline. Do not repeat the countdown or change counting, explicit
+confirmation, confidence/freshness limits or pose-loss behavior. This
+supersedes the previous immediate-abort behavior for landmark rejection only; late/sustained loss
+can still require a retry. Private replay is development evidence, not a held-out accuracy claim.
+
 ```sh
 cd apps/diagnostic-harness
 ./gradlew :shared:replayMovementTrace -PtracePath=/absolute/private/session/trace.jsonl

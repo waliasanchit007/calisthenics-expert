@@ -95,7 +95,7 @@ fun MovementMeasurementsPanel(
                 else -> Unit
             }
             if (experiment.stage != ExperimentStage.IDLE) OutlinedButton(onClick = onReset) { Text("Reset range and count") }
-            Text("Experimental: 20/80% range bands; 120 ms extended-position hold; top hold or supported multi-sample reversal; 20° calibration-spread guard; landmark confidence ≥0.5. Practice still requires endpoint holds. These are prototype settings, not validated technique thresholds. No strict-rep or form claims.",
+            Text("Experimental: 20/80% range bands; 120 ms extended-position hold; top hold or supported multi-sample reversal; 20° calibration-spread guard; landmark confidence ≥0.5. Practice still requires endpoint holds. Brief landmark glitches reset unfinished practice without restarting the countdown; tracking must recover within 250 ms of the last usable frame. Completed practice is offered for confirmation. These are prototype settings, not validated technique thresholds. No strict-rep or form claims.",
                 style = MaterialTheme.typography.bodySmall)
         }
     }

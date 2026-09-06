@@ -138,6 +138,32 @@ Kotlin analyzer, retain negative synthetic regressions, and report event timing 
 Personal recordings remain outside Git; an improved result on a motivating trace is not held-out
 benchmark evidence. The subsequent guided-UI experiment remains separate.
 
+### Bounded calibration landmark recovery (2026-09-06)
+
+The owner approved fixing calibration aborts caused by brief unusable landmark observations.
+This supersedes immediate calibration failure for rejected arm geometry/confidence only. A
+fresh, ordered frame with unusable selected-arm measurements first checks whether the previously
+accepted practice prefix already satisfies the existing full-cycle/spread/endpoint checks. If so,
+freeze that prefix's range and show READY for explicit operator confirmation, without including
+the rejected observation or counting any rep. This reuses the same completion check as the deadline;
+it does not introduce a second interpretation of a completed practice. Otherwise clear all
+accumulated practice samples and the median window, expose an UNCERTAIN/reacquiring message, and
+leave the original 10-second calibration deadline unchanged. Do not interpolate rejected input.
+Three new usable samples rebuild the existing median window before showing tracking recovered.
+A complete, uninterrupted hold-based practice cycle must then be observed and confirmed as before.
+An incomplete prefix is never joined to recovered samples. Recovery late in the window can still
+require a retry. This adds completion on a landmark-rejection boundary only, not a new continuously
+adaptive calibration, automatic side switching or a broader guided-UI redesign.
+
+Recovery must occur strictly within the existing 250 ms capture-gap limit measured from the last
+usable calibration capture, not the latest rejected frame. Duplicates never renew that budget.
+Confirmed no-pose/timeout, stale samples, invalid/backwards timestamps and capture gaps retain
+their blocking behavior. Sustained unusable landmarks fail on the next observation reaching that
+limit. No timer or display-held pose can finish calibration. Stop/reset/new calibration clears
+recovery state. Counting thresholds, side selection, model, privacy and formal study gates are
+unchanged. Verify rejected-input recovery and no stitching across gaps with synthetic regressions
+and exact private trace replay; do not relabel replay results as prospective movement accuracy.
+
 ADR-0005's formal study and
 participant gates remain intact. This software policy does not itself grant an individual human
 capture authorization, upload, retention, merge or tag. Individual authorization stays outside Git.

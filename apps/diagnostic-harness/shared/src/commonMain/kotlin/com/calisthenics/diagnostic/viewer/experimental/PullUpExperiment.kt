@@ -41,6 +41,7 @@ class PullUpExperiment {
 
     private var currentState = PullUpExperimentState()
     private var lastTimestampNs: Long? = null
+    private var lastUsableCalibrationNs: Long? = null
     private val rawCalibrationAngles = mutableListOf<Double>()
     private val filteredCalibrationSamples = mutableListOf<FilteredSample>()
     private var segmenter = Segmenter()
@@ -49,6 +50,7 @@ class PullUpExperiment {
         inputIssue = null
         val startNs = nowNs.coerceAtLeast(0L)
         lastTimestampNs = null
+        lastUsableCalibrationNs = null
         rawCalibrationAngles.clear()
         filteredCalibrationSamples.clear()
         segmenter = Segmenter()
@@ -74,6 +76,7 @@ class PullUpExperiment {
     fun reset() {
         inputIssue = null
         lastTimestampNs = null
+        lastUsableCalibrationNs = null
         rawCalibrationAngles.clear()
         filteredCalibrationSamples.clear()
         segmenter = Segmenter()
@@ -129,6 +132,16 @@ class PullUpExperiment {
             return
         }
 
+        // Rejected frames must not renew the recovery budget. This uses the same capture-gap
+        // limit as continuous tracking, not a new tolerance or interpolated evidence.
+        if (currentState.stage == ExperimentStage.CALIBRATING &&
+            lastUsableCalibrationNs?.let { timestamp - it >= GAP_NS } == true
+        ) {
+            inputIssue = ExperimentInputIssue.CAPTURE_GAP
+            failCalibration("Arm tracking did not recover in time; please retry", CalibrationFailure.INPUT_UNUSABLE)
+            return
+        }
+
         val calibrationEndsNs = currentState.calibrationEndsNs
         if (currentState.stage == ExperimentStage.CALIBRATING &&
             calibrationEndsNs != null && timestamp >= calibrationEndsNs
@@ -140,7 +153,8 @@ class PullUpExperiment {
         val arm = chosenArm(sample)
         val angle = usableAngle(arm)
         if (angle == null) {
-            invalidateSampleIfNeeded()
+            if (currentState.stage == ExperimentStage.CALIBRATING) recoverCalibrationLandmarks()
+            else invalidateSampleIfNeeded()
             return
         }
 
@@ -199,33 +213,61 @@ class PullUpExperiment {
             return
         }
 
+        lastUsableCalibrationNs = timestamp
         rawCalibrationAngles += angle
         if (rawCalibrationAngles.size > MEDIAN_WINDOW) rawCalibrationAngles.removeAt(0)
         if (rawCalibrationAngles.size == MEDIAN_WINDOW) {
             filteredCalibrationSamples += FilteredSample(timestamp, median(rawCalibrationAngles))
+            if (currentState.phase == CyclePhase.UNCERTAIN) {
+                currentState = currentState.copy(
+                    phase = CyclePhase.WAITING,
+                    message = "Tracking recovered; capture a full practice cycle in the remaining time",
+                )
+            }
         }
     }
 
-    private fun finishCalibration() {
+    private fun recoverCalibrationLandmarks() {
+        // Only previously accepted samples may establish completion. A later landmark glitch
+        // cannot erase an already complete practice, or contribute its rejected angle to it.
+        if (finishCalibration(failIfIncomplete = false)) return
+        // Never splice a practice cycle across an unusable observation, nor let the median
+        // combine pre-gap and post-gap angles. Three new usable samples warm it up again.
+        rawCalibrationAngles.clear()
+        filteredCalibrationSamples.clear()
+        val side = if (currentState.side == ArmSide.LEFT) "Left" else "Right"
+        val reason = when (inputIssue) {
+            ExperimentInputIssue.WRIST_NOT_ABOVE_SHOULDER -> "$side wrist position is inconsistent"
+            ExperimentInputIssue.WRIST_UNAVAILABLE -> "$side wrist is not clearly tracked"
+            ExperimentInputIssue.ELBOW_UNAVAILABLE -> "$side elbow is not clearly tracked"
+            else -> "$side arm confidence is insufficient"
+        }
+        currentState = currentState.copy(
+            phase = CyclePhase.UNCERTAIN,
+            message = "$reason; reacquiring tracking",
+        )
+    }
+
+    private fun finishCalibration(failIfIncomplete: Boolean = true): Boolean {
         if (filteredCalibrationSamples.size < MIN_CALIBRATION_SAMPLES) {
-            failCalibration("Calibration needs at least five usable samples",CalibrationFailure.TOO_FEW_SAMPLES)
-            return
+            if (failIfIncomplete) failCalibration("Calibration needs at least five usable samples",CalibrationFailure.TOO_FEW_SAMPLES)
+            return false
         }
 
         val low = filteredCalibrationSamples.minOf { it.angle }
         val high = filteredCalibrationSamples.maxOf { it.angle }
         val spread = high - low
         if (!spread.isFinite() || spread < MIN_SPREAD_DEGREES) {
-            failCalibration("Calibration movement range is too small; retry with a full cycle",CalibrationFailure.NARROW_RANGE)
-            return
+            if (failIfIncomplete) failCalibration("Calibration movement range is too small; retry with a full cycle",CalibrationFailure.NARROW_RANGE)
+            return false
         }
 
         val range = ObservedRange(currentState.side, low, high)
         val replay = Segmenter()
         filteredCalibrationSamples.forEach { replay.accept(it.angle, it.timestamp, range) }
         if (replay.cycleCount < 1 || replay.phase != CyclePhase.EXTENDED) {
-            failCalibration("Calibration needs a complete extended-flexed-extended cycle",CalibrationFailure.INCOMPLETE_CYCLE)
-            return
+            if (failIfIncomplete) failCalibration("Calibration needs a complete extended-flexed-extended cycle",CalibrationFailure.INCOMPLETE_CYCLE)
+            return false
         }
 
         segmenter = Segmenter()
@@ -236,9 +278,11 @@ class PullUpExperiment {
             range = range,
             message = "Confirm this was a full practice cycle",
         )
+        return true
     }
 
     private fun failCalibration(message: String, reason: CalibrationFailure) {
+        lastUsableCalibrationNs = null
         rawCalibrationAngles.clear()
         filteredCalibrationSamples.clear()
         segmenter = Segmenter()
