@@ -29,6 +29,7 @@ fun MovementMeasurementsPanel(
 ) {
     val e = state.experiment
     val side = if (e.side == ArmSide.LEFT) "left" else "right"
+    val isPushUp = e.movement == ExperimentalMovement.PUSH_UP
     val needsFraming = (e.stage == ExperimentStage.CALIBRATING && e.calibrationEndsNs == null) ||
         (e.stage == ExperimentStage.COUNTING && e.phase == CyclePhase.UNCERTAIN)
     // Presentation delay only. No measurement, count, recording or consent is delayed.
@@ -42,23 +43,32 @@ fun MovementMeasurementsPanel(
     val title = when(e.stage) {
         ExperimentStage.IDLE -> "Let's set up"
         ExperimentStage.ERROR -> "Let's try practice again"
-        ExperimentStage.COUNTDOWN -> if(seconds > 0) "Get ready · $seconds" else "Raise your selected arm"
-        ExperimentStage.CALIBRATING -> if(paused) "Bring your arm into view" else "Practice one pull-up"
+        ExperimentStage.COUNTDOWN -> if(seconds > 0) "Get ready · $seconds" else
+            if (isPushUp) "Start with extended arms" else "Raise your selected arm"
+        ExperimentStage.CALIBRATING -> if(paused) "Bring your arm into view" else
+            if (isPushUp) "Practice one push-up" else "Practice one pull-up"
         ExperimentStage.READY -> "Practice accepted — counting is OFF"
         ExperimentStage.COUNTING -> if(paused) "Counting paused" else "Counting is ON"
     }
     val instruction = when(e.stage) {
-        ExperimentStage.IDLE, ExperimentStage.ERROR -> "Keep your hands, bar and head in view, even at the top."
-        ExperimentStage.COUNTDOWN -> "Raise your $side arm above your shoulder. Wait for the practice cue."
+        ExperimentStage.IDLE, ExperimentStage.ERROR -> if (isPushUp)
+            "Use a side view with your whole body in frame. Keep your selected shoulder, elbow and wrist clear."
+            else "Keep your hands, bar and head in view, even at the top."
+        ExperimentStage.COUNTDOWN -> if (isPushUp)
+            "Start with extended arms and keep your $side shoulder, elbow and wrist in view. Wait for the practice cue."
+            else "Raise your $side arm above your shoulder. Wait for the practice cue."
         ExperimentStage.CALIBRATING -> if(paused) "Keep your $side arm visible. Practice restarts when tracking returns."
+            else if (isPushUp) "Lower with control, pause briefly at the bottom, then return to extended arms."
             else "Go up, pause briefly at the top, then return and hold your starting position."
-        ExperimentStage.READY -> "Was that a full practice pull-up? Confirm below. Your next pull-ups will count."
+        ExperimentStage.READY -> if (isPushUp)
+            "Was that a full practice push-up? Confirm below. Your next push-ups will count."
+            else "Was that a full practice pull-up? Confirm below. Your next pull-ups will count."
         ExperimentStage.COUNTING -> if(paused) "Bring your selected arm into view and hold your starting position. Your count is kept."
             else "Keep the same camera position. Practice is not included in your count."
     }
     ElevatedCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
-            Text("PULL-UP · $side arm",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.primary)
+            Text("${if (isPushUp) "PUSH-UP" else "PULL-UP"} · $side arm",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.primary)
             Text(title,style=MaterialTheme.typography.titleLarge)
             if(e.stage==ExperimentStage.COUNTING) {
                 Text("${e.candidateCycles}",style=MaterialTheme.typography.displayLarge)

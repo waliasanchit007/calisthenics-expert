@@ -25,6 +25,22 @@ SPEC.loader.exec_module(feedback)
 SESSION = "123e4567-e89b-12d3-a456-426614174000"
 
 
+@pytest.mark.parametrize("movement", [None, "UNKNOWN", 123])
+def test_invalid_movement_identity_is_not_a_valid_diagnostic_log(movement: object) -> None:
+    rows = [{"session": SESSION, "seq": 0, "movement": movement}]
+    assert not feedback._trace_summary(rows, feedback.JsonLines(rows), 0)["diagnostic_log_valid"]
+
+
+def test_trace_movement_defaults_only_for_legacy_and_rejects_mixing() -> None:
+    old = {"session": SESSION, "seq": 0}
+    push = {"session": SESSION, "seq": 1, "movement": "PUSH_UP"}
+    assert feedback._trace_summary([old], feedback.JsonLines([old]), 0)["movement"] == "PULL_UP"
+    assert feedback._trace_summary([push], feedback.JsonLines([push]), 0)["movement"] == "PUSH_UP"
+    assert not feedback._trace_summary([old, push], feedback.JsonLines([old, push]), 0)[
+        "diagnostic_log_valid"
+    ]
+
+
 def _trace_row(
     seq: int,
     event: str = "SAMPLE",

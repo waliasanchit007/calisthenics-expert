@@ -4,7 +4,8 @@ import com.calisthenics.diagnostic.viewer.AngleTracePoint
 import com.calisthenics.diagnostic.viewer.MovementMeasurements
 import com.calisthenics.diagnostic.viewer.measureMovement
 import com.calisthenics.diagnostic.viewer.experimental.ArmSide
-import com.calisthenics.diagnostic.viewer.experimental.PullUpExperiment
+import com.calisthenics.diagnostic.viewer.experimental.CalibratedArmCycleExperiment
+import com.calisthenics.diagnostic.viewer.experimental.ExperimentalMovement
 
 /** Fresh raw observations only. Never accepts a ViewerOverlay or reads its held pose. */
 internal enum class MovementFeedStatus { FRESH, WAITING, NO_POSE, RESULT_TIMEOUT, DUPLICATE, BACKWARDS }
@@ -14,12 +15,27 @@ internal class ViewerMovementCoordinator {
         private set
     var captureGapNs: Long? = null
         private set
-    val experiment = PullUpExperiment()
+    var experiment = CalibratedArmCycleExperiment()
+        private set
     var measurements: MovementMeasurements? = null
         private set
     var trace: List<AngleTracePoint> = emptyList()
         private set
     private var lastSeenNs: Long? = null
+    private var sessionActive = false
+
+    /** The coordinator owns this lifecycle flag; callers cannot make an active session stopped. */
+    fun beginSession() { sessionActive = true }
+
+    fun endSession() { sessionActive = false }
+
+    fun selectMovement(movement: ExperimentalMovement): Boolean {
+        if (sessionActive) return false
+        if (experiment.movement == movement) return true
+        experiment = CalibratedArmCycleExperiment(movement)
+        clear()
+        return true
+    }
 
     fun update(observation: ViewerObservation?, nowNs: Long) {
         trace = trace.filter { nowNs - it.capturedNs in 0..3_000_000_000L }.takeLast(90)

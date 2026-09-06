@@ -53,7 +53,7 @@ internal class ViewerDiagnosticLog(
         observation: ViewerObservation? = null,
     ) {
         if (writer.isShutdown) return
-        val signature = listOf(state.stage,state.phase,state.candidateCycles,state.failure,state.lastCycleOutcome,issue,
+        val signature = listOf(state.movement,state.stage,state.phase,state.candidateCycles,state.failure,state.lastCycleOutcome,issue,
             measurements?.left?.trackingIssue, measurements?.right?.trackingIssue,
             if (exact) observation?.capturedNs ?: measurements?.capturedNs else null,
             if (exact) feed else null)
@@ -85,6 +85,7 @@ internal class ViewerDiagnosticLog(
                         .put("capture_gap_ms",numeric(gapNs?.div(1_000_000.0)))
                         .put("feed",feed.name).put("input_issue",issue?.name ?: JSONObject.NULL)
                         .put("stage",state.stage.name).put("phase",state.phase.name).put("side",state.side.name)
+                        .put("movement",state.movement.name)
                         .put("failure_code",state.failure?.name ?: JSONObject.NULL)
                         .put("candidate_cycles",state.candidateCycles)
                         .put("cycle_outcome",state.lastCycleOutcome?.name ?: JSONObject.NULL)

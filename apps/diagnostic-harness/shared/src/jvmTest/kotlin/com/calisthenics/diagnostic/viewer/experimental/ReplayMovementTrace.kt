@@ -50,6 +50,7 @@ data class ReplayTraceRow(
     val availableArmJoints: Int,
     val leftTrackingIssue: ArmTrackingIssue? = null,
     val rightTrackingIssue: ArmTrackingIssue? = null,
+    val movement: ExperimentalMovement = ExperimentalMovement.PULL_UP,
 )
 
 class ReplayTraceFormatException(message: String) : IllegalArgumentException(message)
@@ -61,6 +62,7 @@ object ReplayTraceParser {
         val rows = ArrayList<ReplayTraceRow>()
         var expectedSequence = 0L
         var session: String? = null
+        var movement: ExperimentalMovement? = null
 
         lines.forEachIndexed { index, line ->
             val lineNumber = index + 1
@@ -85,6 +87,11 @@ object ReplayTraceParser {
             }
 
             val rowSession = root.requiredString(lineNumber, "session")
+            val rowMovement = if ("movement" in root)
+                root.requiredEnum(lineNumber,"movement",ExperimentalMovement.entries)
+                else ExperimentalMovement.PULL_UP
+            if (movement == null) movement = rowMovement
+            if (rowMovement != movement) invalid(lineNumber,"movement must not change within a session")
             if (rowSession.isEmpty()) invalid(lineNumber, "session must not be empty")
             if (session == null) session = rowSession
             if (rowSession != session) invalid(lineNumber, "all rows must belong to one session")
@@ -126,6 +133,7 @@ object ReplayTraceParser {
                 availableArmJoints = availableArmJoints,
                 leftTrackingIssue = root.trackingIssue(lineNumber,"left"),
                 rightTrackingIssue = root.trackingIssue(lineNumber,"right"),
+                movement = rowMovement,
             )
         }
 
@@ -225,7 +233,9 @@ data class ReplayResult(
 object ReplayMovementTrace {
     fun replay(rows: List<ReplayTraceRow>): ReplayResult {
         require(rows.isNotEmpty()) { "replay requires at least one trace row" }
-        val experiment = PullUpExperiment()
+        val movement = rows.first().movement
+        require(rows.all { it.movement == movement }) { "movement must not change within a session" }
+        val experiment = CalibratedArmCycleExperiment(movement)
         val transitions = mutableListOf<ReplayTransition>()
         var previousSignature = signature(experiment.state)
 
@@ -270,6 +280,7 @@ object ReplayMovementTrace {
     fun renderJson(result: ReplayResult): String {
         val state = result.finalState
         val root = buildJsonObject {
+            put("movement",state.movement.name)
             putJsonArray("events") {
                 result.transitions.forEach { transition ->
                     add(buildJsonObject {

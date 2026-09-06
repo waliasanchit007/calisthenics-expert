@@ -2,11 +2,44 @@ package com.calisthenics.diagnostic.preview
 
 import com.calisthenics.diagnostic.contract.Landmark
 import com.calisthenics.diagnostic.viewer.experimental.ArmSide
+import com.calisthenics.diagnostic.viewer.experimental.ExperimentalMovement
 import com.calisthenics.diagnostic.viewer.experimental.ExperimentStage
 import org.junit.Test
 import kotlin.test.*
 
 class ViewerMovementCoordinatorTest {
+    @Test fun stoppedSelectionChangesExperimentAndActiveSelectionIsRejected() {
+        val coordinator = ViewerMovementCoordinator()
+
+        assertEquals(ExperimentalMovement.PULL_UP, coordinator.experiment.movement)
+        assertTrue(coordinator.selectMovement(ExperimentalMovement.PUSH_UP))
+        assertEquals(ExperimentalMovement.PUSH_UP, coordinator.experiment.movement)
+        assertEquals(ExperimentStage.IDLE, coordinator.experiment.state.stage)
+
+        coordinator.beginSession()
+        assertFalse(coordinator.selectMovement(ExperimentalMovement.PULL_UP))
+        assertEquals(ExperimentalMovement.PUSH_UP, coordinator.experiment.movement)
+        coordinator.endSession()
+    }
+
+    @Test fun changingStoppedSelectionClearsMeasurementsAndClearRetainsSelection() {
+        val coordinator = ViewerMovementCoordinator()
+        coordinator.beginSession()
+        coordinator.update(observation(0), 0)
+        assertNotNull(coordinator.measurements)
+        coordinator.endSession()
+
+        assertTrue(coordinator.selectMovement(ExperimentalMovement.PUSH_UP))
+        assertNull(coordinator.measurements)
+        assertTrue(coordinator.trace.isEmpty())
+        assertEquals(ExperimentalMovement.PUSH_UP, coordinator.experiment.state.movement)
+        assertEquals(ExperimentStage.IDLE, coordinator.experiment.state.stage)
+
+        coordinator.clear()
+        assertEquals(ExperimentalMovement.PUSH_UP, coordinator.experiment.state.movement)
+        assertEquals(ExperimentStage.IDLE, coordinator.experiment.state.stage)
+    }
+
     private fun raisedObservation(timeNs: Long) = observation(timeNs).copy(landmarks = listOf(
         Landmark(11,null,.5,.5,0.0,.9,.9),
         Landmark(13,null,.75,.5,0.0,.9,.9),

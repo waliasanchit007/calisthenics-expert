@@ -23,6 +23,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.Locale
 import com.calisthenics.diagnostic.viewer.ViewerPoint
+import com.calisthenics.diagnostic.viewer.experimental.ExperimentalMovement
 import com.calisthenics.diagnostic.android.BuildConfig
 import java.io.File
 
@@ -107,6 +108,7 @@ class MovementViewerActivity : ComponentActivity() {
                     skipped = snapshot?.skipped ?: 0, cameraPermission = permission,
                     attestedCameraScope = attestedCameraScope,
                     performance = formatViewerTiming(snapshot?.performance, controller?.previewFps()),
+                    movement = movementState.experiment.movement,
                 ),
                 image = image,
                 onSynthetic = { startViewer(ViewerInput.SYNTHETIC) },
@@ -114,6 +116,7 @@ class MovementViewerActivity : ComponentActivity() {
                 onStop = ::stopViewer,
                 onPermission = { requestPermission.launch(Manifest.permission.CAMERA) },
                 onAttestation = { attestedCameraScope = it },
+                onMovementSelected = { selectMovement(it) },
                 livePreview = view?.let { native -> { modifier -> AndroidView(factory = { native }, modifier = modifier) } },
                 livePoints = livePoints,
                 liveOverlayAlpha = overlay?.alpha ?: 0f,
@@ -161,7 +164,8 @@ class MovementViewerActivity : ComponentActivity() {
         if (selected == ViewerInput.CAMERA && (!attestedCameraScope || !hasCameraPermission())) return null
         input = selected
         movementCoordinator.clear()
-        movementState = MovementPanelState(cameraActive = selected == ViewerInput.CAMERA)
+        movementState = MovementPanelState(experiment=movementCoordinator.experiment.state,
+            cameraActive = selected == ViewerInput.CAMERA)
         overlayPresenter.clear()
         overlay = null
         snapshot = null
@@ -176,8 +180,15 @@ class MovementViewerActivity : ComponentActivity() {
         return MovementViewerController(this, this, selected, previewView = view).also { current ->
             view?.setFrameUpdateListener(ContextCompat.getMainExecutor(this)) { timestamp -> current.onPreviewFrame(timestamp) }
             controller = current
+            movementCoordinator.beginSession()
             current.start()
         }
+    }
+
+    internal fun selectMovement(movement: ExperimentalMovement): Boolean {
+        if (!movementCoordinator.selectMovement(movement)) return false
+        refreshMovementPanel()
+        return true
     }
 
     internal fun finishWithFailure(latest: ViewerSnapshot) {
@@ -214,8 +225,9 @@ class MovementViewerActivity : ComponentActivity() {
         diagnosticLog?.close()
         diagnosticLog = null
         diagnosticsEnabled = false
+        movementCoordinator.endSession()
         movementCoordinator.clear()
-        movementState = MovementPanelState()
+        movementState = MovementPanelState(experiment=movementCoordinator.experiment.state)
         overlayPresenter.clear()
         overlay = null
         controller?.close()

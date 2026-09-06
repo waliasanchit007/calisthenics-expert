@@ -21,8 +21,9 @@ import androidx.compose.ui.semantics.Role
 import com.calisthenics.diagnostic.contract.Landmark
 import com.calisthenics.diagnostic.viewer.ViewerGeometry
 import com.calisthenics.diagnostic.viewer.ViewerPoint
+import com.calisthenics.diagnostic.viewer.experimental.ExperimentalMovement
 
-/** Display observations only. There are no exercise-specific states or quality thresholds. */
+/** Viewer presentation and manual experiment selection; no quality or form assessment. */
 data class MovementViewerUiState(
     val active: Boolean = false,
     val message: String = "Ready to explore",
@@ -36,6 +37,7 @@ data class MovementViewerUiState(
     val cameraPermission: Boolean = false,
     val attestedCameraScope: Boolean = false,
     val performance: String = "Timing unavailable until frames arrive",
+    val movement: ExperimentalMovement = ExperimentalMovement.PULL_UP,
 )
 
 @Composable
@@ -47,6 +49,7 @@ fun MovementViewerScreen(
     onStop: () -> Unit,
     onPermission: () -> Unit,
     onAttestation: (Boolean) -> Unit,
+    onMovementSelected: (ExperimentalMovement) -> Unit = {},
     livePreview: (@Composable (Modifier) -> Unit)? = null,
     livePoints: Map<Int, ViewerPoint> = emptyMap(),
     liveOverlayAlpha: Float = 1f,
@@ -71,6 +74,7 @@ fun MovementViewerScreen(
         state.active -> "Not recording"
         else -> "Camera stays off until you start"
     }
+    val movementName = if (state.movement == ExperimentalMovement.PULL_UP) "pull-up" else "push-up"
     MaterialTheme(colorScheme = darkColorScheme(primary = Color(0xFF72E8BF))) {
         if (confirmDelete) AlertDialog(onDismissRequest = { confirmDelete=false },
             title = { Text("Delete local recordings?") },
@@ -96,7 +100,7 @@ fun MovementViewerScreen(
         if(showOptions) AlertDialog(onDismissRequest={showOptions=false},
             title={Text("Session options")},
             text={Column(verticalArrangement=Arrangement.spacedBy(8.dp)) {
-                Text("Experimental pull-up counting. Not a form assessment.")
+                Text("Experimental $movementName counting. Not a form assessment.")
                 Text("Detailed tracking logs are collected for debugging; they do not need to stay on your screen.")
                 if(!state.active) TextButton(onClick={showOptions=false;onSynthetic()}) {Text("Try synthetic figure")}
                 onDisableDiagnostics?.let { disable ->
@@ -117,6 +121,23 @@ fun MovementViewerScreen(
                 }
                 Text(if(state.active || diagnosticsStatus!=null) recordingLabel else "Private self-test · no uploads",
                     style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.primary)
+                if (!state.active) {
+                    Text("Choose movement",style=MaterialTheme.typography.labelMedium)
+                    Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected=state.movement == ExperimentalMovement.PULL_UP,
+                            onClick={onMovementSelected(ExperimentalMovement.PULL_UP)},
+                            label={Text("Pull-up")},
+                            modifier=Modifier.weight(1f),
+                        )
+                        FilterChip(
+                            selected=state.movement == ExperimentalMovement.PUSH_UP,
+                            onClick={onMovementSelected(ExperimentalMovement.PUSH_UP)},
+                            label={Text("Push-up")},
+                            modifier=Modifier.weight(1f),
+                        )
+                    }
+                }
                 Box(Modifier.fillMaxWidth().weight(1f).clipToBounds().background(Color(0xFF15232A)), contentAlignment = Alignment.Center) {
                     if (livePreview != null) livePreview(Modifier.fillMaxSize())
                     if (image == null && livePreview == null) {

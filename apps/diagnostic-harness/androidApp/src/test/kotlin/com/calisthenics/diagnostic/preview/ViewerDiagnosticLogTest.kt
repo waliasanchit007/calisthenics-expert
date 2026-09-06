@@ -16,6 +16,18 @@ import kotlin.test.*
 @RunWith(RobolectricTestRunner::class)
 @org.robolectric.annotation.Config(sdk = [35])
 class ViewerDiagnosticLogTest {
+    @Test fun everyExactRowCarriesItsExplicitMovementIdentity() {
+        val rows = java.util.concurrent.CopyOnWriteArrayList<JSONObject>()
+        val latch = CountDownLatch(2)
+        val logger = ViewerDiagnosticLog("test",0,exact=true,emit={ rows += JSONObject(it); latch.countDown() })
+        try {
+            val state = PullUpExperimentState(movement=com.calisthenics.diagnostic.viewer.experimental.ExperimentalMovement.PUSH_UP)
+            for ((index,event) in listOf(ViewerDebugEvent.START_CAMERA, ViewerDebugEvent.SAMPLE).withIndex())
+                logger.record(event,index*200_000_000L,null,state,null,MovementFeedStatus.WAITING,null,0,0,0)
+            assertTrue(latch.await(3,TimeUnit.SECONDS))
+            assertEquals(listOf("PUSH_UP", "PUSH_UP"),rows.map { it.getString("movement") })
+        } finally { logger.close() }
+    }
     @Test fun jointAndCauseAreRecordedWithoutDependingOnAMessageOrChangingTheStage() {
         val rows = java.util.concurrent.CopyOnWriteArrayList<JSONObject>()
         val latch = CountDownLatch(1)

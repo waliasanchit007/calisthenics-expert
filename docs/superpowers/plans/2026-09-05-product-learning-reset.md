@@ -191,6 +191,24 @@ observed behavior. The subsequent human self-test stays explicitly authorized.
 
 ## Next action
 
+### Current exploratory checkpoint — 2026-09-06
+
+The viewer, smooth preview, operator-first UI and provisional pull-up experiment now have
+authorized creator self-test feedback. The latest variation trace reproduced its four increment
+events in exact Kotlin replay; paired visual context supports two rejected partial attempts and
+count preservation across bar release/reacquisition. This is limited development evidence from
+one person/setup, not a held-out benchmark, strict-rep assessment or formal study acceptance.
+Personal trace identifiers, measurements and images remain in the ignored local ledger/store.
+
+Proceed with section 4's contrasting movement: the manual push-up experiment in
+`2026-09-06-push-up-experiment.md`. Preserve the pull-up regression baseline. Shared infrastructure
+must remain usable for repetitions, holds and transitions; do not stabilize a universal analyzer
+interface or add coaching scores based on these two prototypes. After the push-up self-test,
+use the observed failures to choose the next smallest improvement or a hold experiment.
+
+The paragraphs below describe the historical viewer checkpoint; recording scope has since been
+amended in ADR-0006 to allow the explicitly authorized private creator-feedback loop.
+
 The viewer and smooth-preview increment are implemented; see
 `2026-09-05-smooth-movement-viewer.md` for scoped software/device evidence. Next is the short
 movement-feature experiment in section2, followed by a provisional cycle and contrasting hold or

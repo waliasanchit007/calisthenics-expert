@@ -6,6 +6,9 @@ import com.calisthenics.diagnostic.viewer.MovementMeasurements
 
 enum class ArmSide { LEFT, RIGHT }
 
+/** Manual exploratory selection, never an exercise-classifier output. */
+enum class ExperimentalMovement { PULL_UP, PUSH_UP }
+
 enum class ExperimentStage { IDLE, COUNTDOWN, CALIBRATING, READY, COUNTING, ERROR }
 
 enum class CyclePhase { WAITING, EXTENDED, FLEXING, FLEXED, EXTENDING, UNCERTAIN }
@@ -13,7 +16,7 @@ enum class CycleOutcome { COUNTED, TOP_NOT_CONFIRMED, TRACKING_INTERRUPTED }
 
 enum class ExperimentInputIssue {
     INVALID_TIMESTAMP, DUPLICATE_TIMESTAMP, BACKWARDS_TIMESTAMP, CAPTURE_GAP, STALE_SAMPLE,
-    SHOULDER_UNAVAILABLE, ELBOW_UNAVAILABLE, WRIST_UNAVAILABLE, WRIST_NOT_ABOVE_SHOULDER, CONFIDENCE_UNAVAILABLE, TRACKING_GAP,
+    SHOULDER_UNAVAILABLE, ELBOW_UNAVAILABLE, WRIST_UNAVAILABLE, WRIST_NOT_ABOVE_SHOULDER, WRIST_NOT_BELOW_SHOULDER, CONFIDENCE_UNAVAILABLE, TRACKING_GAP,
 }
 
 enum class CalibrationFailure { TIMESTAMP_REVERSED, CAPTURE_GAP, TRACKING_LOST, SAMPLE_LIMIT,
@@ -32,15 +35,20 @@ data class PullUpExperimentState(
     val calibrationEndsNs: Long? = null,
     val failure: CalibrationFailure? = null,
     val lastCycleOutcome: CycleOutcome? = null,
+    val movement: ExperimentalMovement = ExperimentalMovement.PULL_UP,
 )
 
-class PullUpExperiment {
+typealias PullUpExperiment = CalibratedArmCycleExperiment
+
+/** Shared provisional arm-cycle mechanics; not a universal rep/hold domain model. */
+class CalibratedArmCycleExperiment(val movement: ExperimentalMovement = ExperimentalMovement.PULL_UP) {
     var inputIssue: ExperimentInputIssue? = null
         private set
     val state: PullUpExperimentState
         get() = currentState
 
-    private var currentState = PullUpExperimentState()
+    private var currentState = PullUpExperimentState(movement = movement)
+    private val movementName get() = if (movement == ExperimentalMovement.PULL_UP) "pull-up" else "push-up"
     private var lastTimestampNs: Long? = null
     private var reacquisitionStartNs: Long? = null
     private val rawCalibrationAngles = mutableListOf<Double>()
@@ -56,9 +64,12 @@ class PullUpExperiment {
         filteredCalibrationSamples.clear()
         segmenter = Segmenter()
         currentState = PullUpExperimentState(
+            movement = movement,
             stage = ExperimentStage.COUNTDOWN,
             side = side,
-            message = "Frame check: raise the selected arm. Keep hands, bar and head inside the image throughout the movement; practice waits for usable arm tracking",
+            message = if (movement == ExperimentalMovement.PULL_UP)
+                "Frame check: raise the selected arm. Keep hands, bar and head inside the image throughout the movement; practice waits for usable arm tracking"
+                else "Frame check: use a side view with your whole body visible. Start with extended arms and the selected wrist below its shoulder",
             countdownEndsNs = safeAdd(startNs, COUNTDOWN_NS),
         )
     }
@@ -70,7 +81,7 @@ class PullUpExperiment {
             stage = ExperimentStage.COUNTING,
             phase = CyclePhase.WAITING,
             candidateCycles = 0,
-            message = "Counting is ON. Perform your next pull-up; the practice was not counted",
+            message = "Counting is ON. Perform your next $movementName; the practice was not counted",
         )
     }
 
@@ -81,7 +92,7 @@ class PullUpExperiment {
         rawCalibrationAngles.clear()
         filteredCalibrationSamples.clear()
         segmenter = Segmenter()
-        currentState = PullUpExperimentState()
+        currentState = PullUpExperimentState(movement = movement)
     }
 
     fun onSample(sample: MovementMeasurements, nowNs: Long) {
@@ -141,7 +152,7 @@ class PullUpExperiment {
             val guidance = calibrationInputGuidance(arm)
             if (currentState.stage == ExperimentStage.CALIBRATING) recoverCalibrationLandmarks(guidance)
             else if (currentState.stage == ExperimentStage.COUNTDOWN) currentState = currentState.copy(
-                message = "Frame check: $guidance. Do not start the pull-up yet",
+                message = "Frame check: $guidance. Do not start the $movementName yet",
             )
             else invalidateSampleIfNeeded()
             return
@@ -209,7 +220,7 @@ class PullUpExperiment {
             reacquisitionStartNs = null
             currentState = currentState.copy(
                 phase = CyclePhase.WAITING,
-                message = "Tracking recovered. Start a NEW full practice pull-up, then return to extended",
+                message = "Tracking recovered. Start a NEW full practice $movementName, then return to extended",
                 calibrationEndsNs = safeAdd(timestamp, CALIBRATION_NS),
             )
             // Warmup is not practice. No motion before this cue contributes to the range.
@@ -243,6 +254,7 @@ class PullUpExperiment {
         val side = if (currentState.side == ArmSide.LEFT) "Left" else "Right"
         return arm?.trackingIssue?.guidance(side) ?: when (inputIssue) {
             ExperimentInputIssue.WRIST_NOT_ABOVE_SHOULDER -> "Raise your $side wrist above its shoulder and keep the hand in view"
+            ExperimentInputIssue.WRIST_NOT_BELOW_SHOULDER -> "Start with extended arms and your $side wrist below its shoulder; use a side view"
             ExperimentInputIssue.SHOULDER_UNAVAILABLE -> "$side shoulder measurement is unavailable"
             ExperimentInputIssue.WRIST_UNAVAILABLE -> "$side wrist measurement is unavailable"
             ExperimentInputIssue.ELBOW_UNAVAILABLE -> "$side arm measurements are unavailable"
@@ -332,7 +344,15 @@ class PullUpExperiment {
         val wristHeight = arm.wristHeightFraction ?: return reject(ExperimentInputIssue.WRIST_UNAVAILABLE)
         val confidence = arm.minimumConfidence ?: return reject(ExperimentInputIssue.CONFIDENCE_UNAVAILABLE)
         if (!angle.isFinite() || angle !in 0.0..180.0) return reject(ExperimentInputIssue.ELBOW_UNAVAILABLE)
-        if (!wristHeight.isFinite() || wristHeight <= 0.0) return reject(ExperimentInputIssue.WRIST_NOT_ABOVE_SHOULDER)
+        if (movement == ExperimentalMovement.PULL_UP) {
+            if (!wristHeight.isFinite() || wristHeight <= 0.0) return reject(ExperimentInputIssue.WRIST_NOT_ABOVE_SHOULDER)
+        } else {
+            if (!wristHeight.isFinite()) return reject(ExperimentInputIssue.WRIST_UNAVAILABLE)
+            // Setup only: a near-floor shoulder can cross the wrist image row at the bottom.
+            // Do not turn finite motion into a made-up tracking interruption.
+            if (currentState.stage == ExperimentStage.COUNTDOWN && wristHeight >= 0.0)
+                return reject(ExperimentInputIssue.WRIST_NOT_BELOW_SHOULDER)
+        }
         if (!confidence.isFinite() || confidence !in .5..1.0) return reject(ExperimentInputIssue.CONFIDENCE_UNAVAILABLE)
         return angle
     }
@@ -367,7 +387,9 @@ class PullUpExperiment {
             } else {
                 when (segmenter.lastOutcome) {
                     CycleOutcome.COUNTED -> "Last candidate cycle: counted"
-                    CycleOutcome.TOP_NOT_CONFIRMED -> "Last attempt not counted: top position was not confirmed"
+                    CycleOutcome.TOP_NOT_CONFIRMED -> if (movement == ExperimentalMovement.PULL_UP)
+                        "Last attempt not counted: top position was not confirmed"
+                        else "Last attempt not counted: bottom position was not confirmed"
                     CycleOutcome.TRACKING_INTERRUPTED -> "Last attempt not counted: tracking interrupted the cycle"
                     null -> "Counting"
                 }

@@ -29,6 +29,61 @@ class MovementSetupUiTest {
         bitmap.recycle()
     }
 
+    @Test fun stoppedMovementSelectorChangesSelectionButActiveSelectorIsAbsent() {
+        val selected = mutableStateOf(ExperimentalMovement.PULL_UP)
+        ActivityScenario.launch(MovementViewerActivity::class.java).use { scenario ->
+            scenario.onActivity { activity -> activity.setContent {
+                MovementViewerScreen(
+                    MovementViewerUiState(active=false, movement=selected.value), null,
+                    onSynthetic={}, onCamera={}, onStop={}, onPermission={}, onAttestation={},
+                    onMovementSelected={ selected.value=it },
+                )
+            } }
+            tap("Push-up")
+            assertEquals(ExperimentalMovement.PUSH_UP, selected.value)
+
+            scenario.onActivity { activity -> activity.setContent {
+                MovementViewerScreen(
+                    MovementViewerUiState(active=true, movement=selected.value), null,
+                    onSynthetic={}, onCamera={}, onStop={}, onPermission={}, onAttestation={},
+                    onMovementSelected={ error("Movement selection changed while active") },
+                )
+            } }
+            assertNotNull(node("Camera preview"))
+            assertTrue(nodeOrNull("Choose movement") == null, visibleText())
+            assertTrue(nodeOrNull("Push-up") == null, visibleText())
+            assertEquals(ExperimentalMovement.PUSH_UP, selected.value)
+        }
+    }
+
+    @Test fun pushUpPanelUsesSideViewGuidanceAndNeverPullUpOrBarCopy() {
+        val pushUp=PullUpExperimentState(
+            movement=ExperimentalMovement.PUSH_UP,
+        )
+        val state=mutableStateOf(pushUp)
+        ActivityScenario.launch(MovementViewerActivity::class.java).use { scenario ->
+            scenario.onActivity { activity -> activity.setContent {
+                MovementMeasurementsPanel(MovementPanelState(experiment=state.value,cameraActive=true),{}, {}, {})
+            } }
+            assertNotNull(node("Let's set up"))
+            val setupText=visibleText()
+            assertTrue(setupText.contains("side view"),setupText)
+            assertTrue(setupText.contains("whole body"),setupText)
+            scenario.onActivity { state.value=pushUp.copy(stage=ExperimentStage.CALIBRATING,
+                calibrationEndsNs=10_000_000_000) }
+            assertNotNull(node("Practice one push-up"))
+            val text=visibleText()
+            assertTrue(text.contains("lower",ignoreCase=true),text)
+            assertTrue(text.contains("briefly at the bottom"),text)
+            assertTrue(text.contains("return to extended arms"),text)
+            assertTrue(!text.contains("bar"),text)
+            assertTrue(!text.contains("raise your",ignoreCase=true),text)
+            assertTrue(!text.contains("top",ignoreCase=true),text)
+            assertTrue(!setupText.contains("bar"),setupText)
+            saveSyntheticScreen("pushup-practice-synthetic.png")
+        }
+    }
+
     @Test fun briefTrackingChangesDoNotFlashInstructionsButPersistentLossIsShown() {
         val ready=PullUpExperimentState(stage=ExperimentStage.CALIBRATING,calibrationEndsNs=10_000_000_000)
         val state=mutableStateOf(ready)
@@ -140,6 +195,16 @@ class MovementSetupUiTest {
                 (0 until it.childCount).joinToString("") { index -> describe(it.getChild(index),depth+1) }
         } ?: ""
         throw AssertionError("Missing '$text' in active UI:\n${describe(automation.rootInActiveWindow)}")
+    }
+
+    private fun nodeOrNull(text: String): AccessibilityNodeInfo? {
+        fun find(n: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
+            if (n == null) return null
+            if (n.text?.toString() == text) return n
+            for (index in 0 until n.childCount) find(n.getChild(index))?.let { return it }
+            return null
+        }
+        return find(InstrumentationRegistry.getInstrumentation().uiAutomation.rootInActiveWindow)
     }
 
     @Test fun acceptedPracticeClearlyRequiresConfirmationAndButtonActuallyStartsCounting() {

@@ -188,6 +188,13 @@ def _trace_summary(
         measurement_mode = "exact"
     else:
         measurement_mode = "unknown"
+    movements = [row.get("movement", "PULL_UP") for row in rows]
+    movement_valid = bool(movements) and all(
+        isinstance(value, str)
+        and value in ("PULL_UP", "PUSH_UP")
+        and value == movements[0]
+        for value in movements
+    )
     return {
         "rows": len(rows),
         "duplicates": duplicate_count,
@@ -203,7 +210,9 @@ def _trace_summary(
         ),
         "legacy_capture_ms": legacy,
         "measurements_mode": measurement_mode,
-        "diagnostic_log_valid": bool(rows),
+        "movement": movements[0] if movement_valid else None,
+        "movement_identity_valid": movement_valid,
+        "diagnostic_log_valid": bool(rows) and movement_valid,
     }
 
 

@@ -6,6 +6,36 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 
 class ReplayMovementTraceParserTest {
+    @Test fun legacyDefaultsToPullUpWhilePushUpReplayUsesBelowShoulderPractice() {
+        assertEquals(ExperimentalMovement.PULL_UP, ReplayTraceParser.parse(sequenceOf(row())).single().movement)
+        val seed = ReplayTraceParser.parse(sequenceOf(row().replace("\"v\":2", "\"v\":2,\"movement\":\"PUSH_UP\""))).single()
+        val rows = mutableListOf(seed.copy(event=ReplayTraceEvent.CALIBRATE,decisionNs=0))
+        for (ms in 5_000L..8_000L step 100) rows += seed.copy(sequence=rows.size.toLong(),
+            event=ReplayTraceEvent.SAMPLE,feed=ReplayTraceFeed.FRESH,captureNs=ms*1_000_000,
+            decisionNs=ms*1_000_000,leftWristHeight=-.3,leftConfidence=.9,
+            leftElbowDegrees=when(ms) {
+                in 6_000..6_400, in 7_100..7_400 -> 100.0
+                in 6_500..7_000 -> 40.0
+                else -> 160.0
+            })
+        val result = ReplayMovementTrace.replay(rows)
+        assertEquals(ExperimentStage.READY,result.finalState.stage)
+        assertEquals(ExperimentalMovement.PUSH_UP,result.finalState.movement)
+        assertEquals(0,result.finalState.candidateCycles)
+        assertFailsWith<IllegalArgumentException> { ReplayMovementTrace.replay(rows + seed.copy(movement=ExperimentalMovement.PULL_UP)) }
+    }
+
+    @Test fun rejectsUnknownNullAndMixedMovementIdentity() {
+        for (value in listOf("\"UNKNOWN\"", "null", "123")) {
+            assertFailsWith<ReplayTraceFormatException> {
+                ReplayTraceParser.parse(sequenceOf(row().replace("\"v\":2", "\"v\":2,\"movement\":$value")))
+            }
+        }
+        assertFailsWith<ReplayTraceFormatException> {
+            ReplayTraceParser.parse(sequenceOf(row(), row(seq=1).replace("\"v\":2", "\"v\":2,\"movement\":\"PUSH_UP\"")))
+        }
+    }
+
     @Test
     fun parsesExactV2NumericRowsAndPreservesNullableMeasurements() {
         val rows = ReplayTraceParser.parse(

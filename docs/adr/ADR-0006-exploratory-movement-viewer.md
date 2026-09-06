@@ -249,6 +249,24 @@ counting rules are unchanged. An incomplete prefix neither fails early nor cross
 Reset or choosing a new calibration clears the preserved result. This remains an exploratory
 observed-range estimate, not a validated physiological calibration or strict-rep claim.
 
+### Contrasting manual push-up experiment (2026-09-06)
+
+The owner approved proceeding to product-learning-reset section4 after the pull-up variation
+self-test. Add a manual push-up profile to the same provisional common arm-cycle mechanics,
+not a new classifier, stable rep contract or form-assessment engine. Select the movement only
+while the camera is stopped; clear practice/count when changing it. Push-up setup uses a side
+view and a selected wrist below its shoulder before practice begins. During motion finite wrist
+height may cross zero near the bottom; do not fabricate tracking loss from its sign. Missing,
+nonfinite, low-confidence, stale and discontinuous observations retain the existing safety gates.
+Pull-up rules and event timings remain unchanged. Per-session full-practice confirmation remains
+required; a counted cycle is not proof of depth, floor support or correct body alignment.
+
+Keep movement identity on every new debug row and exact replay. Missing historical identity is
+pull-up only; explicit null, unknown and mixed identities are invalid. Preserve historical outcome
+names for compatibility but use bottom/flexed-endpoint wording for push-up operator guidance.
+No extra recording/upload privilege, automatic camera start, release or study admission is granted.
+See the 2026-09-06 push-up design/plan for tests and the pending real-movement check.
+
 ADR-0005's formal study and
 participant gates remain intact. This software policy does not itself grant an individual human
 capture authorization, upload, retention, merge or tag. Individual authorization stays outside Git.
