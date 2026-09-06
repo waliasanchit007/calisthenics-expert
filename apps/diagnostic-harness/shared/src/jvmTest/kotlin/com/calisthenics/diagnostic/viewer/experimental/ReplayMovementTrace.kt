@@ -1,6 +1,9 @@
 package com.calisthenics.diagnostic.viewer.experimental
 
 import com.calisthenics.diagnostic.viewer.ArmMeasurements
+import com.calisthenics.diagnostic.viewer.ArmJoint
+import com.calisthenics.diagnostic.viewer.ArmTrackingIssue
+import com.calisthenics.diagnostic.viewer.JointIssueReason
 import com.calisthenics.diagnostic.viewer.MovementMeasurements
 import java.nio.file.Files
 import java.nio.file.Path
@@ -45,6 +48,8 @@ data class ReplayTraceRow(
     val leftConfidence: Double?,
     val rightConfidence: Double?,
     val availableArmJoints: Int,
+    val leftTrackingIssue: ArmTrackingIssue? = null,
+    val rightTrackingIssue: ArmTrackingIssue? = null,
 )
 
 class ReplayTraceFormatException(message: String) : IllegalArgumentException(message)
@@ -119,6 +124,8 @@ object ReplayTraceParser {
                 leftConfidence = root.optionalDouble(lineNumber, "left_confidence"),
                 rightConfidence = root.optionalDouble(lineNumber, "right_confidence"),
                 availableArmJoints = availableArmJoints,
+                leftTrackingIssue = root.trackingIssue(lineNumber,"left"),
+                rightTrackingIssue = root.trackingIssue(lineNumber,"right"),
             )
         }
 
@@ -127,6 +134,14 @@ object ReplayTraceParser {
     }
 
     fun parse(path: Path): List<ReplayTraceRow> = parse(Files.readAllLines(path).asSequence())
+
+    private fun JsonObject.trackingIssue(line: Int, side: String): ArmTrackingIssue? {
+        val joint=optionalEnum(line,"${side}_unavailable_joint",ArmJoint.entries)
+        val reason=optionalEnum(line,"${side}_unavailable_reason",JointIssueReason.entries)
+        if(joint==null && reason==null) return null // Older exact traces have neither field.
+        if(joint==null || reason==null) invalid(line,"$side joint diagnostics require both joint and reason")
+        return ArmTrackingIssue(joint,reason)
+    }
 
     private fun JsonObject.requiredString(line: Int, key: String): String {
         val primitive = requiredPrimitive(line, key)
@@ -285,8 +300,8 @@ object ReplayMovementTrace {
 
     private fun ReplayTraceRow.measurements(): MovementMeasurements = MovementMeasurements(
         capturedNs = checkNotNull(captureNs),
-        left = ArmMeasurements(leftElbowDegrees, leftWristHeight, leftConfidence),
-        right = ArmMeasurements(rightElbowDegrees, rightWristHeight, rightConfidence),
+        left = ArmMeasurements(leftElbowDegrees, leftWristHeight, leftConfidence, leftTrackingIssue),
+        right = ArmMeasurements(rightElbowDegrees, rightWristHeight, rightConfidence, rightTrackingIssue),
         availableArmJoints = availableArmJoints,
     )
 

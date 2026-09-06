@@ -1,6 +1,7 @@
 package com.calisthenics.diagnostic.viewer.experimental
 
 import com.calisthenics.diagnostic.viewer.ArmMeasurements
+import com.calisthenics.diagnostic.viewer.ArmJoint
 import com.calisthenics.diagnostic.viewer.MovementMeasurements
 
 enum class ArmSide { LEFT, RIGHT }
@@ -12,7 +13,7 @@ enum class CycleOutcome { COUNTED, TOP_NOT_CONFIRMED, TRACKING_INTERRUPTED }
 
 enum class ExperimentInputIssue {
     INVALID_TIMESTAMP, DUPLICATE_TIMESTAMP, BACKWARDS_TIMESTAMP, CAPTURE_GAP, STALE_SAMPLE,
-    ELBOW_UNAVAILABLE, WRIST_UNAVAILABLE, WRIST_NOT_ABOVE_SHOULDER, CONFIDENCE_UNAVAILABLE, TRACKING_GAP,
+    SHOULDER_UNAVAILABLE, ELBOW_UNAVAILABLE, WRIST_UNAVAILABLE, WRIST_NOT_ABOVE_SHOULDER, CONFIDENCE_UNAVAILABLE, TRACKING_GAP,
 }
 
 enum class CalibrationFailure { TIMESTAMP_REVERSED, CAPTURE_GAP, TRACKING_LOST, SAMPLE_LIMIT,
@@ -57,7 +58,7 @@ class PullUpExperiment {
         currentState = PullUpExperimentState(
             stage = ExperimentStage.COUNTDOWN,
             side = side,
-            message = "Hold the selected arm in view; calibration starts after the countdown",
+            message = "Frame check: raise the selected arm. Keep hands, bar and head inside the image throughout the movement; practice waits for usable arm tracking",
             countdownEndsNs = safeAdd(startNs, COUNTDOWN_NS),
         )
     }
@@ -69,7 +70,7 @@ class PullUpExperiment {
             stage = ExperimentStage.COUNTING,
             phase = CyclePhase.WAITING,
             candidateCycles = 0,
-            message = "Counting",
+            message = "Counting is ON. Perform your next pull-up; the practice was not counted",
         )
     }
 
@@ -137,7 +138,11 @@ class PullUpExperiment {
         val arm = chosenArm(sample)
         val angle = usableAngle(arm)
         if (angle == null) {
-            if (currentState.stage == ExperimentStage.CALIBRATING) recoverCalibrationLandmarks()
+            val guidance = calibrationInputGuidance(arm)
+            if (currentState.stage == ExperimentStage.CALIBRATING) recoverCalibrationLandmarks(guidance)
+            else if (currentState.stage == ExperimentStage.COUNTDOWN) currentState = currentState.copy(
+                message = "Frame check: $guidance. Do not start the pull-up yet",
+            )
             else invalidateSampleIfNeeded()
             return
         }
@@ -231,7 +236,19 @@ class PullUpExperiment {
         }
     }
 
-    private fun recoverCalibrationLandmarks() {
+    private fun calibrationInputGuidance(arm: ArmMeasurements? = null): String {
+        val side = if (currentState.side == ArmSide.LEFT) "Left" else "Right"
+        return arm?.trackingIssue?.guidance(side) ?: when (inputIssue) {
+            ExperimentInputIssue.WRIST_NOT_ABOVE_SHOULDER -> "Raise your $side wrist above its shoulder and keep the hand in view"
+            ExperimentInputIssue.SHOULDER_UNAVAILABLE -> "$side shoulder measurement is unavailable"
+            ExperimentInputIssue.WRIST_UNAVAILABLE -> "$side wrist measurement is unavailable"
+            ExperimentInputIssue.ELBOW_UNAVAILABLE -> "$side arm measurements are unavailable"
+            ExperimentInputIssue.CONFIDENCE_UNAVAILABLE -> "$side arm confidence is insufficient"
+            else -> "$side arm tracking was interrupted"
+        }
+    }
+
+    private fun recoverCalibrationLandmarks(guidance: String = calibrationInputGuidance()) {
         // Only previously accepted samples may establish completion. A later landmark glitch
         // cannot erase an already complete practice, or contribute its rejected angle to it.
         if (finishCalibration(failIfIncomplete = false)) return
@@ -240,19 +257,11 @@ class PullUpExperiment {
         rawCalibrationAngles.clear()
         filteredCalibrationSamples.clear()
         reacquisitionStartNs = null
-        val side = if (currentState.side == ArmSide.LEFT) "Left" else "Right"
-        val reason = when (inputIssue) {
-            ExperimentInputIssue.WRIST_NOT_ABOVE_SHOULDER -> "$side wrist position is inconsistent"
-            ExperimentInputIssue.WRIST_UNAVAILABLE -> "$side wrist is not clearly tracked"
-            ExperimentInputIssue.ELBOW_UNAVAILABLE -> "$side elbow is not clearly tracked"
-            ExperimentInputIssue.CONFIDENCE_UNAVAILABLE -> "$side arm confidence is insufficient"
-            else -> "$side arm tracking was interrupted"
-        }
         currentState = currentState.copy(
             phase = CyclePhase.UNCERTAIN,
             calibrationEndsNs = null,
             countdownEndsNs = null,
-            message = "$reason. Practice paused; hold that arm in view. A fresh practice window starts automatically when tracking is stable",
+            message = "$guidance. Practice paused. A fresh practice window starts automatically when tracking is stable",
         )
     }
 
@@ -284,7 +293,7 @@ class PullUpExperiment {
             phase = replay.phase,
             candidateCycles = 0,
             range = range,
-            message = "Confirm this was a full practice cycle",
+            message = "Practice accepted; counting is still OFF. Confirm your full practice below to start counting",
         )
         return true
     }
@@ -311,6 +320,11 @@ class PullUpExperiment {
 
     private fun usableAngle(arm: ArmMeasurements): Double? {
         fun reject(reason: ExperimentInputIssue): Double? { inputIssue = reason; return null }
+        arm.trackingIssue?.let { return reject(when (it.joint) {
+            ArmJoint.SHOULDER -> ExperimentInputIssue.SHOULDER_UNAVAILABLE
+            ArmJoint.ELBOW -> ExperimentInputIssue.ELBOW_UNAVAILABLE
+            ArmJoint.WRIST -> ExperimentInputIssue.WRIST_UNAVAILABLE
+        }) }
         val angle = arm.elbowDegrees ?: return reject(ExperimentInputIssue.ELBOW_UNAVAILABLE)
         val wristHeight = arm.wristHeightFraction ?: return reject(ExperimentInputIssue.WRIST_UNAVAILABLE)
         val confidence = arm.minimumConfidence ?: return reject(ExperimentInputIssue.CONFIDENCE_UNAVAILABLE)

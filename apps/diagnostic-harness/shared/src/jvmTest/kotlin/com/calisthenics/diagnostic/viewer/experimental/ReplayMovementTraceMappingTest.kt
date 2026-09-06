@@ -10,6 +10,18 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
 class ReplayMovementTraceMappingTest {
+    @Test fun optionalJointDiagnosticsReachReplayWithoutInventingAnElbowFailure() {
+        val start=row(event="CALIBRATE",side="LEFT",decisionNs=0)
+        val base=Json.parseToJsonElement(row(seq=1,feed="FRESH",captureNs=5_000_000_000,
+            decisionNs=5_000_000_000)).jsonObject
+        val input=kotlinx.serialization.json.JsonObject(base + mapOf(
+            "left_unavailable_joint" to kotlinx.serialization.json.JsonPrimitive("WRIST"),
+            "left_unavailable_reason" to kotlinx.serialization.json.JsonPrimitive("OUT_OF_FRAME"),
+        )).toString()
+        val result=ReplayMovementTrace.replay(ReplayTraceParser.parse(sequenceOf(start,input)))
+        assertEquals(ExperimentInputIssue.WRIST_UNAVAILABLE,result.finalIssue)
+        kotlin.test.assertTrue(result.finalState.message.contains("outside"),result.finalState.message)
+    }
     @Test
     fun controlEventsAreDispatchedBeforeFeedAndClearExperimentState() {
         val rows = listOf(

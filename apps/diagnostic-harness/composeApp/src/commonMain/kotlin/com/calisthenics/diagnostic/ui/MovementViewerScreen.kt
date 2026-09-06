@@ -98,6 +98,7 @@ fun MovementViewerScreen(
                     }
                 }
                 movementSummary?.let { Text(it,style=MaterialTheme.typography.titleMedium,color=MaterialTheme.colorScheme.primary) }
+                if (state.active) movementPanel?.invoke()
                 Text(state.message, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
                 Text("${state.source} · ${state.landmarks.size}/33 landmark observations")
                 Text("Completed ${state.completed} · submitted ${state.submitted} · skipped ${state.skipped}", style = MaterialTheme.typography.bodySmall)
@@ -122,7 +123,7 @@ fun MovementViewerScreen(
                 }
                 Button(onClick = onCamera, enabled = !state.active && state.cameraPermission && state.attestedCameraScope) { Text("Start camera viewer") }
                 if (onDeleteRecordings != null) TextButton(onClick = { confirmDelete=true }) { Text("Delete local recordings") }
-                movementPanel?.invoke()
+                if (!state.active) movementPanel?.invoke()
                 Text("Repetitions · holds · transitions\nManual pull-up cycle experiment only. No automatic movement recognition or form claims.", style = MaterialTheme.typography.bodySmall)
             }
         }

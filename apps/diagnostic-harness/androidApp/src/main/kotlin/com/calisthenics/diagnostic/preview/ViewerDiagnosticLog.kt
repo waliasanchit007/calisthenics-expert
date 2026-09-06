@@ -54,6 +54,7 @@ internal class ViewerDiagnosticLog(
     ) {
         if (writer.isShutdown) return
         val signature = listOf(state.stage,state.phase,state.candidateCycles,state.failure,state.lastCycleOutcome,issue,
+            measurements?.left?.trackingIssue, measurements?.right?.trackingIssue,
             if (exact) observation?.capturedNs ?: measurements?.capturedNs else null,
             if (exact) feed else null)
         if (event == ViewerDebugEvent.SAMPLE && signature == previousState &&
@@ -94,6 +95,10 @@ internal class ViewerDiagnosticLog(
                         .put("right_wrist_height",numeric(measurements?.right?.wristHeightFraction,.005))
                         .put("left_confidence",numeric(measurements?.left?.minimumConfidence,.01))
                         .put("right_confidence",numeric(measurements?.right?.minimumConfidence,.01))
+                        .put("left_unavailable_joint",measurements?.left?.trackingIssue?.joint?.name ?: JSONObject.NULL)
+                        .put("left_unavailable_reason",measurements?.left?.trackingIssue?.reason?.name ?: JSONObject.NULL)
+                        .put("right_unavailable_joint",measurements?.right?.trackingIssue?.joint?.name ?: JSONObject.NULL)
+                        .put("right_unavailable_reason",measurements?.right?.trackingIssue?.reason?.name ?: JSONObject.NULL)
                         .put("left_joint_visibility_min",numeric(jointConfidence.leftVisibility,.01))
                         .put("left_joint_presence_min",numeric(jointConfidence.leftPresence,.01))
                         .put("right_joint_visibility_min",numeric(jointConfidence.rightVisibility,.01))

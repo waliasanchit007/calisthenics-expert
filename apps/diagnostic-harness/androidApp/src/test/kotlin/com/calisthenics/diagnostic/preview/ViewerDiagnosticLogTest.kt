@@ -16,6 +16,25 @@ import kotlin.test.*
 @RunWith(RobolectricTestRunner::class)
 @org.robolectric.annotation.Config(sdk = [35])
 class ViewerDiagnosticLogTest {
+    @Test fun jointAndCauseAreRecordedWithoutDependingOnAMessageOrChangingTheStage() {
+        val rows = java.util.concurrent.CopyOnWriteArrayList<JSONObject>()
+        val latch = CountDownLatch(1)
+        val logger = ViewerDiagnosticLog("test",0,exact=true,emit={ rows += JSONObject(it); latch.countDown() })
+        val points = listOf(
+            com.calisthenics.diagnostic.contract.Landmark(11,null,.5,.5,0.0,.9,.9),
+            com.calisthenics.diagnostic.contract.Landmark(13,null,.5,.3,0.0,.9,.9),
+            com.calisthenics.diagnostic.contract.Landmark(15,null,.5,-.0035,0.0,.9,.9),
+        )
+        try {
+            logger.record(ViewerDebugEvent.SAMPLE,10,
+                com.calisthenics.diagnostic.viewer.measureMovement(points,1080,1440,10),
+                PullUpExperimentState(),null,MovementFeedStatus.FRESH,null,1,1,0)
+            assertTrue(latch.await(3,TimeUnit.SECONDS))
+            assertEquals("WRIST",rows.single().getString("left_unavailable_joint"))
+            assertEquals("OUT_OF_FRAME",rows.single().getString("left_unavailable_reason"))
+            assertFalse(rows.single().has("message"))
+        } finally { logger.close() }
+    }
     @Test fun cycleOutcomeIsRecordedEvenWhenOnlyTheOutcomeChanges() {
         val rows = java.util.concurrent.CopyOnWriteArrayList<JSONObject>()
         val latch = CountDownLatch(2)

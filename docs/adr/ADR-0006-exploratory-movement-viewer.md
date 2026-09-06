@@ -193,6 +193,31 @@ Verify both setup recovery and no-stitching behavior, plus unchanged successful 
 synthetic tests and private exact Kotlin replay. Replay is development evidence, not a prospective
 accuracy claim. This is a bounded calibration correction, not a formal study or contract release.
 
+### Actionable framing and confirmation (2026-09-06)
+
+The owner approved a framing/diagnostics correction after paired images showed hands cropped
+above the image and the UI incorrectly reported missing elbows. Measurement now retains a typed
+unavailable joint (shoulder/elbow/wrist) and reason (missing, low confidence, invalid position,
+outside image). Numeric availability, geometry bounds, confidence limits and counting semantics
+are unchanged: missing or off-image joints never become fabricated angles. The experiment and
+local diagnostics consume that cause rather than treating every absent arm angle as a lost elbow.
+Exact debug traces add optional joint/reason pairs; historical traces remain replayable without
+inventing detail they never contained. These are exploratory diagnostics, not stable contract codes.
+
+Setup shows current per-arm framing guidance before practice. The existing countdown cannot
+begin practice until a fresh usable chosen-arm measurement exists, and now explains why it is
+waiting rather than displaying an unexplained zero-second timer. Bar visibility and full-motion
+head/hand framing remain an operator preview check; the app does not claim to detect a bar or
+certify future frames. No extra confidence threshold, extrapolation, automatic arm switch or
+additional confirmation gate is introduced. Automatic setup recovery remains as approved above.
+
+Move active experiment controls directly beneath the preview and put technical signal detail
+behind a disclosure. READY explicitly means practice accepted with counting OFF; a prominent
+"Confirm full practice & start counting" action retains the required operator confirmation.
+COUNTING is explicitly ON, with candidate count visible. Practice itself remains uncounted.
+Verify cause propagation with regressions and saved paired frames, unchanged counting with exact
+trace replay, and actual confirmation-button behavior with a synthetic no-camera UI test.
+
 ADR-0005's formal study and
 participant gates remain intact. This software policy does not itself grant an individual human
 capture authorization, upload, retention, merge or tag. Individual authorization stays outside Git.

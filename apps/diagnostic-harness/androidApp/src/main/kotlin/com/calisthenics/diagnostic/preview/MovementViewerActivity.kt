@@ -123,8 +123,11 @@ class MovementViewerActivity : ComponentActivity() {
                     "Diagnostics ON · local ADB trace includes derived movement measurements, not images/video. " +
                     "Auto-off within 30 min · writer drops ${diagnosticLog?.droppedRows ?: 0}" else null,
                 onDisableDiagnostics = if (diagnosticsEnabled) ({ disableDiagnostics() }) else null,
-                movementSummary = if (controller != null) "Candidate cycles ${movementState.experiment.candidateCycles} · " +
-                    movementState.experiment.phase.name.lowercase().replace('_',' ') else null,
+                movementSummary = if (controller != null) when (movementState.experiment.stage) {
+                    com.calisthenics.diagnostic.viewer.experimental.ExperimentStage.READY -> "Practice accepted · confirm below to start counting"
+                    com.calisthenics.diagnostic.viewer.experimental.ExperimentStage.COUNTING -> "Counting ON · ${movementState.experiment.candidateCycles} candidate cycles"
+                    else -> "Setup / practice · counting is OFF"
+                } else null,
                 movementPanel = {
                     MovementMeasurementsPanel(movementState,
                         onCalibrate = { side ->
