@@ -92,10 +92,18 @@ fun MovementMeasurementsPanel(
                     Text("Confirm only if this was your full practice cycle. A partial calibration cannot establish full range of motion.",style=MaterialTheme.typography.bodySmall)
                     Button(onClick = onConfirmRange, enabled = state.cameraActive) { Text("Confirm practice range") }
                 }
+                ExperimentStage.CALIBRATING -> if (experiment.calibrationEndsNs == null) {
+                    Text("No need to press retry. Wait for ‘Tracking recovered’ before starting a new practice. If this arm keeps losing tracking, you can choose the other arm explicitly.",
+                        style = MaterialTheme.typography.bodySmall)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = { onCalibrate(ArmSide.LEFT) }, enabled = state.cameraActive) { Text("Use left arm") }
+                        OutlinedButton(onClick = { onCalibrate(ArmSide.RIGHT) }, enabled = state.cameraActive) { Text("Use right arm") }
+                    }
+                }
                 else -> Unit
             }
             if (experiment.stage != ExperimentStage.IDLE) OutlinedButton(onClick = onReset) { Text("Reset range and count") }
-            Text("Experimental: 20/80% range bands; 120 ms extended-position hold; top hold or supported multi-sample reversal; 20° calibration-spread guard; landmark confidence ≥0.5. Practice still requires endpoint holds. Brief landmark glitches reset unfinished practice without restarting the countdown; tracking must recover within 250 ms of the last usable frame. Completed practice is offered for confirmation. These are prototype settings, not validated technique thresholds. No strict-rep or form claims.",
+            Text("Experimental: 20/80% range bands; 120 ms extended-position hold; top hold or supported multi-sample reversal; 20° calibration-spread guard; landmark confidence ≥0.5. Practice still requires endpoint holds. Tracking loss discards unfinished practice and pauses its timer. Three fresh samples spanning at least 120 ms start a new practice window automatically. Completed practice needs confirmation; practice is never counted. These are prototype settings, not validated technique thresholds. No strict-rep or form claims.",
                 style = MaterialTheme.typography.bodySmall)
         }
     }

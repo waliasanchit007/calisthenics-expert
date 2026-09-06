@@ -77,7 +77,7 @@ and synthetic partial/spike/duplicate/stale/gap cases verify this increment sepa
 
 Offline feedback replay uses the actual Kotlin analyzer, not a second implementation:
 
-2026-09-06 calibration-recovery amendment: ADR-0006 now permits automatic recovery from a brief
+2026-09-06 initial calibration-recovery amendment (superseded by setup reacquisition below): ADR-0006 permits automatic recovery from a brief
 unusable selected-arm landmark frame within the existing <250 ms capture gap from the last usable
 capture. If the prior accepted prefix already passes the existing complete-practice checks, freeze
 its range for operator confirmation without using the rejected observation. Otherwise clear the
@@ -86,6 +86,16 @@ cycle within the original deadline. Do not repeat the countdown or change counti
 confirmation, confidence/freshness limits or pose-loss behavior. This
 supersedes the previous immediate-abort behavior for landmark rejection only; late/sustained loss
 can still require a retry. Private replay is development evidence, not a held-out accuracy claim.
+
+2026-09-06 approved setup-reacquisition correction: follow ADR-0006's newer separation of setup
+waiting from counting continuity. Calibration discards unfinished practice on landmark rejection,
+no-pose, stale input or capture gaps and pauses its deadline. Three distinct fresh usable samples
+spanning at least 120 ms, each less than 250 ms apart, start a new 10-second practice window
+automatically; duplicates cannot advance warmup, and warmup motion cannot count as practice.
+Waiting retains only a bounded warmup buffer, never a growing history. Completed-prefix
+confirmation remains available, timestamps remain fail-closed, and counting is unchanged.
+Replace the obsolete terminal-250-ms setup regressions with pause/reacquire/no-stitching tests;
+retain invalid-time, counting-gap, incomplete-practice and explicit-confirmation checks.
 
 ```sh
 cd apps/diagnostic-harness

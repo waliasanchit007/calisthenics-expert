@@ -41,7 +41,7 @@ class PullUpExperiment {
 
     private var currentState = PullUpExperimentState()
     private var lastTimestampNs: Long? = null
-    private var lastUsableCalibrationNs: Long? = null
+    private var reacquisitionStartNs: Long? = null
     private val rawCalibrationAngles = mutableListOf<Double>()
     private val filteredCalibrationSamples = mutableListOf<FilteredSample>()
     private var segmenter = Segmenter()
@@ -50,7 +50,7 @@ class PullUpExperiment {
         inputIssue = null
         val startNs = nowNs.coerceAtLeast(0L)
         lastTimestampNs = null
-        lastUsableCalibrationNs = null
+        reacquisitionStartNs = null
         rawCalibrationAngles.clear()
         filteredCalibrationSamples.clear()
         segmenter = Segmenter()
@@ -76,7 +76,7 @@ class PullUpExperiment {
     fun reset() {
         inputIssue = null
         lastTimestampNs = null
-        lastUsableCalibrationNs = null
+        reacquisitionStartNs = null
         rawCalibrationAngles.clear()
         filteredCalibrationSamples.clear()
         segmenter = Segmenter()
@@ -97,12 +97,7 @@ class PullUpExperiment {
             when {
                 timestamp == previousTimestamp -> { inputIssue = ExperimentInputIssue.DUPLICATE_TIMESTAMP; return }
                 timestamp < previousTimestamp -> {
-                    inputIssue = ExperimentInputIssue.BACKWARDS_TIMESTAMP
-                    if (currentState.stage == ExperimentStage.CALIBRATING) {
-                        failCalibration("Calibration timestamps went backwards; please retry",CalibrationFailure.TIMESTAMP_REVERSED)
-                    } else {
-                        invalidateSampleIfNeeded()
-                    }
+                    onBackwardsTimestamp()
                     return
                 }
             }
@@ -110,8 +105,7 @@ class PullUpExperiment {
                 inputIssue = ExperimentInputIssue.CAPTURE_GAP
                 when (currentState.stage) {
                     ExperimentStage.CALIBRATING -> {
-                        failCalibration("Tracking gap during calibration; please retry",CalibrationFailure.CAPTURE_GAP)
-                        return
+                        recoverCalibrationLandmarks()
                     }
                     ExperimentStage.COUNTING -> {
                         segmenter.resetPending()
@@ -129,16 +123,6 @@ class PullUpExperiment {
         if (!isFresh(timestamp, nowNs)) {
             inputIssue = ExperimentInputIssue.STALE_SAMPLE
             invalidateSampleIfNeeded()
-            return
-        }
-
-        // Rejected frames must not renew the recovery budget. This uses the same capture-gap
-        // limit as continuous tracking, not a new tolerance or interpolated evidence.
-        if (currentState.stage == ExperimentStage.CALIBRATING &&
-            lastUsableCalibrationNs?.let { timestamp - it >= GAP_NS } == true
-        ) {
-            inputIssue = ExperimentInputIssue.CAPTURE_GAP
-            failCalibration("Arm tracking did not recover in time; please retry", CalibrationFailure.INPUT_UNUSABLE)
             return
         }
 
@@ -171,10 +155,19 @@ class PullUpExperiment {
         }
     }
 
+    fun onBackwardsTimestamp() {
+        inputIssue = ExperimentInputIssue.BACKWARDS_TIMESTAMP
+        if (currentState.stage == ExperimentStage.CALIBRATING) {
+            failCalibration("Calibration timestamps went backwards; please retry", CalibrationFailure.TIMESTAMP_REVERSED)
+        } else {
+            invalidateSampleIfNeeded()
+        }
+    }
+
     fun onTrackingGap() {
         inputIssue = ExperimentInputIssue.TRACKING_GAP
         when (currentState.stage) {
-            ExperimentStage.CALIBRATING -> failCalibration("Tracking was lost during calibration; please retry",CalibrationFailure.TRACKING_LOST)
+            ExperimentStage.CALIBRATING -> recoverCalibrationLandmarks()
             ExperimentStage.COUNTING -> {
                 segmenter.resetPending()
                 syncCountingState()
@@ -199,7 +192,25 @@ class PullUpExperiment {
     }
 
     private fun acceptCalibrationSample(timestamp: Long, angle: Double) {
-        val calibrationEndsNs = currentState.calibrationEndsNs ?: return
+        val calibrationEndsNs = currentState.calibrationEndsNs
+        if (calibrationEndsNs == null) {
+            // Setup may wait for tracking without retaining an unfinished movement. The existing
+            // three-frame median and endpoint dwell provide a bounded fresh-evidence warmup.
+            if (reacquisitionStartNs == null) reacquisitionStartNs = timestamp
+            rawCalibrationAngles += angle
+            if (rawCalibrationAngles.size > MEDIAN_WINDOW) rawCalibrationAngles.removeAt(0)
+            if (rawCalibrationAngles.size < MEDIAN_WINDOW || timestamp - reacquisitionStartNs!! < DWELL_NS) return
+            rawCalibrationAngles.clear()
+            reacquisitionStartNs = null
+            currentState = currentState.copy(
+                phase = CyclePhase.WAITING,
+                message = "Tracking recovered. Start a NEW full practice pull-up, then return to extended",
+                calibrationEndsNs = safeAdd(timestamp, CALIBRATION_NS),
+            )
+            // Warmup is not practice. No motion before this cue contributes to the range.
+            addCalibrationSample(timestamp, angle)
+            return
+        }
         if (timestamp >= calibrationEndsNs) {
             finishCalibration()
         } else {
@@ -213,17 +224,10 @@ class PullUpExperiment {
             return
         }
 
-        lastUsableCalibrationNs = timestamp
         rawCalibrationAngles += angle
         if (rawCalibrationAngles.size > MEDIAN_WINDOW) rawCalibrationAngles.removeAt(0)
         if (rawCalibrationAngles.size == MEDIAN_WINDOW) {
             filteredCalibrationSamples += FilteredSample(timestamp, median(rawCalibrationAngles))
-            if (currentState.phase == CyclePhase.UNCERTAIN) {
-                currentState = currentState.copy(
-                    phase = CyclePhase.WAITING,
-                    message = "Tracking recovered; capture a full practice cycle in the remaining time",
-                )
-            }
         }
     }
 
@@ -235,16 +239,20 @@ class PullUpExperiment {
         // combine pre-gap and post-gap angles. Three new usable samples warm it up again.
         rawCalibrationAngles.clear()
         filteredCalibrationSamples.clear()
+        reacquisitionStartNs = null
         val side = if (currentState.side == ArmSide.LEFT) "Left" else "Right"
         val reason = when (inputIssue) {
             ExperimentInputIssue.WRIST_NOT_ABOVE_SHOULDER -> "$side wrist position is inconsistent"
             ExperimentInputIssue.WRIST_UNAVAILABLE -> "$side wrist is not clearly tracked"
             ExperimentInputIssue.ELBOW_UNAVAILABLE -> "$side elbow is not clearly tracked"
-            else -> "$side arm confidence is insufficient"
+            ExperimentInputIssue.CONFIDENCE_UNAVAILABLE -> "$side arm confidence is insufficient"
+            else -> "$side arm tracking was interrupted"
         }
         currentState = currentState.copy(
             phase = CyclePhase.UNCERTAIN,
-            message = "$reason; reacquiring tracking",
+            calibrationEndsNs = null,
+            countdownEndsNs = null,
+            message = "$reason. Practice paused; hold that arm in view. A fresh practice window starts automatically when tracking is stable",
         )
     }
 
@@ -282,7 +290,7 @@ class PullUpExperiment {
     }
 
     private fun failCalibration(message: String, reason: CalibrationFailure) {
-        lastUsableCalibrationNs = null
+        reacquisitionStartNs = null
         rawCalibrationAngles.clear()
         filteredCalibrationSamples.clear()
         segmenter = Segmenter()
@@ -317,7 +325,10 @@ class PullUpExperiment {
 
     private fun invalidateSampleIfNeeded() {
         when (currentState.stage) {
-            ExperimentStage.CALIBRATING -> failCalibration("Calibration received an unusable sample; please retry",CalibrationFailure.INPUT_UNUSABLE)
+            ExperimentStage.CALIBRATING -> {
+                if (inputIssue == ExperimentInputIssue.STALE_SAMPLE) recoverCalibrationLandmarks()
+                else failCalibration("Calibration received an unusable sample; please retry",CalibrationFailure.INPUT_UNUSABLE)
+            }
             ExperimentStage.COUNTING -> {
                 segmenter.resetPending()
                 syncCountingState()

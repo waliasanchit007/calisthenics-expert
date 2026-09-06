@@ -51,7 +51,7 @@ internal class ViewerMovementCoordinator {
             if (observation.capturedNs < previous) {
                 feedStatus = MovementFeedStatus.BACKWARDS
                 measurements = null
-                experiment.onTrackingGap()
+                experiment.onBackwardsTimestamp()
             }
             return
         }

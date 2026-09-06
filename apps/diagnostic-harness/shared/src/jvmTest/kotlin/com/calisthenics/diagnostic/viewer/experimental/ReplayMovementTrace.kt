@@ -225,8 +225,8 @@ object ReplayMovementTrace {
                 ReplayTraceEvent.SAMPLE -> when (row.feed) {
                     ReplayTraceFeed.FRESH -> experiment.onSample(row.measurements(), row.decisionNs)
                     ReplayTraceFeed.NO_POSE,
-                    ReplayTraceFeed.RESULT_TIMEOUT,
-                    ReplayTraceFeed.BACKWARDS -> experiment.onTrackingGap()
+                    ReplayTraceFeed.RESULT_TIMEOUT -> experiment.onTrackingGap()
+                    ReplayTraceFeed.BACKWARDS -> experiment.onBackwardsTimestamp()
                     ReplayTraceFeed.WAITING,
                     ReplayTraceFeed.DUPLICATE -> Unit
                 }

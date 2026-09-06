@@ -43,21 +43,37 @@ class ViewerMovementCoordinatorTest {
         assertEquals(ExperimentStage.CALIBRATING,coordinator.experiment.state.stage)
         // Accepted capture gap <250ms and result age <250ms imply arrival <500ms.
         coordinator.update(null,5_500_000_000)
-        assertEquals(ExperimentStage.ERROR,coordinator.experiment.state.stage)
+        assertEquals(MovementFeedStatus.RESULT_TIMEOUT, coordinator.feedStatus)
+        assertEquals(ExperimentStage.CALIBRATING,coordinator.experiment.state.stage)
+        assertNull(coordinator.experiment.state.calibrationEndsNs)
         assertNull(coordinator.experiment.state.range)
+        // Expiry still discards practice; setup alone resumes on three fresh observations.
+        for (ms in listOf(5_600L,5_700L,5_800L)) coordinator.update(
+            raisedObservation(ms * 1_000_000), (ms + 180) * 1_000_000)
+        assertEquals(15_800_000_000L, coordinator.experiment.state.calibrationEndsNs)
     }
 
-    @Test fun actualNoPoseResultStillCancelsCalibrationImmediately() {
+    @Test fun actualNoPoseResultPausesCalibrationImmediately() {
         val coordinator = calibratingCoordinator()
         coordinator.update(raisedObservation(5_120_000_000).copy(posePresent=false,landmarks=emptyList()),5_200_000_000)
-        assertEquals(ExperimentStage.ERROR,coordinator.experiment.state.stage)
+        assertEquals(ExperimentStage.CALIBRATING,coordinator.experiment.state.stage)
+        assertNull(coordinator.experiment.state.calibrationEndsNs)
         assertNull(coordinator.measurements)
     }
 
-    @Test fun actualCaptureGapStillCancelsCalibrationEvenWhenResultIsFresh() {
+    @Test fun actualCaptureGapDiscardsPracticeEvenWhenResultIsFresh() {
         val coordinator = calibratingCoordinator()
         coordinator.update(raisedObservation(5_250_000_000),5_400_000_000)
-        assertEquals(ExperimentStage.ERROR,coordinator.experiment.state.stage)
+        assertEquals(ExperimentStage.CALIBRATING,coordinator.experiment.state.stage)
+        assertNull(coordinator.experiment.state.calibrationEndsNs)
+        assertNull(coordinator.experiment.state.range)
+    }
+
+    @Test fun backwardsCaptureIsStillTerminalRatherThanRecoverableSetupLoss() {
+        val coordinator = calibratingCoordinator()
+        coordinator.update(raisedObservation(4_990_000_000),5_180_000_000)
+        assertEquals(MovementFeedStatus.BACKWARDS, coordinator.feedStatus)
+        assertEquals(ExperimentStage.ERROR, coordinator.experiment.state.stage)
         assertNull(coordinator.experiment.state.range)
     }
 

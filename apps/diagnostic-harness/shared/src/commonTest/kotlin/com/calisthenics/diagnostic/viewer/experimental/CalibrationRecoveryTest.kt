@@ -20,8 +20,8 @@ class CalibrationRecoveryTest {
         feed(it, 5_000)
     }
 
-    private fun finish(experiment: PullUpExperiment, fromMs: Long = 5_300, cycle: Boolean = true) {
-        for (ms in fromMs..15_000L step 100) {
+    private fun finish(experiment: PullUpExperiment, fromMs: Long = 5_300, cycle: Boolean = true, untilMs: Long = 15_000) {
+        for (ms in fromMs..untilMs step 100) {
             val angle = if (!cycle) 160.0 else when (ms) {
                 in 6_000..6_400 -> 100.0
                 in 6_500..7_000 -> 40.0
@@ -42,7 +42,7 @@ class CalibrationRecoveryTest {
             experiment.onSample(glitch, glitch.capturedNs)
             assertEquals(ExperimentStage.CALIBRATING, experiment.state.stage)
             assertEquals(CyclePhase.UNCERTAIN, experiment.state.phase)
-            assertEquals(15_000_000_000L, experiment.state.calibrationEndsNs)
+            assertNull(experiment.state.calibrationEndsNs)
             assertNull(experiment.state.failure)
             assertNull(experiment.state.range)
             feed(experiment, 5_300)
@@ -51,7 +51,8 @@ class CalibrationRecoveryTest {
             assertEquals(CyclePhase.UNCERTAIN, experiment.state.phase)
             feed(experiment, 5_500)
             assertEquals(CyclePhase.WAITING, experiment.state.phase)
-            finish(experiment, fromMs = 5_600)
+            assertEquals(15_500_000_000L, experiment.state.calibrationEndsNs)
+            finish(experiment, fromMs = 5_600, untilMs = 15_500)
             assertEquals(ExperimentStage.READY, experiment.state.stage)
             assertEquals(ObservedRange(ArmSide.LEFT, 40.0, 160.0), experiment.state.range)
             assertEquals(0, experiment.state.candidateCycles)
@@ -69,7 +70,7 @@ class CalibrationRecoveryTest {
         val glitch = input(7_100, angle = 0.0, wrist = -.1)
         experiment.onSample(glitch, glitch.capturedNs)
         assertEquals(ExperimentStage.CALIBRATING, experiment.state.stage)
-        finish(experiment, fromMs = 7_200, cycle = false)
+        finish(experiment, fromMs = 7_200, cycle = false, untilMs = 17_400)
         assertEquals(ExperimentStage.ERROR, experiment.state.stage)
         assertNull(experiment.state.range)
         assertEquals(0, experiment.state.candidateCycles)
@@ -99,7 +100,7 @@ class CalibrationRecoveryTest {
         assertEquals(0, experiment.state.candidateCycles)
     }
 
-    @Test fun recoveryBudgetUsesLastUsableCaptureNotTheStreamOfRejectedFrames() {
+    @Test fun rejectedFramesCannotStartANewPracticeWindow() {
         val experiment = started()
         for (ms in listOf(5_100L, 5_200L)) {
             val bad = input(ms, wrist = -.1)
@@ -108,25 +109,26 @@ class CalibrationRecoveryTest {
         }
         val bad = input(5_250, wrist = -.1)
         experiment.onSample(bad, bad.capturedNs)
-        assertEquals(ExperimentStage.ERROR, experiment.state.stage)
+        assertEquals(ExperimentStage.CALIBRATING, experiment.state.stage)
+        assertNull(experiment.state.calibrationEndsNs)
         assertNull(experiment.state.range)
     }
 
-    @Test fun recoveredFrameMustArriveInsideExistingCaptureGapBudget() {
+    @Test fun recoveryBeyondTheCountingGapStillRequiresFreshWarmup() {
         for (delayMs in listOf(249L, 250L)) {
             val experiment = started()
             val bad = input(5_100, wrist = -.1)
             experiment.onSample(bad, bad.capturedNs)
-            // Duplicates are not new evidence and cannot renew the budget.
+            // Duplicates are not new evidence and cannot complete warmup.
             experiment.onSample(bad, bad.capturedNs + 100_000_000L)
             feed(experiment, 5_000 + delayMs)
-            assertEquals(if (delayMs == 249L) ExperimentStage.CALIBRATING else ExperimentStage.ERROR,
-                experiment.state.stage, "recovery delay $delayMs")
+            assertEquals(ExperimentStage.CALIBRATING, experiment.state.stage, "recovery delay $delayMs")
+            assertNull(experiment.state.calibrationEndsNs)
             assertNull(experiment.state.range)
         }
     }
 
-    @Test fun confirmedPoseLossAndStaleOrReversedTimeRemainBlockingDuringCalibration() {
+    @Test fun poseLossAndStalenessWaitButReversedTimeStillBlocksCalibration() {
         for (reason in listOf("no_pose", "stale", "backwards")) {
             val experiment = started()
             val bad = input(5_100, wrist = -.1)
@@ -137,7 +139,9 @@ class CalibrationRecoveryTest {
                 "stale" -> experiment.onSample(input(5_200), 5_450_000_000L)
                 else -> experiment.onSample(input(5_050), 5_200_000_000L)
             }
-            assertEquals(ExperimentStage.ERROR, experiment.state.stage, reason)
+            assertEquals(if (reason == "backwards") ExperimentStage.ERROR else ExperimentStage.CALIBRATING,
+                experiment.state.stage, reason)
+            assertNull(experiment.state.calibrationEndsNs)
             assertNull(experiment.state.range)
         }
     }

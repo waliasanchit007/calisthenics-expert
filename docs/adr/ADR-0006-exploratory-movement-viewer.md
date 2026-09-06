@@ -138,7 +138,7 @@ Kotlin analyzer, retain negative synthetic regressions, and report event timing 
 Personal recordings remain outside Git; an improved result on a motivating trace is not held-out
 benchmark evidence. The subsequent guided-UI experiment remains separate.
 
-### Bounded calibration landmark recovery (2026-09-06)
+### Bounded calibration landmark recovery (2026-09-06, superseded below)
 
 The owner approved fixing calibration aborts caused by brief unusable landmark observations.
 This supersedes immediate calibration failure for rejected arm geometry/confidence only. A
@@ -163,6 +163,35 @@ limit. No timer or display-held pose can finish calibration. Stop/reset/new cali
 recovery state. Counting thresholds, side selection, model, privacy and formal study gates are
 unchanged. Verify rejected-input recovery and no stitching across gaps with synthetic regressions
 and exact private trace replay; do not relabel replay results as prospective movement accuracy.
+
+### Separate setup reacquisition from counting continuity (2026-09-06)
+
+The owner approved this correction after prospective self-test feedback showed that the previous
+250 ms terminal calibration recovery budget still aborted otherwise usable setup. That cutoff
+protects motion continuity, not the amount of time an operator may need to regain arm tracking.
+This amendment supersedes the recovery deadline and fixed post-loss practice window above.
+
+During calibration, rejected landmarks, no-pose/timeout, stale observations and capture gaps first
+offer any already complete accepted practice prefix for explicit confirmation using the existing
+completion validator. Otherwise discard the entire unfinished practice and median, set UNCERTAIN,
+and clear the practice deadline. No missing motion is interpolated or joined across the gap.
+Invalid/negative or backwards timestamps remain terminal errors, rather than resetting the clock.
+
+Reacquisition requires at least three distinct fresh, usable, ordered selected-arm observations
+spanning the existing 120 ms endpoint dwell, with every inter-capture gap below 250 ms. Rejection
+or a gap resets warmup; duplicate frames cannot advance it. Warmup stores at most three angles and
+one starting timestamp. Once stable tracking returns, announce a NEW full practice and start one
+fresh 10-second window. Warmup motion is excluded from practice; the final warmup frame seeds the
+new median. Subsequent good frames do not renew the deadline. Waiting itself has no timeout and
+accumulates no practice; reset/stop remains available. A continuously tracked but incomplete practice
+still fails the existing range/full-cycle checks at its deadline.
+
+The UI exposes the paused state without a countdown and permits an explicit arm change; it never
+changes sides automatically. The same camera/model/confidence/freshness rules and counting gap
+policy remain intact. A valid practice still requires operator confirmation and counts zero reps.
+Verify both setup recovery and no-stitching behavior, plus unchanged successful counting, using
+synthetic tests and private exact Kotlin replay. Replay is development evidence, not a prospective
+accuracy claim. This is a bounded calibration correction, not a formal study or contract release.
 
 ADR-0005's formal study and
 participant gates remain intact. This software policy does not itself grant an individual human

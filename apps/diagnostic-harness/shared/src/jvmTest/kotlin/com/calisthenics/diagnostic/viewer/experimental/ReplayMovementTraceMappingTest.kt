@@ -44,12 +44,27 @@ class ReplayMovementTraceMappingTest {
 
         val result = ReplayMovementTrace.replay(ReplayTraceParser.parse(rows.asSequence()))
 
-        assertEquals(ExperimentStage.ERROR, result.finalState.stage)
-        assertEquals(CalibrationFailure.TRACKING_LOST, result.finalState.failure)
+        assertEquals(ExperimentStage.CALIBRATING, result.finalState.stage)
+        assertEquals(CyclePhase.UNCERTAIN, result.finalState.phase)
+        assertNull(result.finalState.calibrationEndsNs)
+        assertNull(result.finalState.failure)
         assertEquals(ExperimentInputIssue.TRACKING_GAP, result.finalIssue)
         assertEquals(ExperimentStage.COUNTDOWN, result.transitions[0].stage)
         assertEquals(ExperimentStage.CALIBRATING, result.transitions[1].stage)
-        assertEquals(ExperimentStage.ERROR, result.transitions.last().stage)
+        assertEquals(CyclePhase.UNCERTAIN, result.transitions.last().phase)
+    }
+
+    @Test fun backwardsFeedIsNotReclassifiedAsRecoverableTrackingLoss() {
+        val rows = listOf(
+            row(event = "CALIBRATE", side = "LEFT", decisionNs = 0),
+            row(seq = 1, feed = "FRESH", captureNs = 5_000_000_000, decisionNs = 5_000_000_000,
+                leftElbow = 160.0, leftWrist = .4, leftConfidence = .9),
+            row(seq = 2, feed = "BACKWARDS"),
+        )
+        val result = ReplayMovementTrace.replay(ReplayTraceParser.parse(rows.asSequence()))
+        assertEquals(ExperimentStage.ERROR, result.finalState.stage)
+        assertEquals(CalibrationFailure.TIMESTAMP_REVERSED, result.finalState.failure)
+        assertEquals(ExperimentInputIssue.BACKWARDS_TIMESTAMP, result.finalIssue)
     }
 
     @Test

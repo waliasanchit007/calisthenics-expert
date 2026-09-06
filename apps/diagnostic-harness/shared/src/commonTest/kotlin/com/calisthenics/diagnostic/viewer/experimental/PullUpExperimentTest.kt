@@ -416,14 +416,15 @@ class PullUpExperimentTest {
     }
 
     @Test
-    fun calibrationInterSampleGapFailsBeforeWindowFinalization() {
+    fun calibrationInterSampleGapDiscardsIncompletePracticeBeforeWindowFinalization() {
         val experiment = PullUpExperiment()
         experiment.startCalibration(ArmSide.LEFT, 0)
         experiment.onSample(sample(countdownEnd, leftAngle = 160.0), countdownEnd)
         experiment.onSample(sample(countdownEnd + 200 * nsPerMs, leftAngle = 160.0), countdownEnd + 200 * nsPerMs)
         experiment.onSample(sample(calibrationEnd, leftAngle = 160.0), calibrationEnd)
 
-        assertEquals(ExperimentStage.ERROR, experiment.state.stage)
+        assertEquals(ExperimentStage.CALIBRATING, experiment.state.stage)
+        assertNull(experiment.state.calibrationEndsNs)
         assertNull(experiment.state.range)
     }
 
