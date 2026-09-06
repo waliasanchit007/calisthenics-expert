@@ -8,6 +8,7 @@ enum class ArmSide { LEFT, RIGHT }
 enum class ExperimentStage { IDLE, COUNTDOWN, CALIBRATING, READY, COUNTING, ERROR }
 
 enum class CyclePhase { WAITING, EXTENDED, FLEXING, FLEXED, EXTENDING, UNCERTAIN }
+enum class CycleOutcome { COUNTED, TOP_NOT_CONFIRMED, TRACKING_INTERRUPTED }
 
 enum class ExperimentInputIssue {
     INVALID_TIMESTAMP, DUPLICATE_TIMESTAMP, BACKWARDS_TIMESTAMP, CAPTURE_GAP, STALE_SAMPLE,
@@ -29,6 +30,7 @@ data class PullUpExperimentState(
     val countdownEndsNs: Long? = null,
     val calibrationEndsNs: Long? = null,
     val failure: CalibrationFailure? = null,
+    val lastCycleOutcome: CycleOutcome? = null,
 )
 
 class PullUpExperiment {
@@ -60,7 +62,7 @@ class PullUpExperiment {
 
     fun confirmCalibration() {
         if (currentState.stage != ExperimentStage.READY) return
-        segmenter = Segmenter()
+        segmenter = Segmenter(allowBriefTopReversal = true)
         currentState = currentState.copy(
             stage = ExperimentStage.COUNTING,
             phase = CyclePhase.WAITING,
@@ -287,26 +289,39 @@ class PullUpExperiment {
         currentState = currentState.copy(
             phase = segmenter.phase,
             candidateCycles = segmenter.cycleCount,
+            lastCycleOutcome = segmenter.lastOutcome,
             message = if (segmenter.phase == CyclePhase.UNCERTAIN) {
                 "Tracking uncertain; hold extended position to rearm"
             } else {
-                "Counting"
+                when (segmenter.lastOutcome) {
+                    CycleOutcome.COUNTED -> "Last candidate cycle: counted"
+                    CycleOutcome.TOP_NOT_CONFIRMED -> "Last attempt not counted: top position was not confirmed"
+                    CycleOutcome.TRACKING_INTERRUPTED -> "Last attempt not counted: tracking interrupted the cycle"
+                    null -> "Counting"
+                }
             },
         )
     }
 
-    private class Segmenter {
+    private class Segmenter(private val allowBriefTopReversal: Boolean = false) {
         var phase: CyclePhase = CyclePhase.WAITING
             private set
         var cycleCount: Int = 0
+            private set
+        var lastOutcome: CycleOutcome? = null
             private set
         private var lastTimestampNs: Long? = null
         private var dwellBand: Band? = null
         private var dwellStartNs: Long = 0L
         private var dwellSamples: Int = 0
+        private val briefTop = BriefTopReversal()
         fun resetPending() {
+            if (phase == CyclePhase.FLEXING || phase == CyclePhase.FLEXED || phase == CyclePhase.EXTENDING) {
+                lastOutcome = CycleOutcome.TRACKING_INTERRUPTED
+            }
             phase = CyclePhase.UNCERTAIN
             clearDwell()
+            briefTop.reset()
             lastTimestampNs = null
         }
 
@@ -316,6 +331,19 @@ class PullUpExperiment {
             lastTimestampNs = timestampNs
 
             val band = bandFor(angle, range)
+            // A short top is not a fabricated hold. Require two decreasing MIDDLE samples,
+            // two consecutive LOW samples, then two increasing MIDDLE samples. Only then is
+            // descent supported. Counting still requires the existing extended-position dwell.
+            // Calibration keeps its original median-filtered, hold-based acceptance.
+            if (allowBriefTopReversal && (phase == CyclePhase.EXTENDED || phase == CyclePhase.FLEXING)) {
+                if (briefTop.accept(band, angle)) {
+                    phase = CyclePhase.EXTENDING
+                    clearDwell()
+                    return
+                }
+            } else {
+                briefTop.reset()
+            }
             when (phase) {
                 CyclePhase.WAITING,
                 CyclePhase.UNCERTAIN -> {
@@ -332,7 +360,10 @@ class PullUpExperiment {
                 }
                 CyclePhase.FLEXING -> when (band) {
                     Band.LOW -> if (confirmedDwell(Band.LOW, timestampNs)) phase = CyclePhase.FLEXED
-                    Band.HIGH -> if (confirmedDwell(Band.HIGH, timestampNs)) phase = CyclePhase.EXTENDED
+                    Band.HIGH -> if (confirmedDwell(Band.HIGH, timestampNs)) {
+                        lastOutcome = CycleOutcome.TOP_NOT_CONFIRMED
+                        phase = CyclePhase.EXTENDED
+                    }
                     Band.MIDDLE -> clearDwell()
                 }
                 CyclePhase.FLEXED -> when (band) {
@@ -342,6 +373,7 @@ class PullUpExperiment {
                     }
                     Band.HIGH -> if (confirmedDwell(Band.HIGH, timestampNs)) {
                         cycleCount++
+                        lastOutcome = CycleOutcome.COUNTED
                         phase = CyclePhase.EXTENDED
                     }
                     Band.LOW -> clearDwell()
@@ -349,6 +381,7 @@ class PullUpExperiment {
                 CyclePhase.EXTENDING -> when (band) {
                     Band.HIGH -> if (confirmedDwell(Band.HIGH, timestampNs)) {
                         cycleCount++
+                        lastOutcome = CycleOutcome.COUNTED
                         phase = CyclePhase.EXTENDED
                     }
                     Band.LOW -> {
@@ -383,6 +416,47 @@ class PullUpExperiment {
                 angle >= range.lowDegrees + .8 * spread -> Band.HIGH
                 else -> Band.MIDDLE
             }
+        }
+    }
+
+    private class BriefTopReversal {
+        private enum class Stage { APPROACH, TOP, DEPARTURE }
+        private var stage = Stage.APPROACH
+        private var middleSamples = 0
+        private var topSamples = 0
+        private var previousAngle: Double? = null
+
+        fun reset() {
+            stage = Stage.APPROACH
+            middleSamples = 0
+            topSamples = 0
+            previousAngle = null
+        }
+
+        fun accept(band: Band, angle: Double): Boolean {
+            if (band == Band.HIGH) { reset(); return false }
+            when (stage) {
+                Stage.APPROACH -> if (band == Band.MIDDLE) {
+                    middleSamples = if (previousAngle?.let { angle < it } == true)
+                        (middleSamples + 1).coerceAtMost(2) else 1
+                    previousAngle = angle
+                } else if (middleSamples >= 2) {
+                    stage = Stage.TOP
+                    topSamples = 1
+                } else reset()
+                Stage.TOP -> if (band == Band.LOW) {
+                    topSamples = (topSamples + 1).coerceAtMost(2)
+                } else if (topSamples >= 2) {
+                    stage = Stage.DEPARTURE
+                    previousAngle = angle
+                } else reset()
+                Stage.DEPARTURE -> {
+                    val supported = band == Band.MIDDLE && previousAngle?.let { angle > it } == true
+                    reset()
+                    return supported
+                }
+            }
+            return false
         }
     }
 

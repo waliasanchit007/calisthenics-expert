@@ -131,3 +131,16 @@ tasks.register<JavaExec>("generateSyntheticExport") {
     mainClass.set("com.calisthenics.diagnostic.contract.GenerateSyntheticExportKt")
     args(layout.buildDirectory.dir("conformance/synthetic-session").get().asFile.absolutePath)
 }
+
+val replayTracePath = providers.gradleProperty("tracePath")
+
+tasks.register<JavaExec>("replayMovementTrace") {
+    dependsOn("jvmTestClasses")
+    classpath(jvmTestCompilation.runtimeDependencyFiles, jvmTestCompilation.output.allOutputs)
+    mainClass.set("com.calisthenics.diagnostic.viewer.experimental.ReplayMovementTraceKt")
+    doFirst {
+        val path = replayTracePath.orNull
+            ?: throw GradleException("provide the private trace with -PtracePath=/path/to/trace.jsonl")
+        args("-PtracePath=$path")
+    }
+}

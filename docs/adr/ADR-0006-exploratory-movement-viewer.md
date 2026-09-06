@@ -116,6 +116,28 @@ expiry alone is not a confirmed capture gap while a fresh result can still arriv
 existing capture-gap and freshness limits. No timer or held display pose advances the analyzer.
 State remains transient and clears on stop.
 The concrete experimental parameters and limits are in the movement-measurements-and-cycles plan.
+
+### Brief-top counting experiment (2026-09-06)
+
+The owner approved replay-driven correction of missed candidate cycles. During confirmed counting
+only, retain the hold-based path and additionally admit a supported brief top reversal: two
+consecutive decreasing observations in the calibrated middle band, two consecutive observations in
+the top band, then two consecutive increasing observations in the middle band. A return to the
+extended band with the existing120ms/multiple-sample dwell is still required before incrementing.
+The sequence uses actual fresh sample timestamps, never interpolated poses or invented dwell time.
+All existing confidence, wrist, capture-gap and stale-input gates remain in force; invalid input
+clears pending reversal evidence. Single-frame spikes, unsupported jumps and partial-band excursions
+are not sufficient. Calibration/confirmation behavior is unchanged in this increment.
+Expose the last candidate outcome (counted, top not confirmed, or tracking interrupted) in the
+existing status line and as a typed diagnostic field. Label it as the last attempt, not a verdict
+on the current motion. Reset clears it; do not log arbitrary UI text or call it a form assessment.
+
+This is a prototype hypothesis addressing fixed-dwell sensitivity to sampling, not a definition of
+valid technique or a validated general-purpose counter. Compare exact private traces using the real
+Kotlin analyzer, retain negative synthetic regressions, and report event timing as well as totals.
+Personal recordings remain outside Git; an improved result on a motivating trace is not held-out
+benchmark evidence. The subsequent guided-UI experiment remains separate.
+
 ADR-0005's formal study and
 participant gates remain intact. This software policy does not itself grant an individual human
 capture authorization, upload, retention, merge or tag. Individual authorization stays outside Git.

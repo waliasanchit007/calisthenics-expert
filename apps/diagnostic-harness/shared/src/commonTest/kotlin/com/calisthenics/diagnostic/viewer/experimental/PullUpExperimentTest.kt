@@ -86,6 +86,110 @@ class PullUpExperimentTest {
         experiment.onSample(sample(timestamp, leftAngle = angle, rightAngle = null), timestamp)
     }
 
+    private fun countBriefTrajectory(angles: List<Double>, gapAt: Int? = null): Int {
+        val experiment = experimentWithCalibration()
+        experiment.confirmCalibration()
+        feedLeft(experiment, 16_000, 160.0)
+        feedLeft(experiment, 16_200, 160.0)
+        angles.forEachIndexed { index, angle ->
+            if (index == gapAt) experiment.onTrackingGap()
+            feedLeft(experiment, 16_300 + index * 100L, angle)
+        }
+        return experiment.state.candidateCycles
+    }
+
+    @Test
+    fun briefTopWithSupportedApproachAndReversalCountsWithoutRequiringATopHold() {
+        // Synthetic trajectory: two LOW samples span100ms, below the old120ms dwell.
+        // Both sides have directional MIDDLE observations; count only after HIGH dwell.
+        assertEquals(1, countBriefTrajectory(
+            listOf(140.0, 110.0, 80.0, 40.0, 42.0, 80.0, 110.0, 140.0, 160.0, 160.0, 160.0),
+        ))
+    }
+
+    @Test
+    fun briefTopDoesNotCountBeforeReturningToExtendedDwell() {
+        assertEquals(0, countBriefTrajectory(listOf(140.0, 110.0, 80.0, 40.0, 42.0, 80.0, 110.0)))
+    }
+
+    @Test
+    fun completedAndRejectedCandidatesExposeAnOutcomeAndResetClearsIt() {
+        val experiment = experimentWithCalibration()
+        experiment.confirmCalibration()
+        feedLeft(experiment, 16_000, 160.0)
+        feedLeft(experiment, 16_200, 160.0)
+        listOf(140.0, 110.0, 80.0, 40.0, 42.0, 80.0, 110.0, 160.0, 160.0, 160.0)
+            .forEachIndexed { i, a -> feedLeft(experiment, 16_300 + i * 100L, a) }
+        assertEquals(CycleOutcome.COUNTED, experiment.state.lastCycleOutcome)
+        listOf(140.0, 110.0, 80.0, 110.0, 160.0, 160.0, 160.0)
+            .forEachIndexed { i, a -> feedLeft(experiment, 17_300 + i * 100L, a) }
+        assertEquals(1, experiment.state.candidateCycles)
+        assertEquals(CycleOutcome.TOP_NOT_CONFIRMED, experiment.state.lastCycleOutcome)
+        feedLeft(experiment, 18_000, 110.0)
+        experiment.onTrackingGap()
+        assertEquals(CycleOutcome.TRACKING_INTERRUPTED, experiment.state.lastCycleOutcome)
+        experiment.reset()
+        assertNull(experiment.state.lastCycleOutcome)
+    }
+
+    @Test
+    fun briefTopEvidenceRejectsSingleFrameSpikesPartialsAndUnsupportedReversals() {
+        val trajectories = listOf(
+            listOf(140.0, 110.0, 80.0, 40.0, 80.0, 110.0, 160.0, 160.0, 160.0), // single LOW
+            listOf(140.0, 110.0, 80.0, 75.0, 80.0, 110.0, 160.0, 160.0, 160.0), // partial
+            listOf(40.0, 42.0, 160.0, 160.0, 160.0), // two-frame jump, no approach/departure
+            listOf(140.0, 40.0, 42.0, 80.0, 110.0, 160.0, 160.0, 160.0), // thin approach
+            listOf(110.0, 140.0, 40.0, 42.0, 80.0, 110.0, 160.0, 160.0, 160.0), // wrong approach direction
+            listOf(140.0, 110.0, 40.0, 42.0, 110.0, 80.0, 160.0, 160.0, 160.0), // wrong departure direction
+        )
+        trajectories.forEach { assertEquals(0, countBriefTrajectory(it), it.toString()) }
+    }
+
+    @Test
+    fun aTrackingGapErasesBriefTopEvidenceAtEveryPartOfTheReversal() {
+        val trajectory = listOf(140.0, 110.0, 80.0, 40.0, 42.0, 80.0, 110.0, 140.0, 160.0, 160.0, 160.0)
+        for (index in 1..8) assertEquals(0, countBriefTrajectory(trajectory, gapAt = index), "gap at$index")
+    }
+
+    @Test
+    fun duplicateLowSampleCannotCompleteBriefTopEvidence() {
+        val experiment = experimentWithCalibration()
+        experiment.confirmCalibration()
+        feedLeft(experiment, 16_000, 160.0)
+        feedLeft(experiment, 16_200, 160.0)
+        feedLeft(experiment, 16_300, 140.0)
+        feedLeft(experiment, 16_400, 110.0)
+        feedLeft(experiment, 16_500, 40.0)
+        feedLeft(experiment, 16_500, 42.0)
+        listOf(80.0, 110.0, 160.0, 160.0, 160.0).forEachIndexed { index, angle ->
+            feedLeft(experiment, 16_600 + index * 100L, angle)
+        }
+        assertEquals(0, experiment.state.candidateCycles)
+    }
+
+    @Test
+    fun unusableOrStaleTopSamplesCannotCompleteBriefTopEvidence() {
+        for (invalid in listOf("confidence", "wrist", "missing", "stale", "backwards", "gap")) {
+            val experiment = experimentWithCalibration()
+            experiment.confirmCalibration()
+            feedLeft(experiment, 16_000, 160.0)
+            feedLeft(experiment, 16_200, 160.0)
+            feedLeft(experiment, 16_300, 140.0)
+            feedLeft(experiment, 16_400, 110.0)
+            feedLeft(experiment, 16_500, 40.0)
+            val timeMs = when (invalid) { "backwards" -> 16_450L; "gap" -> 16_800L; else -> 16_600L }
+            val input = sample(timeMs * nsPerMs,
+                leftAngle = if (invalid == "missing") null else 42.0,
+                leftWrist = if (invalid == "wrist") -.1 else 1.0,
+                leftConfidence = if (invalid == "confidence") .4 else .9)
+            experiment.onSample(input, (timeMs + if (invalid == "stale") 300 else 0) * nsPerMs)
+            listOf(80.0, 110.0, 160.0, 160.0, 160.0).forEachIndexed { index, angle ->
+                feedLeft(experiment, maxOf(timeMs, 16_600L) + 100 + index * 100L, angle)
+            }
+            assertEquals(0, experiment.state.candidateCycles, invalid)
+        }
+    }
+
     @Test
     fun startsIdleWithTheDeclaredDefaults() {
         val experiment = PullUpExperiment()

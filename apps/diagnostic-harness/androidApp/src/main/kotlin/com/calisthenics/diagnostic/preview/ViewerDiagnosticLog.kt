@@ -53,7 +53,7 @@ internal class ViewerDiagnosticLog(
         observation: ViewerObservation? = null,
     ) {
         if (writer.isShutdown) return
-        val signature = listOf(state.stage,state.phase,state.candidateCycles,state.failure,issue,
+        val signature = listOf(state.stage,state.phase,state.candidateCycles,state.failure,state.lastCycleOutcome,issue,
             if (exact) observation?.capturedNs ?: measurements?.capturedNs else null,
             if (exact) feed else null)
         if (event == ViewerDebugEvent.SAMPLE && signature == previousState &&
@@ -86,6 +86,7 @@ internal class ViewerDiagnosticLog(
                         .put("stage",state.stage.name).put("phase",state.phase.name).put("side",state.side.name)
                         .put("failure_code",state.failure?.name ?: JSONObject.NULL)
                         .put("candidate_cycles",state.candidateCycles)
+                        .put("cycle_outcome",state.lastCycleOutcome?.name ?: JSONObject.NULL)
                         .put("range_low",numeric(state.range?.lowDegrees,.5)).put("range_high",numeric(state.range?.highDegrees,.5))
                         .put("left_elbow_deg",numeric(measurements?.left?.elbowDegrees,.5))
                         .put("right_elbow_deg",numeric(measurements?.right?.elbowDegrees,.5))

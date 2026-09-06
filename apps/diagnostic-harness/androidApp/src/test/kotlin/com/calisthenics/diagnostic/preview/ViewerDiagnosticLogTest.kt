@@ -3,6 +3,7 @@ package com.calisthenics.diagnostic.preview
 import com.calisthenics.diagnostic.viewer.ArmMeasurements
 import com.calisthenics.diagnostic.viewer.MovementMeasurements
 import com.calisthenics.diagnostic.viewer.experimental.PullUpExperimentState
+import com.calisthenics.diagnostic.viewer.experimental.CycleOutcome
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -15,6 +16,20 @@ import kotlin.test.*
 @RunWith(RobolectricTestRunner::class)
 @org.robolectric.annotation.Config(sdk = [35])
 class ViewerDiagnosticLogTest {
+    @Test fun cycleOutcomeIsRecordedEvenWhenOnlyTheOutcomeChanges() {
+        val rows = java.util.concurrent.CopyOnWriteArrayList<JSONObject>()
+        val latch = CountDownLatch(2)
+        val logger = ViewerDiagnosticLog("test",0) { rows += JSONObject(it); latch.countDown() }
+        try {
+            logger.record(ViewerDebugEvent.SAMPLE,0,null,PullUpExperimentState(),null,
+                MovementFeedStatus.WAITING,null,0,0,0)
+            logger.record(ViewerDebugEvent.SAMPLE,1,null,
+                PullUpExperimentState(lastCycleOutcome=CycleOutcome.TOP_NOT_CONFIRMED),null,
+                MovementFeedStatus.WAITING,null,0,0,0)
+            assertTrue(latch.await(3,TimeUnit.SECONDS))
+            assertEquals("TOP_NOT_CONFIRMED",rows.last().getString("cycle_outcome"))
+        } finally { logger.close() }
+    }
     @Test fun exactModePreservesTwoFreshInputsInsideRateWindowAndTheirClock() {
         val rows = java.util.concurrent.CopyOnWriteArrayList<JSONObject>()
         val latch = CountDownLatch(2)

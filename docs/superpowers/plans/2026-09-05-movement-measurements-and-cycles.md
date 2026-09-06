@@ -68,6 +68,26 @@ Files: shared/commonMain/.../viewer/experimental/PullUpExperiment.kt, matching c
 
 ## Task3 — Installable experiment
 
+2026-09-06 counting-only amendment: ADR-0006's brief-top experiment adds an alternative to top
+dwell after operator confirmation: decreasing middle-band observations x2, top-band observations
+x2, increasing middle-band observations x2, then the unchanged extended-position dwell. The
+historical hold path and calibration checks above remain intact; the alternative never interpolates
+missing input. This is provisional candidate-cycle logic, not a technique threshold. Private replay
+and synthetic partial/spike/duplicate/stale/gap cases verify this increment separately from guided UX.
+
+Offline feedback replay uses the actual Kotlin analyzer, not a second implementation:
+
+```sh
+cd apps/diagnostic-harness
+./gradlew :shared:replayMovementTrace -PtracePath=/absolute/private/session/trace.jsonl
+```
+
+First validate the bundle with the host collector. Replay accepts only exact v2 single-session,
+contiguous traces; legacy quantized traces and unknown controls are rejected. It emits transitions
+with input row/capture identifiers. Compare increment events, not the final state count: STOP/RESET
+correctly clear the live counter. The runner replays logged measurement inputs and controls; it does
+not rerun pose inference, reproduce screen rendering, certify images, or establish technique truth.
+
 Files: Android preview/MovementViewerActivity.kt and a small preview movement coordinator;
 common UI/MovementViewerScreen.kt and movement panel; targeted Android lifecycle/device tests.
 
