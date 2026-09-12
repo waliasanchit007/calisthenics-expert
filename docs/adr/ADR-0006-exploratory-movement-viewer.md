@@ -69,6 +69,28 @@ disconnect, buffer overwrite, process death or writer overflow; session/sequence
 be checked before treating an interval as complete. Do not clear the entire device log to erase
 this tag. Individual authorization remains outside Git; formal study gates remain unchanged.
 
+A debug build may also start the session from an in-app control, which writes that same private
+marker in-process and grants the same 30 minutes. This adds no exported enable intent, no network
+path and no new authorization: it is the operator, on the device, using the debug build they already
+have adb access to. The window is never extended or renewed automatically; expiry closes the log and
+the operator must press start again. The control shows ACTIVE/EXPIRED/OFF and both bounding
+deadlines -- the marker's 30 minutes and the recorder's own 180 s once a feedback bundle is open --
+because reporting only the longer one lets the status read "on" while nothing is being written.
+Release builds have no such control.
+
+The trace describes whichever engine is actually being fed. When an exploratory movement is
+selected the calibrated pull-up experiment is deliberately not advanced, so logging only its state
+records `PULL_UP`/`IDLE` no matter what the athlete does. Rows therefore carry the selected offline
+movement, its phase, its own rejection reason, its cycle outcome and the projected geometry its
+gates use, and that state participates in duplicate suppression. These remain derived measurements:
+no image, landmark array, path or exception is admitted.
+
+Selecting the front-facing camera is a decision about operator self-visibility. It makes no claim
+about the athlete's viewpoint, which is set by where the phone stands and which way the athlete
+faces. Exploratory engines whose thresholds were frozen from a recorded viewpoint state their
+framing requirement to the operator as an instruction; the lens must never be presented as
+establishing it.
+
 Current developer procedure: the private marker is `no_backup/movement-diagnostics.enabled`;
 the tag is `CalisthenicsTrace`. Enable/read using debug `adb shell run-as` and `adb logcat`, never
 an app-network permission or exported enable intent. Collector limits are 32 MiB and one hour;

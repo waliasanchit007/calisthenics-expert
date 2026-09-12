@@ -61,6 +61,24 @@ internal fun offlineMovementLabel(movement: OfflineMovement): String = when (mov
     OfflineMovement.BACK_LEVER -> "Back lever"
 }
 
+/**
+ * Every exploratory config was frozen from one recorded viewpoint, and none has been checked from
+ * another. So the instruction is shown for all of them: the lens the app opens says nothing about
+ * where the phone is standing, and only where it stands decides what the engine can measure.
+ */
+internal fun offlineMovementFraming(movement: OfflineMovement): String {
+    val apparatus = when (movement) {
+        OfflineMovement.DIP -> "the bars"
+        OfflineMovement.HANGING_KNEE_RAISE, OfflineMovement.TOES_TO_BAR,
+        OfflineMovement.MUSCLE_UP, OfflineMovement.BACK_LEVER -> "the bar"
+        OfflineMovement.HANDSTAND_PUSH_UP, OfflineMovement.HANDSTAND_HOLD -> "your hands and the wall"
+    }
+    return "Place the phone to your side. Keep your full body and $apparatus visible."
+}
+
+/** What the operator is told about the debug session. Expiry is real and never renews itself. */
+enum class DebugSessionState { UNAVAILABLE, OFF, ACTIVE, EXPIRED }
+
 @Composable
 fun MovementViewerScreen(
     state: MovementViewerUiState,
@@ -79,6 +97,9 @@ fun MovementViewerScreen(
     movementPanel: (@Composable () -> Unit)? = null,
     diagnosticsStatus: String? = null,
     onDisableDiagnostics: (() -> Unit)? = null,
+    debugSession: DebugSessionState = DebugSessionState.UNAVAILABLE,
+    debugSessionDetail: String? = null,
+    onStartDebugSession: (() -> Unit)? = null,
     feedbackRecordingEnabled: Boolean = false,
     onDeleteRecordings: (() -> Unit)? = null,
 ) {
@@ -143,6 +164,32 @@ fun MovementViewerScreen(
                 }
                 Text(if(state.active || diagnosticsStatus!=null) recordingLabel else "Private self-test · no uploads",
                     style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.primary)
+                if (debugSession != DebugSessionState.UNAVAILABLE) {
+                    Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,
+                        horizontalArrangement=Arrangement.SpaceBetween) {
+                        Column(Modifier.weight(1f)) {
+                            Text(when (debugSession) {
+                                DebugSessionState.ACTIVE -> "Debug session ACTIVE"
+                                DebugSessionState.EXPIRED -> "Debug session EXPIRED"
+                                else -> "Debug session OFF"
+                            },style=MaterialTheme.typography.labelMedium,
+                                color=if (debugSession == DebugSessionState.ACTIVE)
+                                    MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
+                            debugSessionDetail?.let {
+                                Text(it,style=MaterialTheme.typography.labelSmall)
+                            }
+                        }
+                        if (debugSession == DebugSessionState.ACTIVE) {
+                            onDisableDiagnostics?.let { stop ->
+                                TextButton(onClick=stop) {Text("Stop")}
+                            }
+                        } else {
+                            onStartDebugSession?.let { start ->
+                                TextButton(onClick=start) {Text("Start 30-minute debug session")}
+                            }
+                        }
+                    }
+                }
                 if (!state.active) {
                     val calibrated = state.offlineMovement == null
                     Text("Calibrated to you",style=MaterialTheme.typography.labelMedium)
@@ -180,6 +227,7 @@ fun MovementViewerScreen(
                         }
                     }
                     state.offlineMovement?.let { selected ->
+                        Text(offlineMovementFraming(selected),style=MaterialTheme.typography.bodyMedium)
                         Text(
                             if (selected == OfflineMovement.DIP)
                                 "Counts only. Frozen on a STRAIGHT-BAR dip — on rings this is an untested transfer."

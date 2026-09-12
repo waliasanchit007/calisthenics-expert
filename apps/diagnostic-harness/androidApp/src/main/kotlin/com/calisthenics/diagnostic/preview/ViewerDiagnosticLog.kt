@@ -3,6 +3,7 @@ package com.calisthenics.diagnostic.preview
 import android.util.Log
 import com.calisthenics.diagnostic.viewer.MovementMeasurements
 import com.calisthenics.diagnostic.viewer.experimental.ExperimentInputIssue
+import com.calisthenics.diagnostic.viewer.experimental.OfflineMovementUpdate
 import com.calisthenics.diagnostic.viewer.experimental.PullUpExperimentState
 import java.io.File
 import java.util.UUID
@@ -51,9 +52,11 @@ internal class ViewerDiagnosticLog(
         gapNs: Long?, submitted: Int, completed: Int, pipelineSkipped: Int,
         jointConfidence: ViewerJointConfidence = ViewerJointConfidence(), performance: ViewerPerformance? = null,
         observation: ViewerObservation? = null,
+        offlineMovement: String? = null, offline: OfflineMovementUpdate? = null,
     ) {
         if (writer.isShutdown) return
         val signature = listOf(state.movement,state.stage,state.phase,state.candidateCycles,state.failure,state.lastCycleOutcome,issue,
+            offlineMovement,offline?.phase,offline?.rejection,offline?.completedReps,offline?.cycleOutcome,
             measurements?.left?.trackingIssue, measurements?.right?.trackingIssue,
             if (exact) observation?.capturedNs ?: measurements?.capturedNs else null,
             if (exact) feed else null)
@@ -110,6 +113,19 @@ internal class ViewerDiagnosticLog(
                         .put("available_arm_joints",measurements?.availableArmJoints ?: 0)
                         .put("submitted",submitted).put("completed",completed).put("pipeline_skipped",pipelineSkipped)
                         .put("writer_dropped",drops.get()).put("rate_suppressed",suppressedAtEnqueue)
+                        .put("offline_movement",offlineMovement ?: JSONObject.NULL)
+                        .put("offline_phase",offline?.phase ?: JSONObject.NULL)
+                        .put("offline_reason",offline?.rejection ?: JSONObject.NULL)
+                        .put("offline_cycle_outcome",offline?.cycleOutcome ?: JSONObject.NULL)
+                        .put("offline_reps",offline?.completedReps ?: JSONObject.NULL)
+                        .put("offline_counted",offline?.countedThisFrame ?: JSONObject.NULL)
+                        .put("offline_active_hold_ms",numeric(offline?.activeHoldNs?.div(1_000_000.0)))
+                        .put("offline_completed_hold_ms",numeric(offline?.completedHoldNs?.div(1_000_000.0)))
+                    // Angles quantize at the same 0.5 deg as the pull-up fields; ratios would be
+                    // destroyed by that step, so they follow the height quantum instead.
+                    offline?.metrics?.forEach { (key,value) ->
+                        row.put("off_" + key,numeric(value,if (key.endsWith("_deg")) .5 else .005))
+                    }
                     emit(row.toString())
                 } catch (_: Exception) { drops.incrementAndGet() }
             }

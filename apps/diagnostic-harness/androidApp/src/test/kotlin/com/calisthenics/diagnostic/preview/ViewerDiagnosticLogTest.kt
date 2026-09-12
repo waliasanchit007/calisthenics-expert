@@ -16,6 +16,56 @@ import kotlin.test.*
 @RunWith(RobolectricTestRunner::class)
 @org.robolectric.annotation.Config(sdk = [35])
 class ViewerDiagnosticLogTest {
+    /**
+     * The knee-raise session that produced no usable trace failed here: every row described the
+     * calibrated pull-up experiment, which is deliberately not fed while an offline engine runs, so
+     * the log said PULL_UP/IDLE no matter what the athlete did.
+     */
+    @Test fun offlineEngineStateAndProjectedGeometryReachTheRow() {
+        val rows = java.util.concurrent.CopyOnWriteArrayList<JSONObject>()
+        val latch = CountDownLatch(1)
+        val logger = ViewerDiagnosticLog("test",0,exact=true,emit={ rows += JSONObject(it); latch.countDown() })
+        try {
+            val update = com.calisthenics.diagnostic.viewer.experimental.OfflineMovementUpdate(
+                timestampNs=1_000L,completedReps=2,activeHoldNs=null,completedHoldNs=null,
+                phase="RAISING",rejection=null,countedThisFrame=false,
+                cycleOutcome="SUPPORT_TRAVEL_REJECTED",
+                metrics=mapOf("hip_deg" to 132.5,"support_rise" to .41),
+            )
+            logger.record(ViewerDebugEvent.SAMPLE,0L,null,PullUpExperimentState(),null,
+                MovementFeedStatus.WAITING,null,0,0,0,
+                offlineMovement="HANGING_KNEE_RAISE",offline=update)
+            assertTrue(latch.await(3,TimeUnit.SECONDS))
+            val row = rows.single()
+            assertEquals("HANGING_KNEE_RAISE",row.getString("offline_movement"))
+            assertEquals("RAISING",row.getString("offline_phase"))
+            assertEquals("SUPPORT_TRAVEL_REJECTED",row.getString("offline_cycle_outcome"))
+            assertEquals(2,row.getInt("offline_reps"))
+            assertEquals(132.5,row.getDouble("off_hip_deg"),1e-9)
+            assertEquals(.41,row.getDouble("off_support_rise"),1e-9)
+            assertTrue(row.isNull("offline_reason"))
+        } finally { logger.close() }
+    }
+
+    /** A rejection that changes while pull-up state sits still must not be dropped as a repeat. */
+    @Test fun offlineRejectionChangeSurvivesTheRateSuppressor() {
+        val rows = java.util.concurrent.CopyOnWriteArrayList<JSONObject>()
+        val latch = CountDownLatch(2)
+        val logger = ViewerDiagnosticLog("test",0,exact=true,emit={ rows += JSONObject(it); latch.countDown() })
+        try {
+            val state = PullUpExperimentState()
+            fun update(reason: String?) = com.calisthenics.diagnostic.viewer.experimental.OfflineMovementUpdate(
+                0L,0,null,null,"WAITING",reason,false)
+            // Same instant, same pull-up state: only the offline reason differs.
+            logger.record(ViewerDebugEvent.SAMPLE,0L,null,state,null,MovementFeedStatus.WAITING,null,0,0,0,
+                offlineMovement="HANGING_KNEE_RAISE",offline=update("LOW_CONFIDENCE"))
+            logger.record(ViewerDebugEvent.SAMPLE,1_000_000L,null,state,null,MovementFeedStatus.WAITING,null,0,0,0,
+                offlineMovement="HANGING_KNEE_RAISE",offline=update("MISSING_LANDMARK"))
+            assertTrue(latch.await(3,TimeUnit.SECONDS))
+            assertEquals(listOf("LOW_CONFIDENCE","MISSING_LANDMARK"),rows.map { it.getString("offline_reason") })
+        } finally { logger.close() }
+    }
+
     @Test fun everyExactRowCarriesItsExplicitMovementIdentity() {
         val rows = java.util.concurrent.CopyOnWriteArrayList<JSONObject>()
         val latch = CountDownLatch(2)

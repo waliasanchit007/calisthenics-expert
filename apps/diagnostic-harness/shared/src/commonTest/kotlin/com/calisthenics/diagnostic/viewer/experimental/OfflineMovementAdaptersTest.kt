@@ -21,6 +21,18 @@ class OfflineMovementAdaptersTest {
     /** A full 33-point skeleton, all landmarks present and confident, standing upright. */
     private fun standing(confidence: Double = .9) = (0..32).map { landmark(it, .5, .5, confidence) }
 
+    /** Hanging from an overhead bar, side on, legs down: the config's own lowered endpoint. */
+    private fun hangingSideOn() = standing().map {
+        when (it.index) {
+            16 -> landmark(16, .5, .10)
+            12 -> landmark(12, .5, .30)
+            24 -> landmark(24, .5, .55)
+            26 -> landmark(26, .5, .75)
+            28 -> landmark(28, .5, .95)
+            else -> it
+        }
+    }
+
     @Test
     fun everyOfferedMovementIsConstructibleAndDeclaresItsKind() {
         val expected = mapOf(
@@ -114,6 +126,31 @@ class OfflineMovementAdaptersTest {
                 assertEquals(movement, engine.movement)
             }
         }
+    }
+
+    /**
+     * The frozen knee-raise config sets `raisedKneeMinDegrees = 0.0`, so the knee test is vacuous:
+     * projected knee angle is in 0..180 and `knee >= 0.0` always holds. KNEE_FLEXION_REJECTED is
+     * therefore unreachable under this config, which is why the straight-leg-raise negative (whose
+     * failure was a knee-angle gate) cannot be carried across to explain a bent-knee miss.
+     */
+    @Test
+    fun theFrozenKneeRaiseConfigImposesNoKneeAngleRequirement() {
+        val config = frozenHangingKneeRaiseConfig()
+        assertEquals(.0, config.raisedKneeMinDegrees)
+        // The hip gates, not the knee, are what this config actually discriminates on.
+        assertTrue(config.raisedHipMaxDegrees < config.loweredHipMinDegrees)
+        assertTrue(config.minimumHipCloseDegrees > .0)
+    }
+
+    /** Without projected geometry in the update there is nothing to diagnose a miss from. */
+    @Test
+    fun aMeasuredKneeRaiseFrameReportsTheGeometryItsGatesUse() {
+        val engine = offlineMovementEngine(OfflineMovement.HANGING_KNEE_RAISE)
+        val update = engine.onLandmarks(0L, 720, 1280, hangingSideOn())
+        assertNull(update.rejection)
+        for (key in listOf("hip_deg", "knee_deg", "trunk_elevation_deg", "support_rise", "hanging"))
+            assertTrue(key in update.metrics, "missing $key; got ${update.metrics.keys}")
     }
 
     @Test

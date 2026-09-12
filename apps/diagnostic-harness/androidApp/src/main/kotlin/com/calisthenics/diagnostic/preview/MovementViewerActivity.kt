@@ -19,6 +19,7 @@ import com.calisthenics.diagnostic.ui.MovementViewerScreen
 import com.calisthenics.diagnostic.ui.MovementViewerUiState
 import com.calisthenics.diagnostic.ui.MovementMeasurementsPanel
 import com.calisthenics.diagnostic.ui.MovementPanelState
+import com.calisthenics.diagnostic.ui.DebugSessionState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.Locale
@@ -47,6 +48,10 @@ class MovementViewerActivity : ComponentActivity() {
     private var feedback: ViewerFeedbackBundle? = null
     private var recordingDisabled = false
     private var feedbackMessage by mutableStateOf<String?>(null)
+    internal var debugSession by mutableStateOf(DebugSessionState.UNAVAILABLE)
+        private set
+    internal var debugSessionDetail by mutableStateOf<String?>(null)
+        private set
     private val diagnosticMarker get() = File(noBackupFilesDir,"movement-diagnostics.enabled")
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -58,7 +63,11 @@ class MovementViewerActivity : ComponentActivity() {
             diagnosticLog = ViewerDiagnosticLog(BuildConfig.PROBE_GIT_SHA,nowNs)
             diagnosticsEnabled = true
         }
+        refreshDebugSession()
         setContent {
+            // One second is fine: the status only has to be true enough to trust before a set, and
+            // a faster tick would only make the remaining-time text jitter.
+            LaunchedEffect(Unit) { while (true) { refreshDebugSession(); delay(1_000) } }
             var permission by remember { mutableStateOf(hasCameraPermission()) }
             val requestPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { permission = it }
             LaunchedEffect(controller) {
@@ -128,6 +137,9 @@ class MovementViewerActivity : ComponentActivity() {
                     "Diagnostics ON · local ADB trace includes derived movement measurements, not images/video. " +
                     "Auto-off within 30 min · writer drops ${diagnosticLog?.droppedRows ?: 0}" else null,
                 onDisableDiagnostics = if (diagnosticsEnabled) ({ disableDiagnostics() }) else null,
+                debugSession = debugSession,
+                debugSessionDetail = debugSessionDetail,
+                onStartDebugSession = if (BuildConfig.DEBUG) ({ startDebugSession() }) else null,
                 movementSummary = if (controller == null) null
                 else if (selectedOfflineMovement() != null) {
                     // No practice stage exists for these, so the calibrated wording would be a lie.
@@ -291,9 +303,76 @@ class MovementViewerActivity : ComponentActivity() {
             movementCoordinator.measurements,movementCoordinator.experiment.state,
             movementCoordinator.experiment.inputIssue,movementCoordinator.feedStatus,
             movementCoordinator.captureGapNs,latest?.submitted ?: 0,latest?.completed ?: 0,latest?.skipped ?: 0,
-            scores,latest?.performance,latest?.observation)
+            scores,latest?.performance,latest?.observation,
+            selectedOfflineMovement()?.name,movementCoordinator.offlineUpdate)
         if (expired) {
             logger.close(); diagnosticLog = null; diagnosticsEnabled = false
+            refreshDebugSession()
+        }
+    }
+
+    /**
+     * Operator-initiated, debug-build-only, in-process. It refreshes the same private marker that
+     * `adb run-as` writes and grants the same 30 minutes -- it does not extend the window, add a new
+     * authorization path, or introduce an exported enable intent. Nothing renews itself: when the
+     * window ends, [recordDiagnostic] closes the log, and the only way back is pressing start again.
+     */
+    private fun startDebugSession() {
+        if (!BuildConfig.DEBUG) return
+        val wallNow = System.currentTimeMillis()
+        val marked = runCatching {
+            if (!diagnosticMarker.isFile) diagnosticMarker.createNewFile()
+            diagnosticMarker.setLastModified(wallNow)
+        }.getOrDefault(false)
+        if (!viewerDiagnosticsAuthorized(diagnosticMarker,BuildConfig.DEBUG,wallNow)) {
+            // Say so rather than showing ACTIVE over a marker that was never written.
+            feedbackMessage = "Could not start debug session (marker not writable${if (marked) "" else "; setLastModified failed"})"
+            refreshDebugSession()
+            return
+        }
+        recordingDisabled = false
+        feedbackMessage = null
+        if (controller != null) {
+            // Camera is already running, so take the bundle path: it is the only one that captures
+            // exact (unquantized) rows and the input images that make a trace re-checkable.
+            startFeedback()
+        } else {
+            val nowNs = SystemClock.elapsedRealtimeNanos()
+            diagnosticLog?.close()
+            diagnosticDeadlineNs = nowNs + DIAGNOSTIC_AUTH_MS * 1_000_000L
+            diagnosticLog = ViewerDiagnosticLog(BuildConfig.PROBE_GIT_SHA,nowNs)
+            diagnosticsEnabled = true
+        }
+        refreshDebugSession()
+    }
+
+    /**
+     * Two clocks bound a session and the shorter one wins, so both are shown: the 30-minute marker
+     * authorization, and the recorder's own deadline (3 minutes once a feedback bundle is open).
+     * Reporting only the longer one is how the last session looked live while writing nothing.
+     */
+    private fun refreshDebugSession() {
+        if (!BuildConfig.DEBUG) { debugSession = DebugSessionState.UNAVAILABLE; debugSessionDetail = null; return }
+        val wallNow = System.currentTimeMillis()
+        val authorized = viewerDiagnosticsAuthorized(diagnosticMarker,BuildConfig.DEBUG,wallNow)
+        val logging = diagnosticLog != null && diagnosticsEnabled
+        debugSession = when {
+            logging && authorized -> DebugSessionState.ACTIVE
+            diagnosticMarker.isFile && !authorized -> DebugSessionState.EXPIRED
+            else -> DebugSessionState.OFF
+        }
+        debugSessionDetail = when (debugSession) {
+            DebugSessionState.ACTIVE -> {
+                val authLeftMs = DIAGNOSTIC_AUTH_MS - (wallNow - diagnosticMarker.lastModified())
+                val recLeftMs = (diagnosticDeadlineNs - SystemClock.elapsedRealtimeNanos()) / 1_000_000L
+                val session = feedback?.sessionId?.take(8) ?: "logcat only"
+                "recorder stops in ${recLeftMs.coerceAtLeast(0L) / 1000}s · authorization ends in " +
+                    "${authLeftMs.coerceAtLeast(0L) / 60_000}m · session $session · " +
+                    "${diagnosticLog?.droppedRows ?: 0} dropped"
+            }
+            DebugSessionState.EXPIRED -> "Authorization lapsed. Nothing is being recorded."
+            DebugSessionState.OFF -> feedbackMessage ?: "No trace is being written."
+            DebugSessionState.UNAVAILABLE -> null
         }
     }
 
@@ -303,6 +382,7 @@ class MovementViewerActivity : ComponentActivity() {
         diagnosticLog?.close(); diagnosticLog = null; diagnosticsEnabled = false
         diagnosticMarker.delete()
         recordingDisabled = true
+        refreshDebugSession()
     }
 
     private fun startFeedback() {

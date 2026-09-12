@@ -734,3 +734,72 @@ translation** — they are the same image motion — so no change confined to th
 fix it. The `deform` column shows what a translation-invariant measure would buy (53 → 12), but it is
 not a drop-in replacement: a hold that fails by the body sliding down the wall is a real failure a
 deformation-only measure would stop seeing.
+
+---
+
+## Part 7 — Correction: lens facing is not viewpoint (2026-09-12)
+
+A live knee-raise attempt on the phone counted nothing. I diagnosed it as the Priority 8 negative
+recurring, on the grounds that `MovementViewerController` requests `LENS_FACING_FRONT` while the
+knee-raise config declares `SIDE_VIEW_OVERHEAD_SUPPORT_SELECTED`. **That inference was wrong twice
+over, and neither error is in the record above — both are mine, made on 2026-09-12.**
+
+**1. A camera's lens facing does not establish the athlete's viewpoint.** `LENS_FACING_FRONT`
+selects which physical sensor the app opens. Whether the recording is a front view or a side view of
+the body is decided by where the phone is standing and which way the athlete faces — nothing else.
+A front-facing camera on a phone propped to the athlete's side records a side view. The two senses
+of "front" are unrelated, and I collapsed them. ADR-0006's front-camera decision is about operator
+self-visibility; it carries no claim about viewpoint and never did. **The front camera is kept.**
+
+**2. The Priority 8 mechanism does not transfer to this config.** That negative's dominant cause was
+projected knee angle falling below a **140°** knee gate. The frozen hanging-knee-raise config
+(`C0RXOvy609I-hlr-config-v1.json`) sets `raisedKneeMinDegrees = 0.0`. Since projected knee angle is
+in 0–180°, `knee >= 0.0` always holds: the knee test is **vacuous** and `KNEE_FLEXION_REJECTED` is
+unreachable. This config discriminates on hip angle alone. Evidence from a straight-leg raise, whose
+failure was a knee-angle gate, cannot explain a bent-knee miss under a config with no knee gate.
+`OfflineMovementAdaptersTest.theFrozenKneeRaiseConfigImposesNoKneeAngleRequirement` now pins this.
+
+Worth noting against my own hypothesis: Priority 8's cause (1) records that from the front the hip angle
+*falls to 0.1–5°* at each top through projective degeneracy. Under a hip-only config that is a
+direction toward **spurious passing**, not toward silence. So a frontal view would not obviously
+produce the zero that was observed. The viewpoint hypothesis does not even predict the symptom.
+
+**What actually explains the zero is not yet known, and no threshold should move until it is.** The
+live attempt produced no trace at all (below), so there is no evidence either way. Four candidate
+causes remain open and must be told apart from data, not from reasoning:
+
+| Candidate | What the trace would show |
+| --- | --- |
+| Tracking loss | `offline_reason` = `LOW_CONFIDENCE` / `MISSING_LANDMARK` / `NO_POSE`, or capture gaps |
+| Viewpoint limitation | Frames measured cleanly, but `off_hip_deg` never closing by 45° from its lowered anchor |
+| Configuration mismatch | `off_support_rise` < 0.35 or `off_trunk_elevation_deg` < 55° — i.e. never admitted as hanging at all |
+| Cycle logic | Cycles opening and closing as `SUPPORT_TRAVEL_REJECTED` / `ABANDONED` / `TRACKING_INTERRUPTED` |
+
+### Why there was no trace, and what changed
+
+Two clocks bound a debug session, and only the longer one was ever visible. The 30-minute marker
+authorization had lapsed before the attempt; separately, `startFeedback` sets the recorder's own
+deadline to **180 s**, so even inside a valid authorization the recorder stops after three minutes.
+A status line reporting only the 30-minute window can therefore read "on" while nothing is written.
+
+Changes made (debug builds only, no production behaviour touched):
+
+- **An explicit in-app "Start 30-minute debug session" action**, with ACTIVE / EXPIRED / OFF status
+  and a Stop button, showing **both** deadlines and the session id. It refreshes the same private
+  marker `adb run-as` writes and grants the same 30 minutes. Expiry is preserved and **nothing
+  renews itself**; the only way back is pressing start again.
+- **The diagnostic log now records the offline engine.** It previously logged only
+  `PullUpExperimentState`, which is deliberately not fed while an offline engine runs — so every row
+  said `PULL_UP` / `IDLE` regardless of what the athlete did. This is the same defect as the panel
+  routing bug fixed earlier the same day: I fixed what the screen displayed and left the log alone.
+  Rows now carry `offline_movement`, `offline_phase`, `offline_reason`, `offline_cycle_outcome`,
+  `offline_reps`, and the engine's own projected geometry under `off_*`. Offline state is part of
+  the duplicate-suppression signature, so a rejection that changes while pull-up state sits still is
+  no longer dropped as a repeat.
+- **A framing instruction** on every exploratory movement: *"Place the phone to your side. Keep your
+  full body and the bar visible."* It is shown for all seven, because each config was frozen from
+  one recorded viewpoint and none has been checked from another — including handstand hold, which
+  must not be called view-agnostic without evidence.
+
+Rear-camera selection is a separate, optional usability question. It is **not** a prerequisite for
+side-view testing, and it is not being pursued as one.

@@ -53,6 +53,17 @@ data class OfflineMovementUpdate(
     val phase: String,
     val rejection: String?,
     val countedThisFrame: Boolean,
+    /**
+     * The cycle-logic outcome when a cycle closed on this frame, else null. This is how a rejected
+     * cycle is told apart from one that never opened: [rejection] covers unusable frames, this
+     * covers usable frames the cycle rules threw away.
+     */
+    val cycleOutcome: String? = null,
+    /**
+     * Projected image-plane geometry the engine actually measured this frame, by the engine's own
+     * field names. Non-finite and unmeasured values are absent rather than encoded as a sentinel.
+     */
+    val metrics: Map<String, Double> = emptyMap(),
 )
 
 interface OfflineMovementEngine {
@@ -63,6 +74,13 @@ interface OfflineMovementEngine {
 
 private fun reasonOrNull(name: String) = if (name == "NONE") null else name
 
+/** Drops absent and non-finite measurements: a missing metric means not observed, never zero. */
+private fun metricsOf(vararg pairs: Pair<String, Double?>): Map<String, Double> {
+    val out = LinkedHashMap<String, Double>(pairs.size)
+    for ((key, value) in pairs) if (value != null && value.isFinite()) out[key] = value
+    return out
+}
+
 // ---- repetition adapters -----------------------------------------------------------------------
 
 private class DipAdapter(config: DipConfig) : OfflineMovementEngine {
@@ -71,7 +89,14 @@ private class DipAdapter(config: DipConfig) : OfflineMovementEngine {
     private val engine = DipCycleExperiment(config)
     override fun onLandmarks(timestampNs: Long, width: Int, height: Int, landmarks: List<Landmark>): OfflineMovementUpdate {
         val r = engine.onFrame(DipPoseFrame(timestampNs, width, height, landmarks))
-        return OfflineMovementUpdate(timestampNs, r.count, null, null, r.phase.name, reasonOrNull(r.reason.name), r.counted)
+        return OfflineMovementUpdate(
+            timestampNs, r.count, null, null, r.phase.name, reasonOrNull(r.reason.name), r.counted,
+            metrics = metricsOf(
+                "elbow_deg" to r.elbowDegrees,
+                "shoulder_above_wrist" to r.shoulderAboveWristFraction,
+                "torso_tilt_deg" to r.torsoTiltDegrees,
+            ),
+        )
     }
 }
 
@@ -81,7 +106,13 @@ private class ToesToBarAdapter(config: ToesToBarConfig) : OfflineMovementEngine 
     private val engine = ToesToBarExperiment(config)
     override fun onLandmarks(timestampNs: Long, width: Int, height: Int, landmarks: List<Landmark>): OfflineMovementUpdate {
         val r = engine.onFrame(ToesToBarPoseFrame(timestampNs, width, height, landmarks))
-        return OfflineMovementUpdate(timestampNs, r.count, null, null, r.phase.name, reasonOrNull(r.reason.name), r.counted)
+        return OfflineMovementUpdate(
+            timestampNs, r.count, null, null, r.phase.name, reasonOrNull(r.reason.name), r.counted,
+            metrics = metricsOf(
+                "hands_above_shoulders" to r.handsAboveShoulders,
+                "feet_below_hands" to r.feetBelowHands,
+            ),
+        )
     }
 }
 
@@ -91,7 +122,19 @@ private class HangingLegRaiseAdapter(config: HangingLegRaiseConfig) : OfflineMov
     private val engine = HangingLegRaiseExperiment(config)
     override fun onLandmarks(timestampNs: Long, width: Int, height: Int, landmarks: List<Landmark>): OfflineMovementUpdate {
         val r = engine.onFrame(HangingLegRaisePoseFrame(timestampNs, width, height, landmarks))
-        return OfflineMovementUpdate(timestampNs, r.count, null, null, r.phase.name, reasonOrNull(r.reason.name), r.counted)
+        return OfflineMovementUpdate(
+            timestampNs, r.count, null, null, r.phase.name, reasonOrNull(r.reason.name), r.counted,
+            cycleOutcome = r.closedCycle?.outcome?.name,
+            metrics = metricsOf(
+                "hip_deg" to r.hipDegrees,
+                "knee_deg" to r.kneeDegrees,
+                "trunk_elevation_deg" to r.trunkElevationDegrees,
+                "support_rise" to r.supportRiseRatio,
+                "hanging" to if (r.hanging) 1.0 else 0.0,
+                "cycle_hip_close_deg" to r.closedCycle?.observedHipCloseDegrees,
+                "cycle_min_hip_deg" to r.closedCycle?.minimumHipDegrees,
+            ),
+        )
     }
 }
 
@@ -101,7 +144,15 @@ private class MuscleUpAdapter(config: MuscleUpConfig) : OfflineMovementEngine {
     private val engine = MuscleUpCycleExperiment(config)
     override fun onLandmarks(timestampNs: Long, width: Int, height: Int, landmarks: List<Landmark>): OfflineMovementUpdate {
         val r = engine.onFrame(MuscleUpPoseFrame(timestampNs, width, height, landmarks))
-        return OfflineMovementUpdate(timestampNs, r.count, null, null, r.phase.name, reasonOrNull(r.reason.name), false)
+        return OfflineMovementUpdate(
+            timestampNs, r.count, null, null, r.phase.name, reasonOrNull(r.reason.name), false,
+            metrics = metricsOf(
+                "shoulder_above_wrist" to r.shoulderAboveWristFraction,
+                "body_scale_ratio" to r.bodyScaleRatio,
+                "grip_drift_torso_lengths" to r.gripDriftTorsoLengths,
+                "unresolved_excursions" to r.unresolvedExcursions.toDouble(),
+            ),
+        )
     }
 }
 
@@ -111,7 +162,14 @@ private class HandstandPushUpAdapter(config: HspuConfig) : OfflineMovementEngine
     private val engine = HandstandPushUpExperiment(config)
     override fun onLandmarks(timestampNs: Long, width: Int, height: Int, landmarks: List<Landmark>): OfflineMovementUpdate {
         val r = engine.onFrame(HspuPoseFrame(timestampNs, width, height, landmarks))
-        return OfflineMovementUpdate(timestampNs, r.count, null, null, r.phase.name, reasonOrNull(r.reason.name), r.counted)
+        return OfflineMovementUpdate(
+            timestampNs, r.count, null, null, r.phase.name, reasonOrNull(r.reason.name), r.counted,
+            metrics = metricsOf(
+                "hip_above_shoulder" to r.hipAboveShoulderFraction,
+                "shoulder_to_wrist_span" to r.shoulderToWristSpan,
+                "span_ratio" to r.spanRatio,
+            ),
+        )
     }
 }
 
@@ -137,6 +195,10 @@ private class HandstandHoldAdapter(config: HandstandHoldConfig) : OfflineMovemen
             timestampNs, 0, active, completedNs,
             if (r.holding) "HOLDING" else "NOT_HOLDING",
             reasonOrNull(r.reason.name), r.completedInterval != null,
+            metrics = metricsOf(
+                "hip_above_shoulder" to r.hipAboveShoulderFraction,
+                "ankle_above_hip" to r.ankleAboveHipFraction,
+            ),
         )
     }
 }
@@ -170,9 +232,31 @@ private class BackLeverAdapter(
         val rejection = if (!shape.admitted) shape.reason.name else reasonOrNull(r.reason.name)
         return OfflineMovementUpdate(
             timestampNs, 0, active, completedNs, r.state.name, rejection, r.closedInterval != null,
+            metrics = metricsOf(
+                "admitted" to if (shape.admitted) 1.0 else 0.0,
+                "posture_hip_deg" to shape.hipDegrees,
+                "posture_knee_deg" to shape.kneeDegrees,
+                "posture_trunk_from_vertical_deg" to shape.trunkDegreesFromVertical,
+                "centroid_speed" to r.centroidSpeedTorsoLengthsPerSecond,
+                "max_torso_point_speed" to r.maxTorsoPointSpeedTorsoLengthsPerSecond,
+            ),
         )
     }
 }
+
+/**
+ * `C0RXOvy609I-hlr-config-v1.json`, transcribed verbatim. Named so that what it does and does not
+ * require can be asserted directly: `raisedKneeMinDegrees` is 0.0, so the knee test admits every
+ * projected knee angle and KNEE_FLEXION_REJECTED is unreachable. This config discriminates on the
+ * hip angle alone.
+ */
+internal fun frozenHangingKneeRaiseConfig(side: ArmSide = ArmSide.RIGHT) = HangingLegRaiseConfig(
+    mode = HangingLegRaiseMode.SIDE_VIEW_OVERHEAD_SUPPORT_SELECTED, side = side,
+    loweredHipMinDegrees = 150.0, raisedHipMaxDegrees = 110.0, minimumHipCloseDegrees = 45.0,
+    raisedKneeMinDegrees = .0, hangingTrunkMinDegrees = 55.0, minimumSupportRiseRatio = .35,
+    maximumSupportTravelRatio = .3, minimumConfidence = .5, maximumGapNs = 100_000_000L,
+    minimumEndpointSamples = 3,
+)
 
 // ---- frozen configuration ----------------------------------------------------------------------
 
@@ -212,13 +296,7 @@ fun offlineMovementEngine(
         ),
     )
     OfflineMovement.HANGING_KNEE_RAISE -> HangingLegRaiseAdapter(
-        HangingLegRaiseConfig(
-            mode = HangingLegRaiseMode.SIDE_VIEW_OVERHEAD_SUPPORT_SELECTED, side = side,
-            loweredHipMinDegrees = 150.0, raisedHipMaxDegrees = 110.0, minimumHipCloseDegrees = 45.0,
-            raisedKneeMinDegrees = .0, hangingTrunkMinDegrees = 55.0, minimumSupportRiseRatio = .35,
-            maximumSupportTravelRatio = .3, minimumConfidence = .5, maximumGapNs = 100_000_000L,
-            minimumEndpointSamples = 3,
-        ),
+        frozenHangingKneeRaiseConfig(side),
     )
     // Two frozen configs, differing only in grip drift: rings swing, a bar does not.
     //   BAR_KIPPING  muscle-up-20260911/config-bar-kipping-right-clip-v3.json  (drift 1.0)
