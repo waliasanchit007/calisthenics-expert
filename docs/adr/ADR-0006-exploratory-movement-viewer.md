@@ -267,6 +267,25 @@ names for compatibility but use bottom/flexed-endpoint wording for push-up opera
 No extra recording/upload privilege, automatic camera start, release or study admission is granted.
 See the 2026-09-06 push-up design/plan for tests and the pending real-movement check.
 
+### Permissioned offline movement feedback (2026-09-07)
+
+The owner approved a small offline squat-first learning loop after resolving the push-up
+self-test. Permissioned prerecorded clips may be processed locally as external reference inputs,
+not recruited app users or formal study participants. Source/license evidence, video/model hashes,
+actual presentation timestamps, pose cache, explicit prototype configuration, annotations and
+predictions remain separately identifiable. Media, landmarks, personal data and local reports stay
+outside every Git worktree. No upload, redistribution, release, new camera capture or hardware claim
+is implied. Existing single-operator live self-test rules remain unchanged.
+
+Use common Kotlin logic for replay, without rewriting the counter in Python. Desktop MediaPipe
+is a reference extractor and is not asserted equivalent to the deployed Android pipeline. Start
+with manually selected candidate squat cycles; no automatic recognition or form/strict-rep verdict.
+Prototype parameters are explicit hypotheses, not stable anatomical thresholds. Labels derived
+from assistant visual inspection are labelled accordingly, never coach/human gold ground truth.
+Annotations are authored independently before viewing predictions. Development and held-out
+source/person/session groups must not overlap; unknown person identity prevents a person-independent
+claim. Replaying development footage after a fix is regression evidence, not held-out accuracy.
+
 ADR-0005's formal study and
 participant gates remain intact. This software policy does not itself grant an individual human
 capture authorization, upload, retention, merge or tag. Individual authorization stays outside Git.
@@ -275,3 +294,23 @@ Direct Codex work and bounded Claude consultation replace Buzz as a prerequisite
 Preserve the existing branch and worktree; new viewer work branches from a7f2015 and inherits its
 unmerged adapter history. Integration must account for those dependencies rather than claiming a
 small independent main-based change.
+
+### Offline per-side practice-range experiment (2026-09-07)
+
+The owner approved continuing the calibration correction after the recorded baseline failed
+on two author-labelled squat sets. Keep this optional and offline; the phone app is unchanged.
+Use an explicitly marked practice interval to fit each leg's projected range with the same
+common Kotlin geometry. Freeze thresholds before later evaluation; practice is uncounted.
+Require supported bilateral ranges and complete, continuously observed endpoints. Requested
+calibration that lacks this evidence fails explicitly rather than silently choosing defaults.
+The fixed baseline remains separately runnable with unchanged configuration. Preserve every
+prior recording, annotation, baseline and failed result. This is development evidence, not
+held-out accuracy, anatomical measurement, form validation or an automatic movement classifier.
+
+An additional explicitly selected offline ablation may replace opposite-leg depth-band
+agreement with supported current-candidate motion, while retaining the selected-leg fitted
+endpoint and all continuity gates. Its separately named excursion setting is an unvalidated
+prototype parameter, not inherited authority from the practice range gate. Keep this opt-in:
+synthetic correlated pose error can still provide false corroboration. Positive count agreement
+does not override that counterexample or authorize deployment. The fixed and absolute-calibrated
+profiles remain independently runnable; no app behavior, stable contract or release gate changes.
