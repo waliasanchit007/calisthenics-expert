@@ -17,6 +17,9 @@ data class MovementPanelState(
     val experiment: PullUpExperimentState = PullUpExperimentState(),
     val cameraActive: Boolean = false,
     val nowNs: Long = 0,
+    /** Set when an exploratory engine is selected; [experiment] is then not being fed at all. */
+    val offlineMovement: OfflineMovement? = null,
+    val offline: OfflineMovementUpdate? = null,
 )
 
 /** Operator guidance only; exact diagnostics continue independently in the recorder. */
@@ -27,6 +30,13 @@ fun MovementMeasurementsPanel(
     onConfirmRange: () -> Unit,
     onReset: () -> Unit,
 ) {
+    // An exploratory engine has no calibration, no practice rep and no arm choice, so none of the
+    // flow below applies to it. Showing that flow for a knee raise told the athlete to "practice one
+    // pull-up" while a completely different engine was being fed.
+    state.offlineMovement?.let { movement ->
+        OfflineMovementPanel(movement, state.offline, onReset)
+        return
+    }
     val e = state.experiment
     val side = if (e.side == ArmSide.LEFT) "left" else "right"
     val isPushUp = e.movement == ExperimentalMovement.PUSH_UP
@@ -87,6 +97,59 @@ fun MovementMeasurementsPanel(
                 OutlinedButton(onClick={onCalibrate(ArmSide.LEFT)},enabled=state.cameraActive) { Text("Use left arm") }
                 OutlinedButton(onClick={onCalibrate(ArmSide.RIGHT)},enabled=state.cameraActive) { Text("Use right arm") }
             }
+        }
+    }
+}
+
+
+/**
+ * The exploratory engines report a count or a hold duration and nothing else. This panel deliberately
+ * shows only what they earned — no practice cue, no confirmation step, no form verdict — and states
+ * the limit rather than implying the number is as trustworthy as the calibrated one.
+ */
+@Composable
+private fun OfflineMovementPanel(
+    movement: OfflineMovement,
+    update: OfflineMovementUpdate?,
+    onReset: () -> Unit,
+) {
+    val isHold = offlineMovementEngine(movement).kind == OfflineMovementKind.HOLD
+    ElevatedCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(offlineMovementLabel(movement), style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Exploratory engine · no practice rep, no calibration. It uses fixed thresholds "
+                    + "frozen from recorded footage of other people.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            if (update == null) {
+                Text("Waiting for a usable pose.", style = MaterialTheme.typography.bodyMedium)
+            } else if (isHold) {
+                val held = update.activeHoldNs
+                Text(
+                    if (held != null) "Holding · ${held / 1_000_000_000.0} s"
+                    else "Not holding",
+                    style = MaterialTheme.typography.headlineSmall,
+                )
+                Text(
+                    "Completed ${(update.completedHoldNs ?: 0L) / 1_000_000_000.0} s total",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            } else {
+                Text("${update.completedReps} counted", style = MaterialTheme.typography.headlineSmall)
+            }
+            if (update != null) {
+                Text("Phase · ${update.phase}", style = MaterialTheme.typography.labelMedium)
+                update.rejection?.let {
+                    // The engine's own reason enum, unrenamed: it is what the trace will show too.
+                    Text(
+                        "Not measuring · $it",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+            TextButton(onClick = onReset) { Text("Reset count") }
         }
     }
 }

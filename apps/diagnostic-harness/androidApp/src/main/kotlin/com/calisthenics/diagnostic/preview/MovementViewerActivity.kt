@@ -109,8 +109,7 @@ class MovementViewerActivity : ComponentActivity() {
                     attestedCameraScope = attestedCameraScope,
                     performance = formatViewerTiming(snapshot?.performance, controller?.previewFps()),
                     movement = movementState.experiment.movement,
-                    offlineMovement = (movementCoordinator.selection
-                        as? ViewerMovementSelection.Offline)?.movement,
+                    offlineMovement = selectedOfflineMovement(),
                 ),
                 image = image,
                 onSynthetic = { startViewer(ViewerInput.SYNTHETIC) },
@@ -129,11 +128,17 @@ class MovementViewerActivity : ComponentActivity() {
                     "Diagnostics ON · local ADB trace includes derived movement measurements, not images/video. " +
                     "Auto-off within 30 min · writer drops ${diagnosticLog?.droppedRows ?: 0}" else null,
                 onDisableDiagnostics = if (diagnosticsEnabled) ({ disableDiagnostics() }) else null,
-                movementSummary = if (controller != null) when (movementState.experiment.stage) {
+                movementSummary = if (controller == null) null
+                else if (selectedOfflineMovement() != null) {
+                    // No practice stage exists for these, so the calibrated wording would be a lie.
+                    val update = movementCoordinator.offlineUpdate
+                    if (update == null) "Exploratory engine · waiting for a usable pose"
+                    else "Exploratory engine · fixed thresholds, not calibrated to you"
+                } else when (movementState.experiment.stage) {
                     com.calisthenics.diagnostic.viewer.experimental.ExperimentStage.READY -> "Practice accepted · confirm below to start counting"
                     com.calisthenics.diagnostic.viewer.experimental.ExperimentStage.COUNTING -> "Counting ON · ${movementState.experiment.candidateCycles} candidate cycles"
                     else -> "Setup / practice · counting is OFF"
-                } else null,
+                },
                 movementPanel = {
                     MovementMeasurementsPanel(movementState,
                         onCalibrate = { side ->
@@ -168,7 +173,8 @@ class MovementViewerActivity : ComponentActivity() {
         input = selected
         movementCoordinator.clear()
         movementState = MovementPanelState(experiment=movementCoordinator.experiment.state,
-            cameraActive = selected == ViewerInput.CAMERA)
+            cameraActive = selected == ViewerInput.CAMERA,
+            offlineMovement = selectedOfflineMovement())
         overlayPresenter.clear()
         overlay = null
         snapshot = null
@@ -232,8 +238,13 @@ class MovementViewerActivity : ComponentActivity() {
     private fun refreshMovementPanel() {
         movementState = MovementPanelState(movementCoordinator.measurements,movementCoordinator.trace,
             movementCoordinator.experiment.state,controller != null && input == ViewerInput.CAMERA,
-            SystemClock.elapsedRealtimeNanos())
+            SystemClock.elapsedRealtimeNanos(),
+            selectedOfflineMovement(), movementCoordinator.offlineUpdate)
     }
+
+    /** Null when the calibrated experiment is selected. Single source for all panel construction. */
+    private fun selectedOfflineMovement() =
+        (movementCoordinator.selection as? ViewerMovementSelection.Offline)?.movement
 
     fun stopViewer() {
         if (controller != null) recordDiagnostic(ViewerDebugEvent.STOP)
@@ -242,7 +253,8 @@ class MovementViewerActivity : ComponentActivity() {
         diagnosticsEnabled = false
         movementCoordinator.endSession()
         movementCoordinator.clear()
-        movementState = MovementPanelState(experiment=movementCoordinator.experiment.state)
+        movementState = MovementPanelState(experiment=movementCoordinator.experiment.state,
+            offlineMovement = selectedOfflineMovement())
         overlayPresenter.clear()
         overlay = null
         controller?.close()
