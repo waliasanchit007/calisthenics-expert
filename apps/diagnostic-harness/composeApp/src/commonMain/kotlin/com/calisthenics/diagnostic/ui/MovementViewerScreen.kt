@@ -20,6 +20,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.semantics.Role
 import com.calisthenics.diagnostic.contract.Landmark
 import com.calisthenics.diagnostic.viewer.ViewerGeometry
+import com.calisthenics.diagnostic.viewer.experimental.OfflineMovement
+import com.calisthenics.diagnostic.viewer.experimental.OfflineMovementKind
 import com.calisthenics.diagnostic.viewer.ViewerPoint
 import com.calisthenics.diagnostic.viewer.experimental.ExperimentalMovement
 
@@ -38,7 +40,26 @@ data class MovementViewerUiState(
     val attestedCameraScope: Boolean = false,
     val performance: String = "Timing unavailable until frames arrive",
     val movement: ExperimentalMovement = ExperimentalMovement.PULL_UP,
+    /**
+     * The exploratory movement in use, or null when the calibrated [movement] is selected. The two
+     * are mutually exclusive and only one analyser is ever fed.
+     */
+    val offlineMovement: OfflineMovement? = null,
 )
+
+/**
+ * Display name for an exploratory movement. Deliberately names the APPARATUS where the frozen
+ * config assumed one, because the athlete cannot otherwise tell that "Dip" means a straight bar.
+ */
+internal fun offlineMovementLabel(movement: OfflineMovement): String = when (movement) {
+    OfflineMovement.DIP -> "Dip (straight bar)"
+    OfflineMovement.HANGING_KNEE_RAISE -> "Knee raise"
+    OfflineMovement.TOES_TO_BAR -> "Toes to bar"
+    OfflineMovement.MUSCLE_UP -> "Muscle-up"
+    OfflineMovement.HANDSTAND_PUSH_UP -> "HSPU (wall)"
+    OfflineMovement.HANDSTAND_HOLD -> "Handstand hold"
+    OfflineMovement.BACK_LEVER -> "Back lever"
+}
 
 @Composable
 fun MovementViewerScreen(
@@ -50,6 +71,7 @@ fun MovementViewerScreen(
     onPermission: () -> Unit,
     onAttestation: (Boolean) -> Unit,
     onMovementSelected: (ExperimentalMovement) -> Unit = {},
+    onOfflineMovementSelected: (OfflineMovement) -> Unit = {},
     livePreview: (@Composable (Modifier) -> Unit)? = null,
     livePoints: Map<Int, ViewerPoint> = emptyMap(),
     liveOverlayAlpha: Float = 1f,
@@ -122,19 +144,48 @@ fun MovementViewerScreen(
                 Text(if(state.active || diagnosticsStatus!=null) recordingLabel else "Private self-test · no uploads",
                     style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.primary)
                 if (!state.active) {
-                    Text("Choose movement",style=MaterialTheme.typography.labelMedium)
+                    val calibrated = state.offlineMovement == null
+                    Text("Calibrated to you",style=MaterialTheme.typography.labelMedium)
                     Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
                         FilterChip(
-                            selected=state.movement == ExperimentalMovement.PULL_UP,
+                            selected=calibrated && state.movement == ExperimentalMovement.PULL_UP,
                             onClick={onMovementSelected(ExperimentalMovement.PULL_UP)},
                             label={Text("Pull-up")},
                             modifier=Modifier.weight(1f),
                         )
                         FilterChip(
-                            selected=state.movement == ExperimentalMovement.PUSH_UP,
+                            selected=calibrated && state.movement == ExperimentalMovement.PUSH_UP,
                             onClick={onMovementSelected(ExperimentalMovement.PUSH_UP)},
                             label={Text("Push-up")},
                             modifier=Modifier.weight(1f),
+                        )
+                    }
+                    // The second group is labelled honestly rather than presented as equivalent.
+                    // These engines carry thresholds frozen from recorded footage of other people;
+                    // they have never been fitted to this athlete, camera or frame rate, and their
+                    // event timing is known to be poor even where their counts are good.
+                    Text("Exploratory · fixed thresholds, not calibrated to you",
+                        style=MaterialTheme.typography.labelMedium)
+                    OfflineMovement.entries.toList().chunked(2).forEach { row ->
+                        Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                            row.forEach { candidate ->
+                                FilterChip(
+                                    selected=state.offlineMovement == candidate,
+                                    onClick={onOfflineMovementSelected(candidate)},
+                                    label={Text(offlineMovementLabel(candidate))},
+                                    modifier=Modifier.weight(1f),
+                                )
+                            }
+                            if (row.size == 1) Spacer(Modifier.weight(1f))
+                        }
+                    }
+                    state.offlineMovement?.let { selected ->
+                        Text(
+                            if (selected == OfflineMovement.DIP)
+                                "Counts only. Frozen on a STRAIGHT-BAR dip — on rings this is an untested transfer."
+                            else "Counts and durations only. Repetition instants are not accurate to better than about half a second.",
+                            style=MaterialTheme.typography.labelSmall,
+                            color=MaterialTheme.colorScheme.error,
                         )
                     }
                 }

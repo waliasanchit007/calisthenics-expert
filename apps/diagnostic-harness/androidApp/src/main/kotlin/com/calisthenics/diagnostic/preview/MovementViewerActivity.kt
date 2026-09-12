@@ -109,6 +109,8 @@ class MovementViewerActivity : ComponentActivity() {
                     attestedCameraScope = attestedCameraScope,
                     performance = formatViewerTiming(snapshot?.performance, controller?.previewFps()),
                     movement = movementState.experiment.movement,
+                    offlineMovement = (movementCoordinator.selection
+                        as? ViewerMovementSelection.Offline)?.movement,
                 ),
                 image = image,
                 onSynthetic = { startViewer(ViewerInput.SYNTHETIC) },
@@ -117,6 +119,7 @@ class MovementViewerActivity : ComponentActivity() {
                 onPermission = { requestPermission.launch(Manifest.permission.CAMERA) },
                 onAttestation = { attestedCameraScope = it },
                 onMovementSelected = { selectMovement(it) },
+                onOfflineMovementSelected = { selectOfflineMovement(it) },
                 livePreview = view?.let { native -> { modifier -> AndroidView(factory = { native }, modifier = modifier) } },
                 livePoints = livePoints,
                 liveOverlayAlpha = overlay?.alpha ?: 0f,
@@ -187,6 +190,18 @@ class MovementViewerActivity : ComponentActivity() {
 
     internal fun selectMovement(movement: ExperimentalMovement): Boolean {
         if (!movementCoordinator.selectMovement(movement)) return false
+        refreshMovementPanel()
+        return true
+    }
+
+    /**
+     * Same contract as [selectMovement]: the coordinator refuses while a session is active, and the
+     * refusal is surfaced by returning false rather than by silently leaving the chip selected.
+     */
+    internal fun selectOfflineMovement(
+        movement: com.calisthenics.diagnostic.viewer.experimental.OfflineMovement,
+    ): Boolean {
+        if (!movementCoordinator.selectOfflineMovement(movement)) return false
         refreshMovementPanel()
         return true
     }
