@@ -6,9 +6,32 @@ import com.calisthenics.diagnostic.viewer.measureMovement
 import com.calisthenics.diagnostic.viewer.experimental.ArmSide
 import com.calisthenics.diagnostic.viewer.experimental.CalibratedArmCycleExperiment
 import com.calisthenics.diagnostic.viewer.experimental.ExperimentalMovement
+import com.calisthenics.diagnostic.viewer.experimental.MuscleUpVariant
+import com.calisthenics.diagnostic.viewer.experimental.OfflineMovement
+import com.calisthenics.diagnostic.viewer.experimental.OfflineMovementEngine
+import com.calisthenics.diagnostic.viewer.experimental.OfflineMovementUpdate
+import com.calisthenics.diagnostic.viewer.experimental.offlineMovementEngine
 
 /** Fresh raw observations only. Never accepts a ViewerOverlay or reads its held pose. */
 internal enum class MovementFeedStatus { FRESH, WAITING, NO_POSE, RESULT_TIMEOUT, DUPLICATE, BACKWARDS }
+
+/**
+ * Which analyser the live stream feeds.
+ *
+ * [Calibrated] is the pull-up/push-up engine, which fits a practice range to THIS athlete before it
+ * counts. [Offline] is one of the exploratory engines, which instead carry fixed thresholds frozen
+ * from someone else's recording. The two are kept as distinct selections rather than one list
+ * because that difference is the whole risk: an offline engine has never been shown to transfer to
+ * a new camera, athlete or frame rate, and its output here is an unvalidated port.
+ */
+internal sealed interface ViewerMovementSelection {
+    data class Calibrated(val movement: ExperimentalMovement) : ViewerMovementSelection
+    data class Offline(
+        val movement: OfflineMovement,
+        val side: ArmSide,
+        val muscleUpVariant: MuscleUpVariant = MuscleUpVariant.BAR_KIPPING,
+    ) : ViewerMovementSelection
+}
 
 internal class ViewerMovementCoordinator {
     var feedStatus = MovementFeedStatus.WAITING
@@ -21,6 +44,12 @@ internal class ViewerMovementCoordinator {
         private set
     var trace: List<AngleTracePoint> = emptyList()
         private set
+    var selection: ViewerMovementSelection = ViewerMovementSelection.Calibrated(ExperimentalMovement.PULL_UP)
+        private set
+    /** Last result from the selected offline engine, or null when a calibrated movement is selected. */
+    var offlineUpdate: OfflineMovementUpdate? = null
+        private set
+    private var offlineEngine: OfflineMovementEngine? = null
     private var lastSeenNs: Long? = null
     private var sessionActive = false
 
@@ -31,8 +60,30 @@ internal class ViewerMovementCoordinator {
 
     fun selectMovement(movement: ExperimentalMovement): Boolean {
         if (sessionActive) return false
-        if (experiment.movement == movement) return true
+        val already = selection as? ViewerMovementSelection.Calibrated
+        selection = ViewerMovementSelection.Calibrated(movement)
+        offlineEngine = null
+        if (already?.movement == movement && experiment.movement == movement) return true
         experiment = CalibratedArmCycleExperiment(movement)
+        clear()
+        return true
+    }
+
+    /**
+     * Select one of the offline engines. Same lifecycle rule as [selectMovement]: refused while a
+     * session is active, so the analyser cannot change under a running capture.
+     *
+     * The calibrated experiment is left constructed but is NOT fed while an offline movement is
+     * selected, so its count cannot drift in the background and be mistaken for this movement's.
+     */
+    fun selectOfflineMovement(
+        movement: OfflineMovement,
+        side: ArmSide = com.calisthenics.diagnostic.viewer.experimental.defaultSideFor(movement),
+        muscleUpVariant: MuscleUpVariant = MuscleUpVariant.BAR_KIPPING,
+    ): Boolean {
+        if (sessionActive) return false
+        selection = ViewerMovementSelection.Offline(movement, side, muscleUpVariant)
+        offlineEngine = offlineMovementEngine(movement, side, muscleUpVariant)
         clear()
         return true
     }
@@ -78,7 +129,19 @@ internal class ViewerMovementCoordinator {
             observation.frame.height,observation.capturedNs)
         measurements = measured
         trace = (trace + AngleTracePoint(measured.capturedNs,measured.left.elbowDegrees,measured.right.elbowDegrees)).takeLast(90)
-        experiment.onSample(measured,nowNs)
+        val offline = offlineEngine
+        if (offline == null) {
+            experiment.onSample(measured,nowNs)
+        } else {
+            // The offline engines take raw landmarks, not the arm-narrowed measurement, and they
+            // enforce their own capture-gap and timestamp rules internally — which is why no gap or
+            // backwards-timestamp notification is forwarded to them. Feeding one would double-count
+            // a rejection the engine already makes for itself.
+            offlineUpdate = offline.onLandmarks(
+                observation.capturedNs, observation.frame.width, observation.frame.height,
+                observation.landmarks,
+            )
+        }
     }
 
     fun startCalibration(side: ArmSide, nowNs: Long) { experiment.startCalibration(side,nowNs) }
@@ -89,7 +152,11 @@ internal class ViewerMovementCoordinator {
         measurements = null
         trace = emptyList()
         lastSeenNs = null
+        offlineUpdate = null
         experiment.reset()
+        (selection as? ViewerMovementSelection.Offline)?.let {
+            offlineEngine = offlineMovementEngine(it.movement, it.side, it.muscleUpVariant)
+        }
     }
 
     private companion object {

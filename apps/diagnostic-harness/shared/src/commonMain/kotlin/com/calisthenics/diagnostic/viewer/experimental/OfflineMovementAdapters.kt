@@ -22,7 +22,22 @@ import com.calisthenics.diagnostic.contract.Landmark
  * A caller should surface counts and durations, and must not present a repetition instant as
  * accurate to better than roughly half a second.
  */
-enum class OfflineMovement { DIP, HANGING_KNEE_RAISE, TOES_TO_BAR, MUSCLE_UP, HANDSTAND_PUSH_UP, HANDSTAND_HOLD, BACK_LEVER }
+enum class OfflineMovement {
+    /**
+     * NOTE ON APPARATUS. The frozen config was measured on a STRAIGHT-BAR dip
+     * (`XTDc47D1G_I`, "How To Straight Bar Dip"). Ring dips are a different geometry — the rings
+     * rotate and the torso carries more lean — so running this on rings is an untested transfer,
+     * not a supported configuration. It may well work; nothing says it does.
+     */
+    DIP,
+    HANGING_KNEE_RAISE,
+    TOES_TO_BAR,
+    /** Variant matters: see [MuscleUpVariant]. Rings and bar have separate frozen configs. */
+    MUSCLE_UP,
+    HANDSTAND_PUSH_UP,
+    HANDSTAND_HOLD,
+    BACK_LEVER,
+}
 
 enum class OfflineMovementKind { REPETITION, HOLD }
 
@@ -180,6 +195,7 @@ private class BackLeverAdapter(
 fun offlineMovementEngine(
     movement: OfflineMovement,
     side: ArmSide = defaultSideFor(movement),
+    muscleUpVariant: MuscleUpVariant = MuscleUpVariant.BAR_KIPPING,
 ): OfflineMovementEngine = when (movement) {
     OfflineMovement.DIP -> DipAdapter(
         DipConfig(
@@ -204,11 +220,15 @@ fun offlineMovementEngine(
             minimumEndpointSamples = 3,
         ),
     )
+    // Two frozen configs, differing only in grip drift: rings swing, a bar does not.
+    //   BAR_KIPPING  muscle-up-20260911/config-bar-kipping-right-clip-v3.json  (drift 1.0)
+    //   RING_STRICT  muscle-up-20260911/config-ring-strict-right-v3.json       (drift 2.0)
     OfflineMovement.MUSCLE_UP -> MuscleUpAdapter(
         MuscleUpConfig(
-            variant = MuscleUpVariant.BAR_KIPPING, side = side,
+            variant = muscleUpVariant, side = side,
             minimumHangWristAboveShoulderFraction = .05, minimumSupportShoulderAboveWristFraction = .05,
-            maximumGripDriftTorsoLengths = 1.0, minimumBodyScaleRatio = .6, maximumBodyScaleRatio = 1.6,
+            maximumGripDriftTorsoLengths = if (muscleUpVariant == MuscleUpVariant.RING_STRICT) 2.0 else 1.0,
+            minimumBodyScaleRatio = .6, maximumBodyScaleRatio = 1.6,
             minimumConfidence = .5, maximumGapNs = 250_000_000L, minimumEndpointSamples = 2,
             minimumReferenceSamples = 5, maximumReferenceWristSpreadTorsoLengths = .15,
             hangLockoutElbowDegrees = 150.0,
