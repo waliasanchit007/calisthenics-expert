@@ -65,7 +65,7 @@ use `offline-corpus/poserac-feasibility-20260908/venv312/bin/python`, not the ho
 | # | Movement | State |
 |---|---|---|
 | 1 | Muscle-up (ring strict / bar kipping) | Counts 3/3 both. Timing early. Separate regime-crossing engine. |
-| 2 | Straight-bar dip | 5/6 detected, 0 false positives. Tracking-challenge clip kept separate. |
+| 2 | Straight-bar dip | **CORRECTED 2026-09-12.** Counts 5/6. The previous "0 false positives" here was NOT supported by any report: `XTDc47D1G_I-report-v3-per-segment-side.json` gives matched 2, missed 4, extra 3, precision 0.40, recall 0.33 against v2 labels. Counts are the sanctioned metric (rule 7); the window rates are not, and are poor. |
 | 3 | HSPU (back-to-wall / wall-facing) | Counts 5/5 both. **Endpoint estimator built and validated — awaiting adoption decision.** |
 | 4 | Handstand hold | `xmray` entry 0.00 s / exit +0.90 s. `btUW` exit error −1.23 s → **+0.13 s** after persistence fix. |
 | 5 | Tuck planche | Variant unresolved. Fragments 6→5. **Admission cause now identified**: 146/146 rejections are UNSUPPORTED_ORIENTATION, median 27.1° against a 30° gate — but the measure is shoulder→ankle, wrong for a tuck. Not closed. |
