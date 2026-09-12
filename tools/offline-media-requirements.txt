@@ -1,0 +1,7 @@
+# Optional isolated desktop reference runtime, not Android/app dependencies.
+# MediaPipe 1.0.1 aborted in its macOS constructor even with CPU selected.
+mediapipe==0.10.21
+av==18.1.0
+pillow==12.3.0
+# Local report video seeking requires byte-range responses.
+RangeHTTPServer==1.4.0
