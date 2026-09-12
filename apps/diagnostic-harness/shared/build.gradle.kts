@@ -144,3 +144,113 @@ tasks.register<JavaExec>("replayMovementTrace") {
         args("-PtracePath=$path")
     }
 }
+
+val squatPosePath = providers.gradleProperty("posePath")
+val squatConfigPath = providers.gradleProperty("squatConfigPath")
+val squatOutputPath = providers.gradleProperty("squatOutputPath")
+
+tasks.register<JavaExec>("replaySquatPose") {
+    dependsOn("jvmTestClasses")
+    classpath(jvmTestCompilation.runtimeDependencyFiles, jvmTestCompilation.output.allOutputs)
+    mainClass.set("com.calisthenics.diagnostic.viewer.experimental.ReplaySquatPoseKt")
+    doFirst {
+        val pose = squatPosePath.orNull
+            ?: throw GradleException("provide private pose JSONL with -PposePath=/path/to/pose.jsonl")
+        val config = squatConfigPath.orNull
+            ?: throw GradleException("provide private squat config JSON with -PsquatConfigPath=/path/to/config.json")
+        val output = squatOutputPath.orNull
+            ?: throw GradleException("provide output JSONL with -PsquatOutputPath=/path/to/output.jsonl")
+        args("--posePath=$pose", "--squatConfigPath=$config", "--squatOutputPath=$output")
+    }
+}
+
+val plankConfigPath = providers.gradleProperty("plankConfigPath")
+val plankOutputPath = providers.gradleProperty("plankOutputPath")
+
+tasks.register<JavaExec>("replayPlankPose") {
+    dependsOn("jvmTestClasses")
+    classpath(jvmTestCompilation.runtimeDependencyFiles, jvmTestCompilation.output.allOutputs)
+    mainClass.set("com.calisthenics.diagnostic.viewer.experimental.ReplayPlankPoseKt")
+    doFirst {
+        val pose = squatPosePath.orNull
+            ?: throw GradleException("provide private pose JSONL with -PposePath=/path/to/pose.jsonl")
+        val config = plankConfigPath.orNull
+            ?: throw GradleException("provide private plank config JSON with -PplankConfigPath=/path/to/config.json")
+        val output = plankOutputPath.orNull
+            ?: throw GradleException("provide output JSONL with -PplankOutputPath=/path/to/output.jsonl")
+        args("--posePath=$pose", "--plankConfigPath=$config", "--plankOutputPath=$output")
+    }
+}
+
+val lungeConfigPath = providers.gradleProperty("lungeConfigPath")
+val lungeOutputPath = providers.gradleProperty("lungeOutputPath")
+
+tasks.register<JavaExec>("replayLungePose") {
+    dependsOn("jvmTestClasses")
+    classpath(jvmTestCompilation.runtimeDependencyFiles, jvmTestCompilation.output.allOutputs)
+    mainClass.set("com.calisthenics.diagnostic.viewer.experimental.ReplayLungePoseKt")
+    doFirst {
+        val pose = squatPosePath.orNull
+            ?: throw GradleException("provide private pose JSONL with -PposePath=/path/to/pose.jsonl")
+        val config = lungeConfigPath.orNull
+            ?: throw GradleException("provide private lunge config JSON with -PlungeConfigPath=/path/to/config.json")
+        val output = lungeOutputPath.orNull
+            ?: throw GradleException("provide output JSONL with -PlungeOutputPath=/path/to/output.jsonl")
+        args("--posePath=$pose", "--lungeConfigPath=$config", "--lungeOutputPath=$output")
+    }
+}
+
+val jumpingJackConfigPath = providers.gradleProperty("jumpingJackConfigPath")
+val jumpingJackOutputPath = providers.gradleProperty("jumpingJackOutputPath")
+
+tasks.register<JavaExec>("replayJumpingJackPose") {
+    dependsOn("jvmTestClasses")
+    classpath(jvmTestCompilation.runtimeDependencyFiles, jvmTestCompilation.output.allOutputs)
+    mainClass.set("com.calisthenics.diagnostic.viewer.experimental.ReplayJumpingJackPoseKt")
+    doFirst {
+        val pose = squatPosePath.orNull
+            ?: throw GradleException("provide private pose JSONL with -PposePath=/path/to/pose.jsonl")
+        val config = jumpingJackConfigPath.orNull
+            ?: throw GradleException("provide private jumping jack config JSON with -PjumpingJackConfigPath=/path/to/config.json")
+        val output = jumpingJackOutputPath.orNull
+            ?: throw GradleException("provide output JSONL with -PjumpingJackOutputPath=/path/to/output.jsonl")
+        args("--posePath=$pose", "--jumpingJackConfigPath=$config", "--jumpingJackOutputPath=$output")
+    }
+}
+
+val situpConfigPath = providers.gradleProperty("situpConfigPath")
+// Offline-only breadth experiments; input media and predictions remain outside Git.
+listOf("Dip" to "dip", "HangingLegRaise" to "hangingLegRaise", "StaticSkill" to "staticSkill")
+    .forEach { (classStem, propertyStem) ->
+        tasks.register<JavaExec>("replay${classStem}Pose") {
+            dependsOn("jvmTestClasses")
+            classpath(jvmTestCompilation.runtimeDependencyFiles, jvmTestCompilation.output.allOutputs)
+            mainClass.set("com.calisthenics.diagnostic.viewer.experimental.Replay${classStem}PoseKt")
+            doFirst {
+                val pose = providers.gradleProperty("posePath").orNull
+                    ?: throw GradleException("provide -PposePath=/private/pose.jsonl")
+                val config = providers.gradleProperty("${propertyStem}ConfigPath").orNull
+                    ?: throw GradleException("provide -P${propertyStem}ConfigPath=/private/config.json")
+                val output = providers.gradleProperty("${propertyStem}OutputPath").orNull
+                    ?: throw GradleException("provide -P${propertyStem}OutputPath=/private/output.jsonl")
+                args("--posePath=$pose", "--${propertyStem}ConfigPath=$config", "--${propertyStem}OutputPath=$output")
+            }
+        }
+    }
+
+val situpOutputPath = providers.gradleProperty("situpOutputPath")
+
+tasks.register<JavaExec>("replaySitupPose") {
+    dependsOn("jvmTestClasses")
+    classpath(jvmTestCompilation.runtimeDependencyFiles, jvmTestCompilation.output.allOutputs)
+    mainClass.set("com.calisthenics.diagnostic.viewer.experimental.ReplaySitupPoseKt")
+    doFirst {
+        val pose = squatPosePath.orNull
+            ?: throw GradleException("provide private pose JSONL with -PposePath=/path/to/pose.jsonl")
+        val config = situpConfigPath.orNull
+            ?: throw GradleException("provide private situp config JSON with -PsitupConfigPath=/path/to/config.json")
+        val output = situpOutputPath.orNull
+            ?: throw GradleException("provide output JSONL with -PsitupOutputPath=/path/to/output.jsonl")
+        args("--posePath=$pose", "--situpConfigPath=$config", "--situpOutputPath=$output")
+    }
+}
