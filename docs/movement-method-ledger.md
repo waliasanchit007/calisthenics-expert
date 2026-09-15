@@ -1287,3 +1287,45 @@ configs are used unchanged and hash-bound, as are labels and the Kotlin sources.
 causes beyond rate; the device sessions are separate evidence and are deliberately not used to fit
 anything here. It also cannot distinguish "the config is wrong for this athlete" from "the rate is
 too low" on any clip the athlete did not perform.
+
+## Update 43 — decimation study: run 01 VOID, amendment before re-running (2026-09-16)
+
+**Run 01 is void.** The pre-registered control in Update 42(a) failed, and that entry made failure a
+stopping rule rather than a caveat, so none of its rate numbers are interpreted here or anywhere.
+
+| job | native count | recorded | control |
+|---|---|---|---|
+| `mu-ring-yTczZRbcfJU` | 3 | 3 | **pass** |
+| `mu-bar-k71s4T2_CJI` | 3 | 3 | **pass** |
+| `hspu-back-cLTvfDlhiXM` | 5 | 5 | **pass** |
+| `hspu-facing-tz_YVynl1sk` | 5 | 5 | **pass** |
+| `kneeraise-C0RXOvy609I` | 0 | 6 | **FAIL** |
+| `slr-TcU7wtLdIx4` | 0 | 0 | pass (negative control) |
+| `t2b-wZ6bjrOjbCI` | crash | 6 | **FAIL** |
+| `dip-XTDc47D1G_I` | 3 | 5 | **FAIL** |
+
+Four controls passed, which says the harness mechanism — decimation, JVM replay, scoring — is sound.
+The three failures are all **my asset selection**, not the engines:
+
+1. **Knee raise and toes-to-bar: I used the parent clips.** Both recorded results were obtained on a
+   **right-half crop** (`C0RXOvy609I-right-cache-v1`, `wZ6bjrOjbCI-right-cache-v1`) because the
+   parent frame shows the same movement twice — front view left, side view right — and a
+   single-pose extractor cannot be trusted on it. That is already recorded in the results document,
+   and I picked the parent anyway. Corrected to the derived panels and their matching configs
+   (`C0RXOvy609I-right-hlr-config-v1.json`, `wZ6bjrOjbCI-right-t2b-config-v2observable.json`).
+   The toes-to-bar crash was the same mistake: a config schema mismatch from the wrong file.
+
+2. **Dip cannot be controlled by this harness at all, and that is a protocol fact, not a bug.** Its
+   published count comes from a **per-segment side rule** — segments A and B scored LEFT, segment C
+   RIGHT, availability decided per uncut segment. One config over the whole clip cannot reproduce it
+   and should not be expected to.
+
+**Amendment, declared before the corrected run.** Dip is retained, but scored against a
+**study-local native baseline** — the count this single-config protocol produces at the native rate —
+and **not** compared to labels or to the published 5/6. The question it answers is narrowed to "is
+dip count rate-sensitive under a fixed protocol", which is the study's actual question. Any dip
+number from this study must never be quoted as the dip result; they are different protocols.
+
+**Every prediction in Update 42 stands unchanged**, except that 42(d)'s dip line is now read against
+that study-local baseline rather than the published 5. No threshold, config or engine is touched. The
+corrected run is run 02.
