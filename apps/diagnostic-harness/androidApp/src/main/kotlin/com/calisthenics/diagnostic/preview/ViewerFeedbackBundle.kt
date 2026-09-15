@@ -34,6 +34,24 @@ internal fun deleteViewerFeedback(root: File): Int {
 /** Local exploratory evidence, NOT a formal study export or lossless video recording.
  * Files and JPEG work are worker-owned; inference/Compose never waits for disk or compression.
  */
+/** Local recording budget, readable before a session starts so the operator can be warned early. */
+internal data class ViewerFeedbackBudget(val usedBytes: Long, val allowedBytes: Long) {
+    val fractionUsed: Double get() = if (allowedBytes <= 0) 1.0 else usedBytes.toDouble() / allowedBytes
+    /** True once a new session is at risk, well before it would be refused outright. */
+    val nearlyFull: Boolean get() = fractionUsed >= .75
+    val full: Boolean get() = usedBytes > allowedBytes
+    fun describe() = "${usedBytes / (1024*1024)} of ${allowedBytes / (1024*1024)} MiB used"
+}
+
+internal fun viewerFeedbackBudget(
+    root: File,
+    maxBytes: Long = 64L * 1024 * 1024,
+    totalBytes: Long = 256L * 1024 * 1024,
+): ViewerFeedbackBudget {
+    val used = if (root.exists()) root.walkTopDown().filter { it.isFile }.sumOf { it.length() } else 0L
+    return ViewerFeedbackBudget(used, totalBytes - maxBytes)
+}
+
 internal class ViewerFeedbackBundle(
     private val root: File,
     private val build: String,
@@ -94,7 +112,12 @@ internal class ViewerFeedbackBundle(
                 // Reserve room for this whole session; no automatic deletion of older recordings.
                 val existing = if (root.exists()) root.walkTopDown().filter { it.isFile }.sumOf { it.length() } else 0L
                 if (existing > totalBytes - maxBytes) {
-                    stopAccepting("total_cap")
+                    // Say what is wrong and what fixes it. Reporting this as a bare cause string
+                    // made a full refusal read like an ordinary stop, and a whole capture was lost
+                    // to it on 2026-09-15 before anyone noticed nothing had been written.
+                    stopAccepting("total_cap",
+                        "Recording unavailable: local budget full (${existing / (1024*1024)} MiB used, " +
+                            "${(totalBytes - maxBytes) / (1024*1024)} MiB allowed) · delete recordings to continue")
                 } else {
                     check(File(directory,"frames").mkdirs())
                     diskReady = true
@@ -196,10 +219,10 @@ internal class ViewerFeedbackBundle(
         return true
     }
 
-    private fun stopAccepting(cause: String) {
+    private fun stopAccepting(cause: String, explanation: String? = null) {
         accepting = false
         reason = cause
-        status = "Not recording: $cause · drops ${dropped.get()}"
+        status = explanation ?: "Not recording: $cause · drops ${dropped.get()}"
     }
 
     @Synchronized fun markStopReason(cause: String) {

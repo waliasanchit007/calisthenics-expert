@@ -109,6 +109,9 @@ fun MovementViewerScreen(
     val recordingLabel = when {
         diagnosticsStatus?.startsWith("Recording locally") == true -> "● Recording locally"
         diagnosticsStatus?.startsWith("Starting local") == true -> "Starting local recording"
+        // Checked before the generic cases: a full budget records nothing at all, and saying
+        // "Recording stopped" for it is how an entire session was silently lost.
+        diagnosticsStatus?.contains("budget full") == true -> "⚠ Storage full · nothing is recorded"
         diagnosticsStatus?.startsWith("Recording failed") == true ||
             diagnosticsStatus?.startsWith("Recording unavailable") == true -> "Recording unavailable"
         diagnosticsStatus?.startsWith("Not recording") == true ||

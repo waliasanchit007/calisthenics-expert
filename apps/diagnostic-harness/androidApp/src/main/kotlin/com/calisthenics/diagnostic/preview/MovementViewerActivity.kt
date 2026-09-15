@@ -301,7 +301,10 @@ class MovementViewerActivity : ComponentActivity() {
             confidence(setOf(12,14,16),false),confidence(setOf(12,14,16),true))
         logger.record(if (expired) ViewerDebugEvent.EXPIRED else event,now,
             movementCoordinator.measurements,movementCoordinator.experiment.state,
-            movementCoordinator.experiment.inputIssue,movementCoordinator.feedStatus,
+            // The calibrated experiment is deliberately not advanced while an offline engine runs,
+            // so its input issue is stale by construction and reported TRACKING_GAP on every row.
+            if (selectedOfflineMovement() == null) movementCoordinator.experiment.inputIssue else null,
+            movementCoordinator.feedStatus,
             movementCoordinator.captureGapNs,latest?.submitted ?: 0,latest?.completed ?: 0,latest?.skipped ?: 0,
             scores,latest?.performance,latest?.observation,
             selectedOfflineMovement()?.name,movementCoordinator.offlineUpdate)
@@ -371,8 +374,24 @@ class MovementViewerActivity : ComponentActivity() {
                     "${diagnosticLog?.droppedRows ?: 0} dropped"
             }
             DebugSessionState.EXPIRED -> "Authorization lapsed. Nothing is being recorded."
-            DebugSessionState.OFF -> feedbackMessage ?: "No trace is being written."
+            DebugSessionState.OFF -> feedbackMessage ?: budgetWarning() ?: "No trace is being written."
             DebugSessionState.UNAVAILABLE -> null
+        }
+    }
+
+    /**
+     * Surfaced before a capture rather than after it fails. The bundle refuses outright once the
+     * budget is exceeded, and on 2026-09-15 that refusal was indistinguishable from a normal stop,
+     * so a whole session was performed against a recorder that wrote nothing.
+     */
+    private fun budgetWarning(): String? {
+        if (!BuildConfig.DEBUG) return null
+        val budget = runCatching { viewerFeedbackBudget(File(noBackupFilesDir,"movement-feedback")) }.getOrNull()
+            ?: return null
+        return when {
+            budget.full -> "Storage full (${budget.describe()}). A new recording would be REFUSED — delete recordings first."
+            budget.nearlyFull -> "Storage nearly full (${budget.describe()}). Delete recordings soon."
+            else -> null
         }
     }
 

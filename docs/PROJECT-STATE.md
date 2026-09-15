@@ -214,14 +214,24 @@ fine while nothing was recorded.**
    only the longer was shown. There is now an in-app **Start 30-minute debug session** control with
    ACTIVE/EXPIRED/OFF, both deadlines, session id and a Stop button. Expiry preserved, no automatic
    renewal.
-3. **OPEN.** `ViewerFeedbackBundle` refuses to write once `movement-feedback` exceeds
-   `totalBytes − maxBytes` (256 − 64 = **192 MiB**), calls `stopAccepting("total_cap")`, and the UI
-   renders that as a plain "Recording stopped" — indistinguishable from a normal stop. 220 MiB of old
-   sessions silently ate a whole attempt. **Surface the reason and warn before the cap.**
-4. **OPEN.** `input_issue` reports `TRACKING_GAP` on essentially every row when an offline engine is
-   selected, because the calibrated experiment is not being fed. A red herring in every trace.
-5. **OPEN.** Only `HANGING_KNEE_RAISE` populates `cycleOutcome`. The other six should, or dip cycle
-   rejections stay invisible.
+3. **Fixed 2026-09-16.** `ViewerFeedbackBundle` refuses to write once `movement-feedback` exceeds
+   `totalBytes − maxBytes` (256 − 64 = **192 MiB**). It called `stopAccepting("total_cap")` and the
+   UI rendered that as a plain "Recording stopped", indistinguishable from a normal stop; 220 MiB of
+   old sessions silently ate a whole attempt. The refusal now names the numbers and the remedy, the
+   UI shows **"⚠ Storage full · nothing is recorded"**, and `viewerFeedbackBudget()` answers the
+   question *before* a session so the debug-session status warns from 75% onward.
+4. **Fixed 2026-09-16.** `input_issue` reported `TRACKING_GAP` on essentially every row when an
+   offline engine was selected, because the calibrated experiment is deliberately not fed. It is now
+   omitted in that case rather than reported stale.
+5. **Partly fixed 2026-09-16, and the original entry overstated how cheap this was.** `MUSCLE_UP`
+   now populates `cycleOutcome` from its excursion outcome. `DIP`, `TOES_TO_BAR` and
+   `HANDSTAND_PUSH_UP` **cannot**: they track a phase and a count with no per-cycle event, so there
+   is no outcome to report. A rejected repetition there is visible as a phase reversal plus a
+   rejection reason — which is in fact how the 2026-09-15 dip failure was diagnosed. Giving them
+   cycle events is an engine change with the full test/mutation/byte-identical obligations, not a
+   reporting tweak.
+6. **OPEN.** No live indication that required joints are outside the frame. 54% of captures were
+   rejected as `INVALID_LANDMARK` in the pull-up-bar session with no way for the athlete to know.
 
 **Lesson, recorded twice now:** a seam is not wired until something asserts the far side of it. The
 panel-routing bug and the diagnostic-log bug were the same defect one layer apart.

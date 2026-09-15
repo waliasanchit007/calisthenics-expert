@@ -57,6 +57,12 @@ data class OfflineMovementUpdate(
      * The cycle-logic outcome when a cycle closed on this frame, else null. This is how a rejected
      * cycle is told apart from one that never opened: [rejection] covers unusable frames, this
      * covers usable frames the cycle rules threw away.
+     *
+     * Only HANGING_KNEE_RAISE and MUSCLE_UP can populate it — they are the only engines that model
+     * a cycle as an event with an outcome. DIP, TOES_TO_BAR and HANDSTAND_PUSH_UP track a phase and
+     * a count with no per-cycle event, so a rejected repetition there is visible as a phase reversal
+     * plus a rejection reason, not as an outcome. Giving them cycle events is an engine change with
+     * the full test/mutation/byte-identical obligations, not a reporting tweak.
      */
     val cycleOutcome: String? = null,
     /**
@@ -146,6 +152,7 @@ private class MuscleUpAdapter(config: MuscleUpConfig) : OfflineMovementEngine {
         val r = engine.onFrame(MuscleUpPoseFrame(timestampNs, width, height, landmarks))
         return OfflineMovementUpdate(
             timestampNs, r.count, null, null, r.phase.name, reasonOrNull(r.reason.name), false,
+            cycleOutcome = r.completedExcursion?.outcome?.name,
             metrics = metricsOf(
                 "shoulder_above_wrist" to r.shoulderAboveWristFraction,
                 "body_scale_ratio" to r.bodyScaleRatio,
