@@ -167,7 +167,7 @@ cleanly (0 dropped rows). **Every movement performed was counted 0.**
 | `63ad6747` | Hanging knee raise | **dip bars, support position** | 5 | 0 | `support_rise` −1.16 against a required ≥ +0.35; never admitted as hanging on any of 738 frames |
 | `e9675325` | Hanging knee raise | **pull-up bar, hanging** | ~5 | 0 | hip crossed the whole 150°→110° band inside one 100 ms sample; cycles `ABANDONED` |
 
-### The systemic cause: 30 fps configs running at 10 fps
+### The systemic cause: sample-count parameters, exposed by 30 fps configs running at 10 fps
 
 Every frozen config was derived from **30 fps** footage. The device pose pipeline delivers **10 fps**.
 Everything scaled by sample count shifts 3×:
@@ -177,6 +177,19 @@ Everything scaled by sample count shifts 3×:
   100 ms/frame ≈ 0.4 samples (usually skipped). When skipped, the engine sees a jump straight from
   lowered to raised, treats it as implausible, and discards the cycle.
 - `minimumEndpointSamples = 3` meant a 100 ms hold offline. Live it demands **300 ms**.
+
+**Measured 2026-09-16 (ledger Updates 42-44): the culprit is not movement speed, it is the config's
+sample-count parameters.** A decimation study replayed the labelled corpus at 20/15/10 fps with the
+frozen v1 configs. Engines with `minimum_endpoint_samples = 2` are **completely immune** — muscle-up,
+toes-to-bar and dip return identical counts at every rate. Engines with larger sample counts collapse:
+HSPU (`minimum_reference_samples = 15`) goes 5 → 0, with `REFERENCE_UNAVAILABLE` rising from 5% of
+frames to 85%; the hanging knee raise (`minimum_endpoint_samples = 3`) goes 6 → 0. The explosive
+muscle-up is immune and the slow HSPU press collapses, so speed predicts nothing.
+
+**Raising the device rate alone will not fix it.** At 20 fps the hanging knee raise still counts 2 of
+6. Converting those sample counts to durations is the primary fix; the pipeline work is secondary.
+The count-versus-rate relation is also **not monotonic** (HSPU runs 5 → 3 → 4 → 0), so never judge
+rate sensitivity from a single rate.
 
 **The 10 fps is not a device limit.** Measured on device: inference **38 ms** (p90 48 ms), so ~26 fps
 of capability; end-to-end **171 ms**; **770 of ~1186 camera frames dropped**. `CameraXFrameSource`
@@ -242,24 +255,25 @@ panel-routing bug and the diagnostic-log bug were the same defect one layer apar
 
 ## 9. The plan
 
-Ordered. Steps 3 and 6 need no device.
+**Revised after step 3: 5 is now primary, 4 is secondary.** Order: 5 → 2 → 4 → 6.
 
 1. ~~**Cheap instrument fixes**~~ — **DONE 2026-09-16.** §8 items 3, 4 and 6 fixed; item 5 turned
    out to be an engine change, not a reporting tweak, and is recorded as such.
 2. **Profile the 133 ms.** Add stage timings (capture→preprocess→submit→infer→result→UI) to the
    trace. One session answers whether there is one fat stage or diffuse cost.
-3. **Decimation study — the honest measurement.** The offline corpus is 30 fps and labelled.
-   Decimate every labelled clip to 20/15/10 fps, re-run all seven engines on the v1 configs,
-   pre-register the prediction first. Yields a per-movement fps floor, sets the target for step 4,
-   and separates structurally fragile engines from merely mis-tuned ones. **Never touches device
-   data**, so the four live sessions stay as independent confirmation.
+3. ~~**Decimation study**~~ — **DONE 2026-09-16**, ledger Updates 42–44. Fragility is set by
+   sample-count parameters, not movement speed, and step 4 alone is insufficient. Two harness
+   defects were caught by the pre-registered control and are recorded rather than quietly fixed.
 4. **Raise the device rate.** Overlap the pipeline stages; target ~20–25 fps against a 38 ms
    inference budget. App behaviour change — needs ADR coverage. May hit a real ceiling (thermal,
    camera output format).
-5. **Make the engines frame-rate-independent** where step 3 says it matters.
-   `minimumEndpointSamples: Int` should be a duration. The LOWERED→RAISED guard should use the
-   capture gap: if no frames were dropped, the motion really was that fast. Each with tests, a
-   mutation check, and byte-identical reproduction of the 30 fps results.
+5. **PRIMARY FIX — make the engines frame-rate-independent.** Step 3 says exactly where it matters:
+   `minimumEndpointSamples` and `minimumReferenceSamples` must become durations — that one change
+   addresses both collapse modes. `maximumGapNs` needs the same review: the knee-raise family's
+   100 ms limit only escapes tripping at 10 fps because 3 × 33.33 ms is 99.999 ms, and the 24 fps
+   straight-leg-raise clip trips it 57 times. The LOWERED→RAISED guard should use the capture gap: if
+   no frames were dropped, the motion really was that fast. Each with tests, a mutation check, and
+   byte-identical reproduction of the native-rate results. **Four engines need nothing.**
 6. **Only then, v2 configs** frozen against labelled device footage at the real rate. Additive,
    labels frozen first, never edits to v1. This is where the dip depth gate is addressed, with the
    owner's actual depth in the labelled set.
