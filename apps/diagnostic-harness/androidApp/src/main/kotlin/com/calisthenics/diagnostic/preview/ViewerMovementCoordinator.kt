@@ -49,6 +49,17 @@ internal class ViewerMovementCoordinator {
     /** Last result from the selected offline engine, or null when a calibrated movement is selected. */
     var offlineUpdate: OfflineMovementUpdate? = null
         private set
+    /**
+     * Advice to show the athlete when the selected engine keeps refusing frames, or null when it is
+     * measuring. Derived from the engine's OWN rejection reasons rather than a second copy of each
+     * engine's required-joint list, so it cannot drift from what the engine actually demands.
+     *
+     * It exists because 54% of captures in the 2026-09-15 pull-up-bar session were rejected as
+     * INVALID_LANDMARK -- a joint outside the frame -- and the athlete had no way to know.
+     */
+    var framingAdvice: String? = null
+        private set
+    private val recentRejections = ArrayDeque<String?>()
     private var offlineEngine: OfflineMovementEngine? = null
     private var lastSeenNs: Long? = null
     private var sessionActive = false
@@ -141,6 +152,25 @@ internal class ViewerMovementCoordinator {
                 observation.capturedNs, observation.frame.width, observation.frame.height,
                 observation.landmarks,
             )
+            noteRejection(offlineUpdate?.rejection)
+        }
+    }
+
+    /**
+     * A single bad frame means nothing -- tracking drops one routinely. A sustained majority of
+     * refusals over the recent window is a framing or lighting problem the athlete can fix.
+     */
+    private fun noteRejection(reason: String?) {
+        recentRejections.addLast(reason)
+        while (recentRejections.size > FRAMING_WINDOW) recentRejections.removeFirst()
+        if (recentRejections.size < FRAMING_WINDOW) { framingAdvice = null; return }
+        val outOfFrame = recentRejections.count { it == "INVALID_LANDMARK" }
+        val unconfident = recentRejections.count { it == "LOW_CONFIDENCE" || it == "MISSING_LANDMARK" }
+        val refused = recentRejections.count { it != null }
+        framingAdvice = when {
+            refused * 2 <= recentRejections.size -> null
+            outOfFrame >= unconfident -> "Some joints are outside the frame. Move the phone back or turn it upright."
+            else -> "Body not clearly visible. Improve the lighting or clear the background."
         }
     }
 
@@ -153,6 +183,8 @@ internal class ViewerMovementCoordinator {
         trace = emptyList()
         lastSeenNs = null
         offlineUpdate = null
+        recentRejections.clear()
+        framingAdvice = null
         experiment.reset()
         (selection as? ViewerMovementSelection.Offline)?.let {
             offlineEngine = offlineMovementEngine(it.movement, it.side, it.muscleUpVariant)
@@ -160,6 +192,8 @@ internal class ViewerMovementCoordinator {
     }
 
     private companion object {
+        /** ~2 s at the ~10 Hz the device pose pipeline currently delivers. */
+        const val FRAMING_WINDOW = 20
         const val SAMPLE_FRESHNESS_NS = 250_000_000L
         // Same capture-gap limit enforced by PullUpExperiment on the next fresh sample.
         const val MAX_CAPTURE_GAP_NS = 250_000_000L

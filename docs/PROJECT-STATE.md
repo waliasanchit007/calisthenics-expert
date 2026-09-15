@@ -230,8 +230,12 @@ fine while nothing was recorded.**
    rejection reason — which is in fact how the 2026-09-15 dip failure was diagnosed. Giving them
    cycle events is an engine change with the full test/mutation/byte-identical obligations, not a
    reporting tweak.
-6. **OPEN.** No live indication that required joints are outside the frame. 54% of captures were
-   rejected as `INVALID_LANDMARK` in the pull-up-bar session with no way for the athlete to know.
+6. **Fixed 2026-09-16.** No live indication that required joints were outside the frame — 54% of
+   captures in the pull-up-bar session were rejected as `INVALID_LANDMARK` with no way for the
+   athlete to know. The viewer now shows framing advice above the preview, derived from **the
+   engine's own rejection reasons** over a ~2 s window rather than a second copy of each engine's
+   required-joint list, so it cannot drift from what the engine actually demands. A short burst
+   raises nothing; a sustained majority does.
 
 **Lesson, recorded twice now:** a seam is not wired until something asserts the far side of it. The
 panel-routing bug and the diagnostic-log bug were the same defect one layer apart.
@@ -240,8 +244,8 @@ panel-routing bug and the diagnostic-log bug were the same defect one layer apar
 
 Ordered. Steps 3 and 6 need no device.
 
-1. **Cheap instrument fixes** — items 3–5 in §8, plus a live "joints out of frame" indicator.
-   Unblocks every future capture.
+1. ~~**Cheap instrument fixes**~~ — **DONE 2026-09-16.** §8 items 3, 4 and 6 fixed; item 5 turned
+   out to be an engine change, not a reporting tweak, and is recorded as such.
 2. **Profile the 133 ms.** Add stage timings (capture→preprocess→submit→infer→result→UI) to the
    trace. One session answers whether there is one fat stage or diffuse cost.
 3. **Decimation study — the honest measurement.** The offline corpus is 30 fps and labelled.

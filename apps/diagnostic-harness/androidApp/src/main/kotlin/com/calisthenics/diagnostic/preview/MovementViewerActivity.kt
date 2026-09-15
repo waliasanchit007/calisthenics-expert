@@ -137,6 +137,7 @@ class MovementViewerActivity : ComponentActivity() {
                     "Diagnostics ON · local ADB trace includes derived movement measurements, not images/video. " +
                     "Auto-off within 30 min · writer drops ${diagnosticLog?.droppedRows ?: 0}" else null,
                 onDisableDiagnostics = if (diagnosticsEnabled) ({ disableDiagnostics() }) else null,
+                framingAdvice = if (controller != null) movementCoordinator.framingAdvice else null,
                 debugSession = debugSession,
                 debugSessionDetail = debugSessionDetail,
                 onStartDebugSession = if (BuildConfig.DEBUG) ({ startDebugSession() }) else null,

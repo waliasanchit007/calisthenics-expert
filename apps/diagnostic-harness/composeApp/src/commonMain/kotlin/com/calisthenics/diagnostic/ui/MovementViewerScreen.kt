@@ -97,6 +97,7 @@ fun MovementViewerScreen(
     movementPanel: (@Composable () -> Unit)? = null,
     diagnosticsStatus: String? = null,
     onDisableDiagnostics: (() -> Unit)? = null,
+    framingAdvice: String? = null,
     debugSession: DebugSessionState = DebugSessionState.UNAVAILABLE,
     debugSessionDetail: String? = null,
     onStartDebugSession: (() -> Unit)? = null,
@@ -239,6 +240,10 @@ fun MovementViewerScreen(
                             color=MaterialTheme.colorScheme.error,
                         )
                     }
+                }
+                framingAdvice?.let {
+                    Text("⚠ $it", style=MaterialTheme.typography.bodyMedium,
+                        color=MaterialTheme.colorScheme.error)
                 }
                 Box(Modifier.fillMaxWidth().weight(1f).clipToBounds().background(Color(0xFF15232A)), contentAlignment = Alignment.Center) {
                     if (livePreview != null) livePreview(Modifier.fillMaxSize())
