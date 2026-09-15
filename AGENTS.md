@@ -2,7 +2,13 @@
 
 ## Source of truth
 
-Read [`docs/central-handoff.md`](docs/central-handoff.md) completely before proposing architecture, planning work, or modifying the project. It is the canonical product and technical direction for Calisthenics Movement Intelligence.
+Read [`docs/PROJECT-STATE.md`](docs/PROJECT-STATE.md) **first**. It is the entry point: where the
+project is, what works, what is broken, and what to do next. It also carries the read order for
+everything else.
+
+Then read [`docs/central-handoff.md`](docs/central-handoff.md) before proposing architecture,
+planning work, or modifying the project. It is the canonical product and technical direction for
+Calisthenics Movement Intelligence — the north star, not the status report.
 
 The immediate scope is Phase 0: determine whether an ordinary phone camera and MediaPipe Pose Landmarker can produce a reliable canonical representation of calisthenics movement. The deliverable is measurement evidence, not a production coaching application.
 
@@ -53,6 +59,35 @@ M0.5B does not authorize M0.5C work, participant data, a numeric reliability thr
 rep/form engine, a production claim, a mid-range claim, or an iOS-equivalence claim. Functional
 iOS capture, mid-range admission, participant study execution, and production application
 features remain separately governed.
+
+## Development-phase amendment (owner, 2026-09-16)
+
+This project is private, shared with no one, and has a single recorded subject: the owner, recording
+himself. Only the **final parameters** that survive testing ever ship. On that basis the owner has
+postponed — **not abandoned** — the following until pre-launch:
+
+- The eight privacy decisions and the participant gate described under *Current operating gate*.
+  The formal gate text below is left unedited as the record of what was approved; this amendment
+  states what is in force during development.
+- The retention/withdrawal ceremony in `docs/protocols/privacy-retention-withdrawal.v1.md`.
+- Study-release formalities for internal experiments.
+
+The owner has given standing permission to record and log his own movements, including camera-input
+images in debug self-test bundles, under the ADR-0006 limits.
+
+**If training data involving anyone else is needed, permission is obtained first.** That is the
+owner's stated position; this amendment does not widen it, and it does not authorize recording any
+other person.
+
+Three things are **kept regardless**, because they are not the project's to waive:
+
+- **Never bypass a third party's access restriction.** `fetch_youtube.py` stops at a sign-in wall;
+  leave it stopped and record the refusal. This is someone else's access control, not an internal
+  process rule, so a development-phase relaxation does not reach it.
+- **Creative Commons attribution and licence recording** — a condition set by the people whose
+  footage is used.
+- **Media and person-derived data stay outside Git.** Now engineering hygiene rather than policy:
+  history is permanent and large binaries are unpleasant to remove.
 
 ## Collaboration
 

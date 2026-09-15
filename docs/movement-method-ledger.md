@@ -1,18 +1,18 @@
-# Offline movement work — method ledger (2026-09-06 → 2026-09-12)
+# Movement method ledger
 
-Preserved copy. The working original lives at
-`.superpowers/sdd/2026-09-11-muscle-up/progress.md`, which is excluded from Git by
-`.git/info/exclude` — a local, unversioned file, so the exclusion is invisible to a clone. The
-results documents in `docs/` cite this ledger as their provenance, so it is copied here to keep
-the audit trail with the evidence it supports.
+**Canonical, append-only.** Every offline experiment, with the parameters and predicted outcomes
+that were frozen *before* the run that tested them. The results documents in `docs/` cite this as
+their provenance; `docs/PROJECT-STATE.md` summarises its conclusions.
 
-It is append-only and deliberately records failures, wrong hypotheses and abandoned parameters
-alongside the results. Parameter values and predicted outcomes are written down BEFORE the run
-that tests them, so a prediction that failed can be seen to have failed.
+Append a new `## Update N` per unit of work. **Never edit an earlier entry** — corrections are new
+entries that say what was wrong and why, which is how the record stays trustworthy. Several entries
+below correct earlier ones; that is the mechanism working, not a defect.
+
+A working scratch copy may exist at `.superpowers/sdd/2026-09-11-muscle-up/progress.md` inside a
+worktree. It is unversioned and is **not** the source of truth. This file is.
 
 ---
 
-# 2026-09-11 muscle-up packet — ledger
 
 Worktree `/Users/sanchit.walia/.buzz-multiagent/calisthenics-expert/worktrees/m0-5b-task-4-synchronized-video`
 Branch `codex/movement-viewer` HEAD `a690a351569cb8c76aaaece47e1398c9d0e7836c` (unchanged).
@@ -993,3 +993,235 @@ problem, and it is not cheaply solvable from background pixels at this precision
 would solve it has to be better than what the image itself gives — on a phone, the IMU is exactly
 that: gyroscope gives camera rotation directly, at high rate, with no dependence on scene texture.
 Recorded as the natural next avenue, NOT as an adopted design.
+
+## Update 32 — a claim of mine did not survive checking, and the timing story is weaker than counts
+Before wiring the offline engines into the app I re-read the underlying reports rather than the
+summary table. **The state-and-plan row for straight-bar dip said "5/6 detected, 0 false positives".
+The "0 false positives" is supported by nothing I can find.** `XTDc47D1G_I-report-v3-per-segment-side.json`
+records matched 2, missed 4, **extra 3**, precision 0.40, recall 0.33 against the v2 labels. The 5/6
+is a COUNT comparison (5 predicted vs 6 annotated) and counts are the sanctioned metric under rule 7;
+the false-positive claim was an overstatement that had propagated into the summary. Row corrected.
+
+A second thing the summary hides, visible in the timebase-corrected table in the results doc:
+
+| clip | counts | match +/-0.25 s | +/-0.35 s | +/-0.5 s |
+|---|---|---|---|---|
+| MU ring | 3/3 | 0/3 | 0/3 | 2/3 |
+| MU bar | 3/3 | 0/3 | 1/3 | 3/3 |
+| HSPU back-to-wall | 5/5 | 1/5 | 1/5 | 2/5 |
+| HSPU wall-facing | 5/4 | 0/4 | 0/4 | 0/4 |
+| toes-to-bar | 6/7 | 2/7 | 5/7 | 6/7 |
+| straight-bar dip | 5/6 | 4/6 | 5/6 | 5/6 |
+
+**These engines count acceptably and place events poorly.** Muscle-up matches 0/3 at +/-0.25 s and
+HSPU wall-facing 0/4 at every window tested. That is consistent with the definitional finding
+already recorded — a threshold-crossing engine reports where it DETECTED an endpoint, roughly 0.3-0.5 s
+before the movement actually ended. Any live UI must therefore surface counts and durations, and must
+not present a repetition instant as accurate to better than about half a second. The adapter layer
+carries this in its own KDoc so a caller cannot miss it.
+
+## Update 33 — offline engines wired for live use (shared layer)
+`OfflineMovementAdapters.kt`: one `OfflineMovementEngine` interface over seven engines, so a live
+caller drives any of them with `(timestampNs, width, height, landmarks)` — which is exactly what
+`ViewerMovementCoordinator` already holds before it narrows to arm measurements.
+
+Offered: DIP, TOES_TO_BAR, HANGING_KNEE_RAISE, MUSCLE_UP, HANDSTAND_PUSH_UP (repetitions);
+HANDSTAND_HOLD, BACK_LEVER (holds).
+
+Every config is transcribed VERBATIM from the frozen file that produced the recorded result, each
+cited in the KDoc by path. Nothing was invented or re-tuned for live use. `side` and `variant` are
+exposed as parameters because they are properties of the RECORDING each config was frozen against,
+not of the movement.
+
+**Withheld, in code rather than only in a document, each with its measured reason**: L_SIT (gate
+admits ordinary sitting), FRONT_LEVER (median 53.3 deg against a 30 deg gate), HANGING_STRAIGHT_LEG_RAISE
+(documented 0/6 on a front view), TUCK_PLANCHE (measures the tuck, not the hold), PLANCHE (disclosed
+dev material), WALL_SIT (failed the held-out handheld clip). A test asserts the offered and withheld
+sets are disjoint and that every withheld entry carries a substantive reason, so promoting one
+requires deleting its reason.
+
+THE STANDING RISK, recorded so it cannot be discovered later as a surprise: these are FIXED-THRESHOLD
+engines and the app's own arm-cycle engine instead CALIBRATES per person. The offline thresholds have
+never been shown to transfer to another camera, athlete or frame rate, and the hold thresholds are
+known not to be frame-rate invariant. Live output is an unvalidated port until it is measured against
+a frozen label on this device.
+
+8 tests. Mutation check, 3 mutants, all killed, file restored to sha256
+2cd371a6409106e7171c5c59ae5000bc761d6a91df64d55ad1b2702a55f61b92:
+  M1 swallow every rejection reason -> killed by 3;  M2 back lever claims REPETITION -> killed by 2;
+  M3 quietly drop L_SIT from the withheld list -> killed by 1.
+Suite 885 / 95, 0 failures. No app behaviour changed yet: this is the shared layer only.
+
+## Update 34 — the Gradle wrapper was never proxy-blocked. The JDK did not trust the proxy.
+Found while chasing seven Robolectric test failures. `curl` fetched the missing artifact with status
+200; Java could not, failing with `PKIX path building failed`. curl uses the system trust store and
+the JDK uses its own `cacerts`, which lacked the corporate root.
+
+**This invalidates a diagnosis this project has carried since 2026-09-11 and used all session.** The
+note in `docs/2026-09-12-state-and-plan.md` says "The Gradle wrapper (9.3.1) is blocked by a
+corporate proxy. Use Homebrew Gradle with an explicit JDK; the wrapper files are deliberately
+untouched." The proxy blocks nothing. Every Java HTTPS fetch was failing for want of a trusted root:
+the wrapper distribution, and Robolectric's runtime `android-all-instrumented` fetch.
+
+Fix, verified: build a truststore from JDK 21 `cacerts` plus the 176 certificates in the existing
+`ca-bundle.pem`, and point JVMs at it through **JAVA_TOOL_OPTIONS** — not GRADLE_OPTS, because
+Gradle forks test JVMs and Robolectric's fetch happens inside the fork.
+
+    ./gradlew --version           -> Gradle 9.3.1, distribution downloaded to ~/.gradle/wrapper/dists
+    :androidApp:testDebugUnitTest -> 268 tests, 0 failures (was 7 failing, all "Failed to fetch")
+
+Stored at `offline-corpus/toolchain-20260912/` with a README. Outside Git: corporate certificates and
+environment configuration, not source. `make verify-*` targets, which all call `./gradlew`, should
+now work as written rather than needing the Homebrew substitution.
+
+TWO SMALLER TOOLCHAIN FACTS from the same session, both previously unrecorded:
+  * `--offline` fails for anything not already cached — the androidApp dependency graph and
+    Robolectric were not. It was only ever safe for `:shared:jvmTest`.
+  * `-Porg.gradle.java.installations.paths` is NOT enough to build the Android app. The JdkImageTransform
+    runs `jlink` on the DAEMON's JVM, and Homebrew's default JDK 26 cannot transform Android's
+    `core-for-system-modules.jar`. `JAVA_HOME` must also point at JDK 21.
+Also installed SDK Build Tools 36.0.0, verified by size and SHA-1 against Google's `repository2-3.xml`
+(79,121,749 bytes, sha1 199ae0047ee61e842f8ee0c6d3918e44fb9a1f83). 35.0.0, 36.1.0 and 37.0.0 were
+present but AGP 9.1.0 wants exactly 36.0.0.
+
+## Update 35 — offline movements wired into the live viewer (app layer)
+`ViewerMovementSelection` makes the analyser choice explicit: `Calibrated` (the per-person pull-up
+/push-up engine) or `Offline` (a fixed-threshold engine). They are separate types rather than one
+list because that difference IS the risk.
+
+The coordinator feeds whichever is selected, and **the calibrated experiment is not fed at all while
+an offline movement is selected**, so its count cannot drift in the background and be misread as the
+offline movement's. Gap and backwards-timestamp notifications are deliberately NOT forwarded to the
+offline engines: each enforces its own `maximumGapNs` and timestamp ordering internally, so
+forwarding would double-count a rejection the engine already makes.
+
+Muscle-up carries its variant because the owner has both apparatus: BAR_KIPPING (grip drift 1.0) and
+RING_STRICT (2.0), the two frozen configs differing only there.
+
+APPARATUS CAVEAT RECORDED IN THE ENUM, not just here: the DIP config was frozen on a STRAIGHT-BAR dip
+(`XTDc47D1G_I`). Ring dips are a different geometry — the rings rotate and the torso carries more
+lean — so running it on rings is an untested transfer. It may work; nothing says it does.
+
+7 coordinator tests, all passing. Full androidApp suite 268/36, 0 failures. Shared suite 885/95.
+
+## Update 36 — picker UI: the two analyser families are labelled, not blended
+`MovementViewerScreen` now offers both, under separate headings rather than as one list of nine:
+
+  "Calibrated to you"   Pull-up, Push-up
+  "Exploratory · fixed thresholds, not calibrated to you"
+                        Dip (straight bar), Knee raise, Toes to bar, Muscle-up,
+                        HSPU (wall), Handstand hold, Back lever
+
+The heading is the honest part. These engines carry thresholds frozen from recorded footage of other
+people and have never been fitted to this athlete, camera or frame rate. Selecting one shows a
+caption in the error colour saying counts and durations only, and that repetition instants are not
+accurate to better than about half a second — which is what the corpus measured (muscle-up 0/3 at
++/-0.25 s, HSPU wall-facing 0/4 at every window).
+
+DIP NAMES ITS APPARATUS IN THE CHIP — "Dip (straight bar)" — and selecting it swaps the caption for
+one saying the config was frozen on a straight bar and that rings are an untested transfer. The
+owner has rings, so a chip reading just "Dip" would have been quietly misleading.
+
+The two families are mutually exclusive: `offlineMovement != null` deselects the calibrated chips, so
+the screen can never show both as active while only one analyser is fed.
+
+Built and tested through **`./gradlew`**, the wrapper, for the first time in this workstream — see
+Update 34. Shared 885/95, androidApp 268/36, both 0 failures. Installed with `adb install -r`; the
+22 existing feedback sessions survived.
+
+## Update 37 — DEFECT FOUND BY THE OWNER: the selection reached the analyser and never reached the UI
+Reported: "on selecting knee raises, i am still shown pull ups in internal flow". Correct, and it was
+my defect from Update 36. I wired which engine is FED and did not wire what the screen DISPLAYS.
+
+Everything downstream of the chip read `movementState.experiment` — the CalibratedArmCycleExperiment
+— which stays at PULL_UP/IDLE while an offline movement is selected because it is deliberately not
+fed. So the chip highlighted "Knee raise" while the panel ran the calibrated flow underneath:
+"Let's set up", "Raise your selected arm", "Practice one pull-up", arm choice, confirm-practice. The
+summary line said "Setup / practice · counting is OFF" for the same reason.
+
+That is worse than a cosmetic bug. It instructed the athlete to perform a pull-up practice rep for an
+engine that has no practice stage and was measuring knee raises.
+
+FIX, in three parts:
+ 1. `MovementPanelState` carries `offlineMovement` and `offline`; `MovementMeasurementsPanel` returns
+    early into a separate `OfflineMovementPanel`. The exploratory engines have no calibration, no
+    practice rep and no arm choice, so none of that flow applies and none of it is shown. The panel
+    shows count or hold duration, phase, the engine's own rejection enum, and a reset.
+ 2. `movementSummary` no longer borrows the calibrated stage wording when an offline movement is
+    selected.
+ 3. All THREE `MovementPanelState` construction sites now go through one `selectedOfflineMovement()`
+    helper. The bug existed because the sites were written separately and one was missed; a single
+    source is why it cannot recur site-by-site.
+
+REGRESSION TEST, and verified to actually catch it: `OfflineMovementPanelRoutingTest`, 3 Robolectric
+tests. Reverting the fix (dropping the two arguments from `refreshMovementPanel`) makes **all three
+fail**; restoring it makes all three pass, with the activity file restored to
+sha256 d560a5344b256ae9524f4ad777c556345a24131fa6eb3952948316e58afeb4ce. One of the three walks every
+OfflineMovement rather than a single example, because the defect was per-construction-site.
+
+Shared 885/95, androidApp 271/37, 0 failures. Installed; the 22 feedback sessions survived.
+
+LESSON WORTH KEEPING: the adapter tests, the coordinator tests and the mutation checks all passed
+while this was broken, because every one of them stopped at the coordinator boundary. Nothing tested
+that the selection was RENDERED. A seam is not wired until something asserts the far side of it.
+
+## Update 41 — a wrong diagnosis, and the instrument that would have prevented it (2026-09-12)
+
+The owner reported knee raises not counting. I answered with a mechanism instead of evidence, and
+the mechanism was wrong.
+
+CORRECTION 1. I claimed the viewer feeds a "front view" to a side-view engine because
+`MovementViewerController` requests `LENS_FACING_FRONT`. Lens facing selects a sensor; it says
+nothing about where the phone stands or which way the athlete faces. A front-facing camera propped
+to the athlete's side records a side view. Two unrelated senses of "front", collapsed into one. The
+front camera is kept, per ADR-0006, which never made a viewpoint claim in the first place.
+
+CORRECTION 2. I carried the Priority 8 negative (hanging straight-leg raise, 0/6) across to explain
+this. That negative's dominant cause was projected knee angle under a 140 deg gate. The frozen
+knee-raise config sets `raisedKneeMinDegrees = 0.0`, so the knee test is vacuous and
+KNEE_FLEXION_REJECTED is unreachable: it discriminates on hip angle alone. Straight-leg evidence
+cannot explain a bent-knee miss under a config with no knee gate. Worse for my hypothesis, Priority
+8 records the hip angle *falling to 0.1-5 deg* from the front through projective degeneracy -- under
+a hip-only config that points toward spurious passing, not silence. The hypothesis did not even
+predict the observed symptom.
+
+WHY THERE WAS NO EVIDENCE. Two failures, both mine.
+  (a) Two clocks bound a session and only the longer was visible. The 30-minute marker had lapsed;
+      separately `startFeedback` sets the recorder's deadline to 180 s, so a status line reading the
+      30-minute window alone can say "on" while nothing is written.
+  (b) The diagnostic log recorded only `PullUpExperimentState`, which is deliberately not fed while
+      an offline engine runs. Every row said PULL_UP/IDLE regardless of the movement. This is the
+      SAME defect as the panel-routing bug in Update 40, one layer over: I fixed what the screen
+      displayed and never looked at what the log wrote. Update 40's lesson -- a seam is not wired
+      until something asserts the far side of it -- had a second far side I did not check.
+
+DONE.
+  - In-app "Start 30-minute debug session" with ACTIVE/EXPIRED/OFF, both deadlines, session id,
+    dropped-row count, and Stop. Writes the same private marker as `adb run-as`, same 30 minutes,
+    debug builds only. Expiry preserved; no automatic renewal anywhere.
+  - `OfflineMovementUpdate` gains `cycleOutcome` and `metrics` (projected geometry, by the engine's
+    own field names; absent rather than zero when unmeasured). All seven adapters populate it.
+  - Log rows carry `offline_movement`, `offline_phase`, `offline_reason`, `offline_cycle_outcome`,
+    `offline_reps`, `offline_counted`, hold durations and `off_*` geometry. Offline state joins the
+    duplicate-suppression signature -- otherwise a changing rejection under a static pull-up state is
+    dropped as a repeat. Angles quantize at 0.5 deg, ratios at 0.005 (0.5 would erase a 0.35 gate).
+  - Framing instruction on all seven exploratory movements: "Place the phone to your side. Keep your
+    full body and the bar visible." All seven, because each config was frozen from one viewpoint and
+    none has been checked from another -- handstand hold included, which must not be called
+    view-agnostic without evidence.
+
+TESTS. shared 887 (+2), androidApp 273 (+2), 0 failures, counts read from JUnit XML. Two mutants:
+dropping offline state from the dedup signature kills `offlineRejectionChangeSurvivesTheRateSuppressor`;
+emptying `metricsOf` kills `aMeasuredKneeRaiseFrameReportsTheGeometryItsGatesUse`. Both sources
+restored byte-identical (`f8f9efaf...`, `dd7472a2...`).
+
+NOT DONE, EXTERNAL BLOCKER. The capture itself. The phone dropped off wireless debugging mid-work
+(`adb connect 192.168.1.12:42475` refused, `adb mdns services` empty), so the new build is not
+installed and no session has been observed arriving at the collector. NOTHING is claimed about why
+the knee raises did not count.
+
+NEXT ACTION. Reconnect the phone, install, press Start, confirm a NEW session id is reaching the
+collector BEFORE asking for an attempt, then capture one short authorized set and read
+`offline_reason`, joint availability, `off_hip_deg` / `off_support_rise` / `off_trunk_elevation_deg`
+and `offline_cycle_outcome` to separate tracking loss, viewpoint limitation, configuration mismatch
+and cycle-logic failure. No threshold moves before that.
