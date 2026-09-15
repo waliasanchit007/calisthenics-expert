@@ -1329,3 +1329,86 @@ number from this study must never be quoted as the dip result; they are differen
 **Every prediction in Update 42 stands unchanged**, except that 42(d)'s dip line is now read against
 that study-local baseline rather than the published 5. No threshold, config or engine is touched. The
 corrected run is run 02.
+
+## Update 44 — decimation study: RESULTS (2026-09-16, run 03)
+
+Predictions in Update 42, amended in Update 43, both committed before this run. Artefacts:
+`offline-corpus/decimation-study-20260916/run-03/` (poses, predictions, logs, `summary.json`).
+
+**Run 02 also had a defect and was superseded by run 03.** Its decimator kept a frame once
+`interval - tolerance` had elapsed, tolerance = half the source interval. That admits *every* frame
+whenever the target interval is under 1.5 source intervals, so the "20 fps" column was silently the
+native stream, and dip's "10 fps" was really 12.5 fps. Run 03 uses grid sampling — take the first
+frame at or after each target grid time — and now **reports the achieved mean rate per cell**, so
+this cannot hide again. Achieved rates in run 03 are 19.98-20.00, 14.99-15.00 and 9.99-10.00.
+
+**Control (42a): PASSES.** Every scoreable job reproduces its recorded count at its native rate:
+muscle-up 3 and 3, HSPU 5 and 5, hanging knee raise 6, toes-to-bar 6, straight-leg raise 0.
+
+### Counts by rate
+
+| job | config sample params | native | 20 fps | 15 fps | 10 fps |
+|---|---|---|---|---|---|
+| muscle-up ring | endpoint 2, ref 5, gap 250 ms | 3 | 3 | 3 | 3 |
+| muscle-up bar | endpoint 2, ref 5, gap 250 ms | 3 | 3 | 3 | 3 |
+| toes-to-bar | endpoint 2, gap 250 ms | 6 | 6 | 6 | 6 |
+| dip *(study-local)* | endpoint 2, gap 250 ms | 3 | 3 | 3 | 3 |
+| HSPU back-to-wall | **ref 15**, gap 250 ms | 5 | 3 | 4 | **0** |
+| HSPU wall-facing | **ref 15**, gap 250 ms | 5 | 4 | 5 | **1** |
+| hanging knee raise | **endpoint 3**, **gap 100 ms** | 6 | 2 | 2 | **0** |
+| straight-leg raise *(negative control)* | endpoint 3, gap 100 ms | 0 | 0 | 0 | 0 |
+
+### The central prediction was WRONG
+
+**42(c) said fragility follows movement speed. It does not.** The muscle-up is the most explosive
+movement in the set and is *completely immune* — identical counts at every rate. Toes-to-bar is fast
+and immune. The HSPU is a slow press and collapses hardest. Speed predicts nothing here.
+
+**What actually predicts fragility is the config's sample-count parameters**, which are frame-rate
+dependent by construction:
+
+- `minimum_endpoint_samples = 2`, `minimum_reference_samples = 5` -> **immune** (4 of 4 jobs).
+- `minimum_reference_samples = 15` -> **collapses**. `REFERENCE_UNAVAILABLE` rises from 5% of frames
+  natively to **85%** at 10 fps on the back-to-wall clip. Fifteen consecutive valid frames is 0.5 s
+  at 30 fps and 1.5 s at 10 fps, and with the clip's existing `NO_POSE`/`INVALID_LANDMARK` dropouts
+  a 1.5 s clean run is simply unattainable.
+- `minimum_endpoint_samples = 3` -> **collapses**. Three consecutive endpoint samples is 100 ms at
+  30 fps and 300 ms at 10 fps, so a raise that does not pause at the top is never confirmed.
+
+Prediction scorecard: 42(a) control **pass**; 42(d) hanging knee raise **pass** (predicted <= 3, got
+0) and straight-leg raise **pass** (0 at every rate, negative control holds); 42(c), and 42(d) for
+muscle-up (predicted <= 2, got 3), HSPU (predicted >= 4, got 0 and 1) and toes-to-bar (predicted
+<= 4, got 6) all **fail**. Two of six specific predictions correct.
+
+**42(b) is half wrong and the half that fails matters.** No rate ever exceeds the native count, as
+predicted. But the relationship is **not monotonic**: HSPU back-to-wall runs 5 -> 3 -> 4 -> 0 and
+wall-facing 5 -> 4 -> 5 -> 1. Which particular frames survive decimation interacts with where the
+reference window happens to land, so a single lower rate can score better than a higher one.
+**Consequence: a one-rate measurement can mislead about an engine's rate sensitivity**, and any
+future check of this kind must sweep rather than sample one point.
+
+**42(e) holds.** Extras never rise as counts fall — degradation is missed endpoints, never false
+positives. Knee raise extras go 6 -> 2 -> 2 -> 0 alongside its counts.
+
+### A fragility the table hides
+
+`CAPTURE_GAP` never fires for the hanging knee raise at any rate, because 3 x 33.33 ms = 99.999 ms
+sits just under its 100 ms limit. The straight-leg raise, whose source is 24 fps rather than 30, trips
+it **57 times** at 10 fps. So the 100 ms gap limit is not merely tight at 10 fps — it is on the wrong
+side of the boundary for any source whose rate is not a clean multiple. That is luck, not design.
+
+### What this means for the plan
+
+**Raising the device frame rate alone does not fix this.** At 20 fps — roughly the best the 38 ms
+inference budget allows — the hanging knee raise still counts **2 of 6**, and HSPU back-to-wall 3 of
+5. Plan step 4 was necessary but is nowhere near sufficient, and had the study not been run it would
+have been attempted first and judged a failure for the wrong reason.
+
+**Plan step 5 is now the primary fix and is precisely targeted.** `minimumEndpointSamples` and
+`minimumReferenceSamples` must become durations; that single change addresses both collapse modes.
+`maximumGapNs` needs review for the same reason. Four engines need nothing.
+
+**Not done here:** no threshold, config or engine was changed, and the 2026-09-15 device sessions
+were not used to fit anything. Whether the live dip and knee-raise failures have causes beyond rate
+remains open — the dip failure in particular was a `shoulder_above_wrist` admission failure, which
+this study says nothing about, and dip is rate-immune.
