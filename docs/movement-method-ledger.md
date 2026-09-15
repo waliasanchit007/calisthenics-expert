@@ -1225,3 +1225,65 @@ collector BEFORE asking for an attempt, then capture one short authorized set an
 `offline_reason`, joint availability, `off_hip_deg` / `off_support_rise` / `off_trunk_elevation_deg`
 and `offline_cycle_outcome` to separate tracking loss, viewpoint limitation, configuration mismatch
 and cycle-logic failure. No threshold moves before that.
+
+## Update 42 — decimation study: PRE-REGISTRATION (2026-09-16, written before the run)
+
+Declared before any decimated replay is executed, per method rule 2. The commit carrying this entry
+precedes the commit carrying results.
+
+**Question.** Every frozen config was derived from footage at its clip's native rate. The device pose
+pipeline delivers ~10 fps. How much of the live 0-count failure on 2026-09-15 is explained by that
+gap alone, and which engines are structurally fragile rather than merely mis-tuned?
+
+**CORRECTION to `PROJECT-STATE.md` §7, made before running.** That section says "every frozen config
+was derived from 30 fps footage". Measured from the caches, that is not true of all of them:
+
+| clip | movement | frames | source rate |
+|---|---|---|---|
+| `yTczZRbcfJU` | muscle-up ring | 583 | 30.0 fps |
+| `k71s4T2_CJI` | muscle-up bar | 617 | 30.0 fps |
+| `cLTvfDlhiXM` | HSPU back-to-wall | 443 | 30.0 fps |
+| `tz_YVynl1sk` | HSPU wall-facing | 626 | 30.0 fps |
+| `C0RXOvy609I` | hanging knee raise | 1611 | 30.0 fps |
+| `wZ6bjrOjbCI` | toes-to-bar | 1556 | 30.0 fps |
+| `TcU7wtLdIx4` | straight-leg raise | 520 | **24.0 fps** |
+| `XTDc47D1G_I` | straight-bar dip | 1536 | **25.0 fps** |
+
+So the live gap is 3x for most movements but **2.5x for dip** and 2.4x for the straight-leg raise.
+The qualitative claim stands; the arithmetic in that section is corrected here rather than edited
+there, and `PROJECT-STATE.md` will be updated to point at this entry.
+
+**Method.** No engine, config or label changes. Only the INPUT is decimated. Each cache's
+`poses.jsonl` is resampled to a target interval by keeping a frame when its timestamp is at least
+`interval - tolerance` after the last kept frame, tolerance = half the source interval. From a 30 fps
+grid a 20 fps target therefore yields an alternating 33/67 ms pattern averaging 50 ms — which is what
+a 20 fps sampler over a 30 fps source actually produces, not an idealised uniform 50 ms. Frozen v1
+configs are used unchanged and hash-bound, as are labels and the Kotlin sources.
+
+**Rates.** Native (control), 20, 15, 10 fps.
+
+**Predictions, declared now.**
+
+(a) **CONTROL.** At the native rate every job reproduces its recorded count exactly. If any does not,
+    the harness is wrong, the run is void, and nothing else in it may be interpreted. This is a
+    stopping rule, not a caveat.
+(b) Counts fall or stay equal as the rate falls. **No movement gains counts at a lower rate.** A gain
+    would be a genuine surprise and must be investigated, not explained away.
+(c) Fragility follows movement speed: hanging knee raise and muscle-up degrade most; HSPU and dip
+    least.
+(d) At 10 fps, specifically:
+    - hanging knee raise `C0RXOvy609I`: 6 counted natively -> **<= 3**
+    - muscle-up, both clips: 3 counted natively -> **<= 2** each
+    - HSPU, both clips: 5 counted natively -> **>= 4** each
+    - dip `XTDc47D1G_I`: 5 counted natively -> **>= 4**
+    - toes-to-bar `wZ6bjrOjbCI`: **<= 4**
+    - straight-leg raise `TcU7wtLdIx4`: 0 counted natively -> **0 at every rate**, because it fails
+      on a knee-angle gate and foreshortening, which sampling neither causes nor cures. This is the
+      negative control: if it moves, the study is measuring something other than what it claims.
+(e) **Mechanism.** Degradation appears as missed endpoints and, for the hanging knee raise, as
+    `ABANDONED` cycle outcomes — not as false positives. If extras rise, the explanation is wrong.
+
+**What this cannot settle.** It says nothing about whether the live device failures had additional
+causes beyond rate; the device sessions are separate evidence and are deliberately not used to fit
+anything here. It also cannot distinguish "the config is wrong for this athlete" from "the rate is
+too low" on any clip the athlete did not perform.
