@@ -223,7 +223,15 @@ class HandstandPushUpExperiment(private val config: HspuConfig) {
 
     private var lastTimestampNs: Long? = null
     private val timing = ElbowCycleTiming(config.minimumEndpointSamples)
-    private val pendingSpans = ArrayDeque<Double>()
+    private class PendingSpan(val timestampNs: Long, val span: Double)
+
+    private val pendingSpans = ArrayDeque<PendingSpan>()
+
+    /**
+     * `minimumReferenceSamples` read as the duration it expresses; see [sampleCountAsDurationNs].
+     * The frozen config says 15, which at 30 fps is the 466.7 ms of settled inversion this gates on.
+     */
+    private val minimumReferenceSpanNs = sampleCountAsDurationNs(config.minimumReferenceSamples)
 
     fun onFrame(frame: HspuPoseFrame): HspuFrameResult {
         val timestamp = frame.timestampNs
@@ -263,7 +271,7 @@ class HandstandPushUpExperiment(private val config: HspuConfig) {
 
         val span = measurement.shoulderToWristSpan!!
         if (reference == null) {
-            establishReference(span)
+            establishReference(timestamp, span)
             return result(
                 timestamp, measurement.hipAboveShoulderFraction, span, null,
                 if (reference == null) HspuReason.REFERENCE_UNAVAILABLE else HspuReason.NONE, false,
@@ -283,13 +291,20 @@ class HandstandPushUpExperiment(private val config: HspuConfig) {
     }
 
     /** The reference is the extended span of a SETTLED inversion, never of the kick-up. */
-    private fun establishReference(span: Double) {
-        pendingSpans.addLast(span)
-        while (pendingSpans.size > config.minimumReferenceSamples) pendingSpans.removeFirst()
-        if (pendingSpans.size < config.minimumReferenceSamples) return
-        val mean = pendingSpans.sum() / pendingSpans.size
+    private fun establishReference(timestampNs: Long, span: Double) {
+        pendingSpans.addLast(PendingSpan(timestampNs, span))
+        // Keep the SMALLEST window that still spans the required settling time: drop the oldest
+        // sample only while what remains would still cover it. At 30 fps that leaves exactly
+        // `minimumReferenceSamples` frames, which is what the count rule kept.
+        while (pendingSpans.size > 2 &&
+            timestampNs - pendingSpans.elementAt(1).timestampNs >= minimumReferenceSpanNs
+        ) pendingSpans.removeFirst()
+        if (pendingSpans.size < 2) return
+        if (timestampNs - pendingSpans.first().timestampNs < minimumReferenceSpanNs) return
+        val spans = pendingSpans.map { it.span }
+        val mean = spans.sum() / spans.size
         if (mean <= 0.0) return
-        val spread = (pendingSpans.max() - pendingSpans.min()) / mean
+        val spread = (spans.max() - spans.min()) / mean
         if (spread <= config.maximumReferenceSpanSpreadRatio) {
             reference = HspuReference(mean)
             pendingSpans.clear()

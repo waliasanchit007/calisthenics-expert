@@ -15,6 +15,16 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 
+/**
+ * One frame interval on a synthetic clock a hair under 30 fps. The engine gates endpoints on
+ * ELAPSED TIME, so these fixtures address frames in TICKS instead of the 100 ns steps they used to
+ * use — a spacing no camera produces. Sequences and expectations are unchanged.
+ *
+ * `parsesTheFrozenOnDiskConfigTextExactlyAsWritten` is deliberately NOT ticked: it is a byte-for-byte
+ * copy of a corpus file and must stay one.
+ */
+private const val TICK = 333_334L
+
 class ReplayHangingLegRaisePoseTest {
     /** Frozen key set and ordering, with the two short-sequence overrides used by these tests. */
     private val configJson = """
@@ -29,7 +39,7 @@ class ReplayHangingLegRaisePoseTest {
           "minimum_support_rise_ratio":0.35,
           "maximum_support_travel_ratio":0.30,
           "minimum_confidence":0.5,
-          "maximum_gap_ns":500,
+          "maximum_gap_ns":${500 * TICK},
           "minimum_endpoint_samples":2
         }
     """.trimIndent()
@@ -188,9 +198,9 @@ class ReplayHangingLegRaisePoseTest {
             cycle.keys,
         )
         assertEquals("COUNTED", cycle.getValue("outcome").jsonPrimitive.content)
-        assertEquals(200L, cycle.getValue("departure_timestamp_ns").jsonPrimitive.longOrNull)
-        assertEquals(300L, cycle.getValue("raised_timestamp_ns").jsonPrimitive.longOrNull)
-        assertEquals(600L, cycle.getValue("return_timestamp_ns").jsonPrimitive.longOrNull)
+        assertEquals(200L * TICK, cycle.getValue("departure_timestamp_ns").jsonPrimitive.longOrNull)
+        assertEquals(300L * TICK, cycle.getValue("raised_timestamp_ns").jsonPrimitive.longOrNull)
+        assertEquals(600L * TICK, cycle.getValue("return_timestamp_ns").jsonPrimitive.longOrNull)
     }
 
     @Test
@@ -243,8 +253,8 @@ class ReplayHangingLegRaisePoseTest {
         val last = Json.parseToJsonElement(rows[4]).jsonObject
         val cycle = last.getValue("closed_cycle").jsonObject
         assertEquals("CENSORED_AT_END_OF_INPUT", cycle.getValue("outcome").jsonPrimitive.content)
-        assertEquals(200L, cycle.getValue("departure_timestamp_ns").jsonPrimitive.longOrNull)
-        assertEquals(300L, cycle.getValue("raised_timestamp_ns").jsonPrimitive.longOrNull)
+        assertEquals(200L * TICK, cycle.getValue("departure_timestamp_ns").jsonPrimitive.longOrNull)
+        assertEquals(300L * TICK, cycle.getValue("raised_timestamp_ns").jsonPrimitive.longOrNull)
         assertEquals(JsonNull, cycle["return_timestamp_ns"])
         assertEquals(0, last.getValue("count").jsonPrimitive.content.toInt())
     }
@@ -374,6 +384,7 @@ class ReplayHangingLegRaisePoseTest {
         }
     }
 
-    private fun frame(timestampNs: Long, landmarks: String) =
-        """{"timestamp_ns":$timestampNs,"width":400,"height":400,"landmarks":$landmarks}"""
+    /** [ticks] is a frame index on the synthetic 30 fps clock, not a nanosecond count. */
+    private fun frame(ticks: Long, landmarks: String) =
+        """{"timestamp_ns":${ticks * TICK},"width":400,"height":400,"landmarks":$landmarks}"""
 }

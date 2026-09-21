@@ -22,10 +22,18 @@ import kotlinx.serialization.json.long
  * There is no practice-calibration path here on purpose: the dip thresholds are stated in the
  * config and frozen, so a replay cannot quietly refit them to the clip it is scoring.
  */
+/**
+ * One frame interval on a synthetic clock a hair under 30 fps. The engine gates endpoints on
+ * ELAPSED TIME, so these fixtures address frames in TICKS instead of the 100 ns steps they used to
+ * use — a spacing no camera produces. Sequences and expectations are unchanged.
+ */
+private const val TICK = 333_334L
+private const val GAP_NS = 250 * TICK
+
 class ReplayDipPoseTest {
     private val config = """{"side":"LEFT","extended_elbow_degrees":155,"flexed_elbow_degrees":100,
         "minimum_shoulder_above_wrist_fraction":0.05,"maximum_torso_tilt_degrees":45,
-        "minimum_confidence":0.5,"maximum_gap_ns":250,"minimum_endpoint_samples":2}"""
+        "minimum_confidence":0.5,"maximum_gap_ns":$GAP_NS,"minimum_endpoint_samples":2}"""
 
     private val oneCycle = listOf(160.0, 160.0, 130.0, 90.0, 90.0, 130.0, 160.0, 160.0)
 
@@ -40,10 +48,10 @@ class ReplayDipPoseTest {
         assertEquals("true", rows.last()["counted"]!!.jsonPrimitive.content)
         assertEquals(1, rows.count { it["counted"]!!.jsonPrimitive.content == "true" })
         // The event is the first frame of the confirming support run, not the confirming frame:
-        // with minimum_endpoint_samples = 2 and 100ns spacing that is exactly one interval earlier.
+        // with minimum_endpoint_samples = 2 that is exactly one frame interval (100 ticks) earlier.
         val counted = rows.single { it["counted"]!!.jsonPrimitive.content == "true" }
         assertEquals(
-            counted["timestamp_ns"]!!.jsonPrimitive.long - 100L,
+            counted["timestamp_ns"]!!.jsonPrimitive.long - 100L * TICK,
             counted["event_timestamp_ns"]!!.jsonPrimitive.long,
         )
         assertTrue(rows.filter { it["counted"]!!.jsonPrimitive.content == "false" }
@@ -106,7 +114,7 @@ class ReplayDipPoseTest {
             config.dropLast(1) + ",\"guess\":true}",
             config.replace("\"flexed_elbow_degrees\":100", "\"flexed_elbow_degrees\":170"),
             config.replace("\"maximum_torso_tilt_degrees\":45", "\"maximum_torso_tilt_degrees\":95"),
-            config.replace("\"maximum_gap_ns\":250", "\"maximum_gap_ns\":0"),
+            config.replace("\"maximum_gap_ns\":$GAP_NS", "\"maximum_gap_ns\":0"),
             "[]",
         )
         rejected.forEach { text ->
@@ -178,7 +186,9 @@ class ReplayDipPoseTest {
         return Files.readAllLines(output).map { Json.parseToJsonElement(it).jsonObject }
     }
 
-    private fun dipFrame(timestampNs: Long, elbowDegrees: Double, torsoTiltDegrees: Double = 0.0): String {
+    /** [ticks] is a frame index on the synthetic 30 fps clock, not a nanosecond count. */
+    private fun dipFrame(ticks: Long, elbowDegrees: Double, torsoTiltDegrees: Double = 0.0): String {
+        val timestampNs = ticks * TICK
         val elbowX = .5
         val elbowY = .55
         val limb = .20
@@ -194,7 +204,8 @@ class ReplayDipPoseTest {
         )
     }
 
-    private fun overheadFrame(timestampNs: Long, elbowDegrees: Double): String {
+    private fun overheadFrame(ticks: Long, elbowDegrees: Double): String {
+        val timestampNs = ticks * TICK
         val elbowX = .5
         val elbowY = .45
         val limb = .20

@@ -22,6 +22,14 @@ import kotlin.test.assertTrue
  *  - the shoulder-to-hip torso axis must be near-vertical, which a horizontal push-up fails.
  * Elbow flexion alone cannot tell the three apart, so it is never trusted on its own.
  */
+/**
+ * The engines gate endpoints on ELAPSED TIME, so a synthetic clock has to tick at a rate a camera
+ * could actually produce. These fixtures address frames in TICKS; one tick is one frame at a hair
+ * under 30 fps, applied at the single point where a frame is built. Every sequence, interval and
+ * expectation below is unchanged — only the unit they are counted in is now physical.
+ */
+private const val TICK = 333_334L
+
 class DipCycleExperimentTest {
     private val config = DipConfig(
         side = ArmSide.LEFT,
@@ -30,7 +38,7 @@ class DipCycleExperimentTest {
         minimumShoulderAboveWristFraction = .05,
         maximumTorsoTiltDegrees = 45.0,
         minimumConfidence = .8,
-        maximumGapNs = 500,
+        maximumGapNs = 500 * TICK,
         minimumEndpointSamples = 2,
     )
 
@@ -268,8 +276,9 @@ class DipCycleExperimentTest {
         assertFailsWith<IllegalArgumentException> { config.copy(minimumEndpointSamples = 1) }
     }
 
-    private fun frame(timestampNs: Long, width: Int, height: Int, landmarks: List<Landmark>) =
-        DipPoseFrame(timestampNs, width, height, landmarks)
+    /** [ticks] is the frame index on the synthetic 30 fps clock, not a nanosecond count. */
+    private fun frame(ticks: Long, width: Int, height: Int, landmarks: List<Landmark>) =
+        DipPoseFrame(ticks * TICK, width, height, landmarks)
 
     /**
      * Square frames keep normalized units and source pixels on the same scale, so the angles

@@ -27,6 +27,17 @@ import kotlin.test.assertTrue
  * All fixtures here are SYNTHETIC. They encode observed failure shapes; they are not real
  * footage and are not evidence of accuracy on video.
  */
+/**
+ * The engines gate endpoints on ELAPSED TIME, so a synthetic clock has to tick at a rate a camera
+ * could actually produce. These fixtures address frames in TICKS; one tick is one frame at a hair
+ * under 30 fps, applied at the single point where a frame is built. Every sequence, interval and
+ * expectation below is unchanged — only the unit they are counted in is now physical.
+ */
+private const val TICK = 333_334L
+
+/** The capture-gap limit, in ticks, so that gap fixtures stay readable in the same unit. */
+private const val GAP_TICKS = 500L
+
 class MuscleUpCycleExperimentTest {
     private val config = MuscleUpConfig(
         variant = MuscleUpVariant.BAR_KIPPING,
@@ -37,7 +48,7 @@ class MuscleUpCycleExperimentTest {
         minimumBodyScaleRatio = .6,
         maximumBodyScaleRatio = 1.6,
         minimumConfidence = .5,
-        maximumGapNs = 500,
+        maximumGapNs = GAP_TICKS * TICK,
         minimumEndpointSamples = 2,
         minimumReferenceSamples = 2,
         maximumReferenceWristSpreadTorsoLengths = .15,
@@ -81,9 +92,9 @@ class MuscleUpCycleExperimentTest {
         assertEquals(0, closed.unresolvedExcursions)
         val excursion = assertNotNull(closed.completedExcursion)
         assertEquals(MuscleUpExcursionOutcome.COMPLETED, excursion.outcome)
-        assertEquals(200L, excursion.leftHangAtNs)
-        assertEquals(400L, excursion.supportObservedAtNs)
-        assertEquals(600L, excursion.returnedToHangAtNs)
+        assertEquals(200L * TICK, excursion.leftHangAtNs)
+        assertEquals(400L * TICK, excursion.supportObservedAtNs)
+        assertEquals(600L * TICK, excursion.returnedToHangAtNs)
     }
 
     /**
@@ -182,7 +193,7 @@ class MuscleUpCycleExperimentTest {
         experiment.onFrame(support(300))
         experiment.onFrame(support(400))
 
-        val dropout = experiment.onFrame(MuscleUpPoseFrame(500, 400, 400, emptyList()))
+        val dropout = experiment.onFrame(MuscleUpPoseFrame(500 * TICK, 400, 400, emptyList()))
         assertEquals(MuscleUpReason.NO_POSE, dropout.reason)
         assertEquals(0, dropout.count)
         assertEquals(1, dropout.unresolvedExcursions)
@@ -204,7 +215,7 @@ class MuscleUpCycleExperimentTest {
 
         experiment.onFrame(hang(0))
         experiment.onFrame(hang(100))
-        val gapped = experiment.onFrame(hang(100 + config.maximumGapNs + 1))
+        val gapped = experiment.onFrame(hang(100 + GAP_TICKS + 1))
         assertEquals(MuscleUpReason.CAPTURE_GAP, gapped.reason)
         assertEquals(MuscleUpPhase.UNCERTAIN, gapped.phase)
     }
@@ -272,7 +283,7 @@ class MuscleUpCycleExperimentTest {
         val straight = experiment.onFrame(hang(600))
         assertTrue(straight.counted)
         assertEquals(1, straight.count)
-        assertEquals(600L, straight.completedExcursion!!.returnedToHangAtNs)
+        assertEquals(600L * TICK, straight.completedExcursion!!.returnedToHangAtNs)
     }
 
     @Test
@@ -289,7 +300,8 @@ class MuscleUpCycleExperimentTest {
         }
     }
 
-    private fun frame(t: Long, landmarks: List<Landmark>) = MuscleUpPoseFrame(t, 400, 400, landmarks)
+    /** [t] is a frame index on the synthetic 30 fps clock, not a nanosecond count. */
+    private fun frame(t: Long, landmarks: List<Landmark>) = MuscleUpPoseFrame(t * TICK, 400, 400, landmarks)
 
     private fun pose(
         shoulderY: Double,

@@ -178,6 +178,15 @@ class HandstandHoldExperiment(private val config: HandstandHoldConfig) {
     private var lastHoldingNs: Long? = null
     private var entryIsLeftCensored = false
     private var nonHoldingSamples = 0
+    private var nonHoldingStartNs: Long? = null
+
+    /**
+     * `minimumNonHoldingSamplesToClose` read as the duration it expresses; see
+     * [sampleCountAsDurationNs]. A non-holding burst is tolerated until it has LASTED this long,
+     * rather than until it has covered that many frames.
+     */
+    private val nonHoldingToleranceNs = sampleCountAsDurationNs(config.minimumNonHoldingSamplesToClose)
+    private val nonHoldingFloor = endpointSampleFloor(config.minimumNonHoldingSamplesToClose)
 
     val intervals = mutableListOf<HandstandHoldInterval>()
 
@@ -206,19 +215,20 @@ class HandstandHoldExperiment(private val config: HandstandHoldConfig) {
         }
         if (reason != HandstandReason.NONE) {
             if (reason.isGeometricNonHolding()) {
+                if (nonHoldingSamples == 0) nonHoldingStartNs = timestamp
                 nonHoldingSamples++
-                if (nonHoldingSamples < config.minimumNonHoldingSamplesToClose && entryNs != null) {
+                if (!nonHoldingLastedLongEnough(timestamp) && entryNs != null) {
                     // Transient: keep the interval open. lastHoldingNs stays behind, so the exit
                     // still reports the last frame that genuinely satisfied the stacked rule.
                     return HandstandFrameResult(timestamp, false, reason, hipAbove, ankleAbove, null)
                 }
             } else {
-                nonHoldingSamples = 0
+                clearNonHoldingRun()
             }
             val closed = close(reason, rightCensored = false)
             return HandstandFrameResult(timestamp, false, reason, hipAbove, ankleAbove, closed)
         }
-        nonHoldingSamples = 0
+        clearNonHoldingRun()
         if (entryNs == null) open(timestamp, leftCensored = timestamp == firstTimestampNs)
         lastHoldingNs = timestamp
         return HandstandFrameResult(timestamp, true, HandstandReason.NONE, hipAbove, ankleAbove, null)
@@ -231,6 +241,13 @@ class HandstandHoldExperiment(private val config: HandstandHoldConfig) {
     private fun HandstandReason.isGeometricNonHolding() = this == HandstandReason.NOT_INVERTED ||
         this == HandstandReason.LEGS_NOT_STACKED || this == HandstandReason.HANDS_NOT_BELOW_SHOULDERS
 
+    private fun clearNonHoldingRun() { nonHoldingSamples = 0; nonHoldingStartNs = null }
+
+    private fun nonHoldingLastedLongEnough(timestamp: Long): Boolean {
+        val start = nonHoldingStartNs ?: return false
+        return nonHoldingSamples >= nonHoldingFloor && timestamp - start >= nonHoldingToleranceNs
+    }
+
     private fun open(timestamp: Long, leftCensored: Boolean) {
         entryNs = timestamp
         lastHoldingNs = timestamp
@@ -242,7 +259,7 @@ class HandstandHoldExperiment(private val config: HandstandHoldConfig) {
         val exit = lastHoldingNs ?: entry
         entryNs = null
         lastHoldingNs = null
-        nonHoldingSamples = 0
+        clearNonHoldingRun()
         val duration = exit - entry
         if (duration < config.minimumHoldNs) return null
         val interval = HandstandHoldInterval(entry, exit, duration, reason, entryIsLeftCensored, rightCensored)

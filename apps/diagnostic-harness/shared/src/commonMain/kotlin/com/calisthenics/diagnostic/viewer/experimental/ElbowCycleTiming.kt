@@ -7,14 +7,17 @@ internal enum class ElbowCyclePhase { WAITING, SUPPORTED, LOWERING, LOWERED, RAI
  * [onObservation] returns the timestamp at which a completed cycle's final endpoint was FIRST
  * satisfied, or null when no cycle completed on this observation.
  *
- * That is deliberately not the timestamp of the frame that returns it. Confirmation needs
- * [minimumEndpointSamples] consecutive samples, so the confirming frame is always
- * `minimumEndpointSamples - 1` frame intervals after the event itself. Reporting the confirming
- * frame makes every event systematically late by that much, purely as an artefact of debouncing.
+ * That is deliberately not the timestamp of the frame that returns it. Confirmation needs the
+ * endpoint to be HELD for `minimumEndpointHoldNs`, so the confirming frame is always at least that
+ * far after the event itself. Reporting the confirming frame makes every event systematically late
+ * by that much, purely as an artefact of debouncing.
  * `HangingLegRaiseExperiment` has always recorded the first-endpoint instant; this brings the five
  * engines that share this machine into line with it, so "the event timestamp" means one thing.
  */
-internal class ElbowCycleTiming(private val minimumEndpointSamples: Int) {
+internal class ElbowCycleTiming(minimumEndpointSamples: Int) {
+    /** The count read as the duration it expresses; see [sampleCountAsDurationNs]. */
+    private val minimumEndpointHoldNs = sampleCountAsDurationNs(minimumEndpointSamples)
+    private val endpointSampleFloor = endpointSampleFloor(minimumEndpointSamples)
     var phase: ElbowCyclePhase = ElbowCyclePhase.WAITING
         private set
     var count: Int = 0
@@ -22,6 +25,14 @@ internal class ElbowCycleTiming(private val minimumEndpointSamples: Int) {
 
     private var endpointSamples = 0
     private var endpointStartNs: Long? = null
+
+    /**
+     * True once the current run both spans [minimumEndpointHoldNs] and clears [endpointSampleFloor].
+     */
+    private fun endpointHeld(timestampNs: Long): Boolean {
+        val start = endpointStartNs ?: return false
+        return endpointSamples >= endpointSampleFloor && timestampNs - start >= minimumEndpointHoldNs
+    }
 
     /** Counts this sample towards the current endpoint run, remembering when the run began. */
     private fun noteEndpoint(timestampNs: Long) {
@@ -43,7 +54,7 @@ internal class ElbowCycleTiming(private val minimumEndpointSamples: Int) {
             -> {
                 if (isSupported) {
                     noteEndpoint(timestampNs)
-                    if (endpointSamples >= minimumEndpointSamples) {
+                    if (endpointHeld(timestampNs)) {
                         phase = ElbowCyclePhase.SUPPORTED
                     }
                 } else endpointSamples = 0
@@ -60,7 +71,7 @@ internal class ElbowCycleTiming(private val minimumEndpointSamples: Int) {
                 phase = when {
                     isLowered -> {
                         noteEndpoint(timestampNs)
-                        if (endpointSamples >= minimumEndpointSamples) {
+                        if (endpointHeld(timestampNs)) {
                             endpointSamples = 0
                             ElbowCyclePhase.LOWERED
                         } else ElbowCyclePhase.LOWERING
@@ -92,7 +103,7 @@ internal class ElbowCycleTiming(private val minimumEndpointSamples: Int) {
                 phase = when {
                     isSupported -> {
                         noteEndpoint(timestampNs)
-                        if (endpointSamples >= minimumEndpointSamples) {
+                        if (endpointHeld(timestampNs)) {
                             count++
                             // The event is where the run STARTED, not where it was confirmed.
                             eventNs = endpointStartNs

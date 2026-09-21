@@ -109,6 +109,13 @@ class HangingLegRaiseExperiment(private val config: HangingLegRaiseConfig) {
     private var lastTimestamp: Long? = null
     private var endpointSamples = 0
     private var endpointStart: Long? = null
+
+    /**
+     * `minimumEndpointSamples` read as the duration it expresses; see [sampleCountAsDurationNs].
+     * The frozen knee-raise config says 3, which at 30 fps is the 66.7 ms this gates on.
+     */
+    private val minimumEndpointHoldNs = sampleCountAsDurationNs(config.minimumEndpointSamples)
+    private val endpointFloor = endpointSampleFloor(config.minimumEndpointSamples)
     private var loweredMinimumHip: Double? = null
     private var loweredSupportMin: Double? = null
     private var loweredSupportMax: Double? = null
@@ -143,7 +150,7 @@ class HangingLegRaiseExperiment(private val config: HangingLegRaiseConfig) {
         if (candidateDeparture != null) candidateMinHip = minOf(candidateMinHip, hip)
         if (phase == HangingLegRaisePhase.UNCERTAIN) phase = HangingLegRaisePhase.WAITING
         when (phase) {
-            HangingLegRaisePhase.WAITING, HangingLegRaisePhase.UNCERTAIN -> if (lowered) { noteLowered(t, hip, support); if (endpointSamples >= config.minimumEndpointSamples) confirmLowered() } else clearLowered()
+            HangingLegRaisePhase.WAITING, HangingLegRaisePhase.UNCERTAIN -> if (lowered) { noteLowered(t, hip, support); if (endpointHeld(t)) confirmLowered() } else clearLowered()
             HangingLegRaisePhase.LOWERED -> when {
                 lowered -> noteLowered(t, hip, support)
                 else -> {
@@ -157,7 +164,7 @@ class HangingLegRaiseExperiment(private val config: HangingLegRaiseConfig) {
                 hip <= config.raisedHipMaxDegrees && support < (loweredSupportMin!! - config.maximumSupportTravelRatio) || hip <= config.raisedHipMaxDegrees && support > (loweredSupportMax!! + config.maximumSupportTravelRatio) -> return closeAndReset(HangingLegRaiseCycleOutcome.SUPPORT_TRAVEL_REJECTED, null)
                 hip <= config.raisedHipMaxDegrees && knee < config.raisedKneeMinDegrees -> return closeAndReset(HangingLegRaiseCycleOutcome.KNEE_FLEXION_REJECTED, null)
                 lowered -> return abandonAndRestart(t, hip, support)
-                raised -> { if (endpointSamples == 0) endpointStart = t; endpointSamples++; if (endpointSamples >= config.minimumEndpointSamples) { candidateRaised = endpointStart; phase = HangingLegRaisePhase.RAISED; clearRun() } }
+                raised -> { if (endpointSamples == 0) endpointStart = t; endpointSamples++; if (endpointHeld(t)) { candidateRaised = endpointStart; phase = HangingLegRaisePhase.RAISED; clearRun() } }
                 else -> clearRun()
             }
             HangingLegRaisePhase.RAISED -> when {
@@ -166,7 +173,7 @@ class HangingLegRaiseExperiment(private val config: HangingLegRaiseConfig) {
                 else -> { phase = HangingLegRaisePhase.LOWERING; clearRun() }
             }
             HangingLegRaisePhase.LOWERING -> when {
-                lowered -> { noteRun(t); if (endpointSamples >= config.minimumEndpointSamples) { val e = closeCandidate(HangingLegRaiseCycleOutcome.COUNTED, endpointStart); count++; confirmLowered(); return true to e } }
+                lowered -> { noteRun(t); if (endpointHeld(t)) { val e = closeCandidate(HangingLegRaiseCycleOutcome.COUNTED, endpointStart); count++; confirmLowered(); return true to e } }
                 raised -> { phase = HangingLegRaisePhase.RAISED; clearRun() }
                 else -> clearRun()
             }
@@ -175,13 +182,14 @@ class HangingLegRaiseExperiment(private val config: HangingLegRaiseConfig) {
     }
 
     private fun noteLowered(t: Long, hip: Double, support: Double) { if (endpointSamples == 0) { endpointStart = t; loweredMinimumHip = hip; loweredSupportMin = support; loweredSupportMax = support } else { loweredMinimumHip = minOf(loweredMinimumHip ?: hip, hip); loweredSupportMin = minOf(loweredSupportMin ?: support, support); loweredSupportMax = maxOf(loweredSupportMax ?: support, support) }; endpointSamples++ }
+    private fun endpointHeld(t: Long): Boolean { val start = endpointStart ?: return false; return endpointSamples >= endpointFloor && t - start >= minimumEndpointHoldNs }
     private fun confirmLowered() { phase = HangingLegRaisePhase.LOWERED; clearRun() }
     private fun clearRun() { endpointSamples = 0; endpointStart = null }
     private fun clearLowered() { clearRun(); loweredMinimumHip = null; loweredSupportMin = null; loweredSupportMax = null }
     private fun openCandidate(t: Long, hip: Double, anchor: Double) { candidateDeparture = t; candidateRaised = null; candidateAnchor = anchor; candidateMinHip = hip }
     private fun closeCandidate(outcome: HangingLegRaiseCycleOutcome, returnNs: Long?) = HangingLegRaiseCycleEvent(requireNotNull(candidateDeparture), candidateRaised, returnNs, outcome, candidateMinHip, candidateAnchor - candidateMinHip).also { candidateDeparture = null; candidateRaised = null }
     private fun closeAndReset(outcome: HangingLegRaiseCycleOutcome, returnNs: Long?): Pair<Boolean, HangingLegRaiseCycleEvent?> { val e = closeCandidate(outcome, returnNs); phase = HangingLegRaisePhase.WAITING; clearLowered(); return false to e }
-    private fun abandonAndRestart(t: Long, hip: Double, support: Double): Pair<Boolean, HangingLegRaiseCycleEvent?> { val e = closeCandidate(HangingLegRaiseCycleOutcome.ABANDONED, null); phase = HangingLegRaisePhase.WAITING; clearLowered(); noteLowered(t, hip, support); if (endpointSamples >= config.minimumEndpointSamples) confirmLowered(); return false to e }
+    private fun abandonAndRestart(t: Long, hip: Double, support: Double): Pair<Boolean, HangingLegRaiseCycleEvent?> { val e = closeCandidate(HangingLegRaiseCycleOutcome.ABANDONED, null); phase = HangingLegRaisePhase.WAITING; clearLowered(); noteLowered(t, hip, support); if (endpointHeld(t)) confirmLowered(); return false to e }
     private fun noteRun(t: Long) { if (endpointSamples == 0) endpointStart = t; endpointSamples++ }
     private fun interrupt(): HangingLegRaiseCycleEvent? { val e = if (candidateDeparture != null) closeCandidate(HangingLegRaiseCycleOutcome.TRACKING_INTERRUPTED, null) else null; phase = HangingLegRaisePhase.UNCERTAIN; clearLowered(); return e }
     private fun result(t: Long, hip: Double?, knee: Double?, trunk: Double?, support: Double?, reason: HangingLegRaiseReason, counted: Boolean, hanging: Boolean, event: HangingLegRaiseCycleEvent?) = HangingLegRaiseFrameResult(t, hip, knee, trunk, support, phase, count, reason, counted, hanging, event)

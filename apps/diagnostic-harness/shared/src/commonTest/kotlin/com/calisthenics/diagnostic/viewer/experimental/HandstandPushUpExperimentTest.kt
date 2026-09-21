@@ -22,6 +22,17 @@ import kotlin.test.assertTrue
  * All fixtures are SYNTHETIC. They encode observed shapes; they are not footage and are not
  * evidence of accuracy on video.
  */
+/**
+ * The engines gate endpoints on ELAPSED TIME, so a synthetic clock has to tick at a rate a camera
+ * could actually produce. These fixtures address frames in TICKS; one tick is one frame at a hair
+ * under 30 fps, applied at the single point where a frame is built. Every sequence, interval and
+ * expectation below is unchanged — only the unit they are counted in is now physical.
+ */
+private const val TICK = 333_334L
+
+/** The capture-gap limit, in ticks, so that gap fixtures stay readable in the same unit. */
+private const val GAP_TICKS = 500L
+
 class HandstandPushUpExperimentTest {
     private val config = HspuConfig(
         variant = HspuVariant.WALL_BACK_TO_WALL,
@@ -32,7 +43,7 @@ class HandstandPushUpExperimentTest {
         extendedSpanRatio = .80,
         loweredSpanRatio = .75,
         minimumConfidence = .5,
-        maximumGapNs = 500,
+        maximumGapNs = GAP_TICKS * TICK,
         minimumEndpointSamples = 2,
     )
 
@@ -147,7 +158,7 @@ class HandstandPushUpExperimentTest {
         val e = HandstandPushUpExperiment(config)
         e.onFrame(top(0))
         e.onFrame(top(100))
-        assertEquals(HspuReason.CAPTURE_GAP, e.onFrame(top(100 + config.maximumGapNs + 1)).reason)
+        assertEquals(HspuReason.CAPTURE_GAP, e.onFrame(top(100 + GAP_TICKS + 1)).reason)
     }
 
     @Test
@@ -174,7 +185,8 @@ class HandstandPushUpExperimentTest {
         assertFailsWith<IllegalArgumentException> { config.copy(minimumHipAboveShoulderFraction = 0.0) }
     }
 
-    private fun frame(t: Long, landmarks: List<Landmark>) = HspuPoseFrame(t, 400, 400, landmarks)
+    /** [t] is a frame index on the synthetic 30 fps clock, not a nanosecond count. */
+    private fun frame(t: Long, landmarks: List<Landmark>) = HspuPoseFrame(t * TICK, 400, 400, landmarks)
 
     private fun pose(
         shoulderY: Double,

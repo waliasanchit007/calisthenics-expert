@@ -326,9 +326,17 @@ class MuscleUpCycleExperiment(private val config: MuscleUpConfig) {
     private var lastTimestampNs: Long? = null
     private var hangSamples = 0
     private var supportSamples = 0
+    private var hangStartNs: Long? = null
+    private var supportStartNs: Long? = null
+
+    /** The two frozen counts read as the durations they express; see [sampleCountAsDurationNs]. */
+    private val minimumEndpointHoldNs = sampleCountAsDurationNs(config.minimumEndpointSamples)
+    private val endpointFloor = endpointSampleFloor(config.minimumEndpointSamples)
+    private val minimumReferenceSpanNs = sampleCountAsDurationNs(config.minimumReferenceSamples)
 
     /** Rolling window of candidate reference frames: wrist x/y, torso px, frame width/height. */
     private class ReferenceCandidate(
+        val timestampNs: Long,
         val wristX: Double,
         val wristY: Double,
         val torsoPixels: Double,
@@ -403,6 +411,24 @@ class MuscleUpCycleExperiment(private val config: MuscleUpConfig) {
      * makes the grip gate meaningful: it is the phase where the hands are unambiguously on the
      * apparatus and the whole body is normally in frame.
      */
+    private fun endpointHeld(samples: Int, startNs: Long?, timestamp: Long): Boolean {
+        val start = startNs ?: return false
+        return samples >= endpointFloor && timestamp - start >= minimumEndpointHoldNs
+    }
+
+    private fun clearHangRun() { hangSamples = 0; hangStartNs = null }
+    private fun clearSupportRun() { supportSamples = 0; supportStartNs = null }
+
+    /** Marks the hang endpoint as already satisfied at [timestamp], whatever comes next. */
+    private fun seedSatisfiedHang(timestamp: Long) {
+        hangSamples = endpointFloor
+        hangStartNs = timestamp - minimumEndpointHoldNs
+    }
+
+    private fun referenceWindowSettled(timestamp: Long): Boolean =
+        pendingReference.size >= 2 &&
+            timestamp - pendingReference.first().timestampNs >= minimumReferenceSpanNs
+
     private fun establishReference(
         frame: MuscleUpPoseFrame,
         timestamp: Long,
@@ -420,13 +446,18 @@ class MuscleUpCycleExperiment(private val config: MuscleUpConfig) {
         )
         pendingReference.addLast(
             ReferenceCandidate(
-                wrist.x, wrist.y, measurement.torsoLengthPixels ?: 0.0,
+                timestamp, wrist.x, wrist.y, measurement.torsoLengthPixels ?: 0.0,
                 frame.width.toDouble(), frame.height.toDouble(),
             ),
         )
-        while (pendingReference.size > config.minimumReferenceSamples) pendingReference.removeFirst()
+        // Keep the SMALLEST window that still spans the required settling time: drop the oldest
+        // sample only while what remains would still cover it. At 30 fps that leaves exactly
+        // `minimumReferenceSamples` frames, which is what the count rule kept.
+        while (pendingReference.size > 2 &&
+            timestamp - pendingReference.elementAt(1).timestampNs >= minimumReferenceSpanNs
+        ) pendingReference.removeFirst()
 
-        if (pendingReference.size == config.minimumReferenceSamples) {
+        if (referenceWindowSettled(timestamp)) {
             val meanTorso = pendingReference.sumOf { it.torsoPixels } / pendingReference.size
             if (meanTorso > 0.0) {
                 var spread = 0.0
@@ -450,7 +481,7 @@ class MuscleUpCycleExperiment(private val config: MuscleUpConfig) {
                     )
                     pendingReference.clear()
                     phase = MuscleUpPhase.BELOW_BAR
-                    hangSamples = config.minimumEndpointSamples
+                    seedSatisfiedHang(timestamp)
                 }
             }
         }
@@ -470,12 +501,13 @@ class MuscleUpCycleExperiment(private val config: MuscleUpConfig) {
         when (phase) {
             MuscleUpPhase.WAITING, MuscleUpPhase.UNCERTAIN -> {
                 if (isBelowBar) {
+                    if (hangSamples == 0) hangStartNs = timestamp
                     hangSamples++
-                    if (hangSamples >= config.minimumEndpointSamples) {
+                    if (endpointHeld(hangSamples, hangStartNs, timestamp)) {
                         phase = MuscleUpPhase.BELOW_BAR
                     }
                 } else {
-                    hangSamples = 0
+                    clearHangRun()
                 }
             }
             MuscleUpPhase.BELOW_BAR -> {
@@ -484,14 +516,15 @@ class MuscleUpCycleExperiment(private val config: MuscleUpConfig) {
                     leftHangAtNs = timestamp
                     supportObservedAtNs = null
                     unusableFramesThisExcursion = 0
-                    supportSamples = 0
+                    clearSupportRun()
                 }
             }
             MuscleUpPhase.ASCENDING -> {
                 when {
                     isSupported -> {
+                        if (supportSamples == 0) supportStartNs = timestamp
                         supportSamples++
-                        if (supportSamples >= config.minimumEndpointSamples) {
+                        if (endpointHeld(supportSamples, supportStartNs, timestamp)) {
                             phase = MuscleUpPhase.SUPPORTED
                             supportObservedAtNs = timestamp
                         }
@@ -501,7 +534,7 @@ class MuscleUpCycleExperiment(private val config: MuscleUpConfig) {
                         completed = closeExcursion(timestamp)
                         phase = MuscleUpPhase.BELOW_BAR
                     }
-                    else -> supportSamples = 0
+                    else -> clearSupportRun()
                 }
             }
             MuscleUpPhase.SUPPORTED -> {
@@ -555,8 +588,8 @@ class MuscleUpCycleExperiment(private val config: MuscleUpConfig) {
         leftHangAtNs = null
         supportObservedAtNs = null
         unusableFramesThisExcursion = 0
-        supportSamples = 0
-        hangSamples = config.minimumEndpointSamples
+        clearSupportRun()
+        seedSatisfiedHang(timestamp)
         return excursion
     }
 
@@ -576,8 +609,8 @@ class MuscleUpCycleExperiment(private val config: MuscleUpConfig) {
         supportObservedAtNs = null
         unusableFramesThisExcursion = 0
         phase = MuscleUpPhase.UNCERTAIN
-        hangSamples = 0
-        supportSamples = 0
+        clearHangRun()
+        clearSupportRun()
         pendingReference.clear()
     }
 

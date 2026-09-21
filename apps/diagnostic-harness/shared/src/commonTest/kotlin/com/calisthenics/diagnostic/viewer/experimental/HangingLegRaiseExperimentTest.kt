@@ -16,6 +16,15 @@ import kotlin.test.assertTrue
  * footage, private landmark data, pose cache or observed count informs any number here, and no test
  * asserts an accuracy, ROM or form claim.
  */
+/**
+ * One frame interval on a synthetic clock a hair under 30 fps. The engine gates endpoints on
+ * ELAPSED TIME, so the behavioural sequences below address frames in TICKS rather than in the
+ * 100 ns steps they used to use — a spacing no camera produces. Sequences and expectations are
+ * unchanged; only the unit is now physical. `theFrozenPositiveLabelTimeline...` keeps its own
+ * explicit seconds clock and does not use ticks.
+ */
+private const val TICK = 333_334L
+
 class HangingLegRaiseExperimentTest {
     /**
      * The frozen hypothesis configuration
@@ -204,16 +213,16 @@ class HangingLegRaiseExperimentTest {
         assertEquals(0, opening[6].count)
         assertEquals(false, opening[6].counted)
 
-        val completing = experiment.onFrame(frame(700, 400, 400, loweredPose()))
+        val completing = experiment.onFrame(at(700, loweredPose()))
         assertEquals(1, completing.count)
         assertEquals(true, completing.counted)
         assertEquals(HangingLegRaisePhase.LOWERED, completing.phase)
         assertEquals(HangingLegRaiseReason.NONE, completing.reason)
         val cycle = completing.closedCycle!!
         assertEquals(HangingLegRaiseCycleOutcome.COUNTED, cycle.outcome)
-        assertEquals(200L, cycle.departureTimestampNs)
-        assertEquals(300L, cycle.raisedTimestampNs)
-        assertEquals(600L, cycle.returnTimestampNs)
+        assertEquals(200L * TICK, cycle.departureTimestampNs)
+        assertEquals(300L * TICK, cycle.raisedTimestampNs)
+        assertEquals(600L * TICK, cycle.returnTimestampNs)
         assertEquals(85.0, cycle.minimumHipDegrees, 1e-6)
         assertEquals(90.0, cycle.observedHipCloseDegrees, 1e-6)
     }
@@ -239,7 +248,7 @@ class HangingLegRaiseExperimentTest {
 
         val rejected = results[3].closedCycle!!
         assertEquals(HangingLegRaiseCycleOutcome.KNEE_FLEXION_REJECTED, rejected.outcome)
-        assertEquals(200L, rejected.departureTimestampNs)
+        assertEquals(200L * TICK, rejected.departureTimestampNs)
         assertNull(rejected.raisedTimestampNs)
         assertEquals(0, results.last().count)
     }
@@ -382,7 +391,7 @@ class HangingLegRaiseExperimentTest {
 
         val abandoned = results[3].closedCycle!!
         assertEquals(HangingLegRaiseCycleOutcome.ABANDONED, abandoned.outcome)
-        assertEquals(200L, abandoned.departureTimestampNs)
+        assertEquals(200L * TICK, abandoned.departureTimestampNs)
         assertNull(abandoned.raisedTimestampNs)
         assertNull(abandoned.returnTimestampNs)
         assertEquals(0, results.last().count)
@@ -447,7 +456,7 @@ class HangingLegRaiseExperimentTest {
         )
         val abandoned = exitResults[5].closedCycle!!
         assertEquals(HangingLegRaiseCycleOutcome.ABANDONED, abandoned.outcome)
-        assertEquals(300L, abandoned.raisedTimestampNs)
+        assertEquals(300L * TICK, abandoned.raisedTimestampNs)
         assertNull(abandoned.returnTimestampNs)
         assertEquals(0, exitResults.last().count)
     }
@@ -478,15 +487,16 @@ class HangingLegRaiseExperimentTest {
         val experiment = HangingLegRaiseExperiment(config)
         experiment.feed(0L to loweredPose(), 100L to loweredPose(), 200L to midPose())
 
-        val afterGap = experiment.onFrame(frame(1_000_000_000L, 400, 400, raisedPose()))
+        // 3_000 ticks is one second — far beyond the 100 ms capture-gap limit.
+        val afterGap = experiment.onFrame(at(3_000L, raisedPose()))
         assertEquals(HangingLegRaiseReason.CAPTURE_GAP, afterGap.reason)
         val interrupted = afterGap.closedCycle!!
         assertEquals(HangingLegRaiseCycleOutcome.TRACKING_INTERRUPTED, interrupted.outcome)
-        assertEquals(200L, interrupted.departureTimestampNs)
+        assertEquals(200L * TICK, interrupted.departureTimestampNs)
 
         val rest = experiment.feed(
-            1_000_000_100L to raisedPose(), 1_000_000_200L to midPose(),
-            1_000_000_300L to loweredPose(), 1_000_000_400L to loweredPose(),
+            3_001L to raisedPose(), 3_002L to midPose(),
+            3_003L to loweredPose(), 3_004L to loweredPose(),
         )
         assertEquals(0, rest.last().count)
     }
@@ -504,7 +514,7 @@ class HangingLegRaiseExperimentTest {
         val partial = experiment.feed(800L to midPose(), 900L to raisedPose(), 1_000L to raisedPose())
         assertEquals(HangingLegRaisePhase.RAISED, partial.last().phase)
 
-        val lost = experiment.onFrame(frame(1_100L, 400, 400, emptyList()))
+        val lost = experiment.onFrame(at(1_100L, emptyList()))
         assertEquals(HangingLegRaiseReason.NO_POSE, lost.reason)
         assertEquals(HangingLegRaisePhase.UNCERTAIN, lost.phase)
         assertEquals(HangingLegRaiseCycleOutcome.TRACKING_INTERRUPTED, lost.closedCycle!!.outcome)
@@ -527,9 +537,9 @@ class HangingLegRaiseExperimentTest {
         assertEquals(HangingLegRaisePhase.UNCERTAIN, invalid.phase)
         assertEquals(HangingLegRaiseCycleOutcome.TRACKING_INTERRUPTED, invalid.closedCycle!!.outcome)
 
-        val duplicate = experiment.onFrame(frame(200, 400, 400, loweredPose()))
+        val duplicate = experiment.onFrame(at(200, loweredPose()))
         assertEquals(HangingLegRaiseReason.DUPLICATE_TIMESTAMP, duplicate.reason)
-        val backwards = experiment.onFrame(frame(150, 400, 400, loweredPose()))
+        val backwards = experiment.onFrame(at(150, loweredPose()))
         assertEquals(HangingLegRaiseReason.BACKWARDS_TIMESTAMP, backwards.reason)
         assertEquals(0, backwards.count)
         assertNull(backwards.hipDegrees)
@@ -545,8 +555,8 @@ class HangingLegRaiseExperimentTest {
 
         val censored = open.finish()!!
         assertEquals(HangingLegRaiseCycleOutcome.CENSORED_AT_END_OF_INPUT, censored.outcome)
-        assertEquals(200L, censored.departureTimestampNs)
-        assertEquals(300L, censored.raisedTimestampNs)
+        assertEquals(200L * TICK, censored.departureTimestampNs)
+        assertEquals(300L * TICK, censored.raisedTimestampNs)
         assertNull(censored.returnTimestampNs)
         assertEquals(0, open.count)
         assertNull(open.finish())
@@ -591,8 +601,8 @@ class HangingLegRaiseExperimentTest {
         assertEquals(1, results.last().count)
         val cycle = results.last().closedCycle!!
         assertEquals(HangingLegRaiseCycleOutcome.COUNTED, cycle.outcome)
-        assertEquals(300L, cycle.raisedTimestampNs)
-        assertEquals(800L, cycle.returnTimestampNs)
+        assertEquals(300L * TICK, cycle.raisedTimestampNs)
+        assertEquals(800L * TICK, cycle.returnTimestampNs)
     }
 
     @Test
@@ -659,8 +669,12 @@ class HangingLegRaiseExperimentTest {
     private fun frame(timestampNs: Long, width: Int, height: Int, landmarks: List<Landmark>) =
         HangingLegRaisePoseFrame(timestampNs, width, height, landmarks)
 
+    /** [ticks] is a frame index on the synthetic 30 fps clock, not a nanosecond count. */
+    private fun at(ticks: Long, landmarks: List<Landmark>) =
+        HangingLegRaisePoseFrame(ticks * TICK, 400, 400, landmarks)
+
     private fun HangingLegRaiseExperiment.feed(vararg steps: Pair<Long, List<Landmark>>) =
-        steps.map { (timestampNs, landmarks) -> onFrame(frame(timestampNs, 400, 400, landmarks)) }
+        steps.map { (ticks, landmarks) -> onFrame(at(ticks, landmarks)) }
 
     private fun loweredPose(hipDegrees: Double = 175.0) = pose(hipDegrees)
 

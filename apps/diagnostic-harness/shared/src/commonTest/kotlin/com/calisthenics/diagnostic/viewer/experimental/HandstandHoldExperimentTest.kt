@@ -18,6 +18,17 @@ import kotlin.test.assertTrue
  *
  * All fixtures are SYNTHETIC and are not evidence of accuracy on video.
  */
+/**
+ * The engines gate endpoints on ELAPSED TIME, so a synthetic clock has to tick at a rate a camera
+ * could actually produce. These fixtures address frames in TICKS; one tick is one frame at a hair
+ * under 30 fps, applied at the single point where a frame is built. Every sequence, interval and
+ * expectation below is unchanged — only the unit they are counted in is now physical.
+ */
+private const val TICK = 333_334L
+
+/** The capture-gap limit, in ticks, so that gap fixtures stay readable in the same unit. */
+private const val GAP_TICKS = 500L
+
 class HandstandHoldExperimentTest {
     private val config = HandstandHoldConfig(
         support = HandstandSupport.FREESTANDING,
@@ -25,8 +36,8 @@ class HandstandHoldExperimentTest {
         minimumHipAboveShoulderFraction = .10,
         minimumAnkleAboveHipFraction = .05,
         minimumConfidence = .5,
-        maximumGapNs = 500,
-        minimumHoldNs = 300,
+        maximumGapNs = GAP_TICKS * TICK,
+        minimumHoldNs = 300 * TICK,
         minimumNonHoldingSamplesToClose = 1,
     )
 
@@ -49,9 +60,9 @@ class HandstandHoldExperimentTest {
         val end = e.onFrame(standing(500))
 
         val interval = assertNotNull(end.completedInterval)
-        assertEquals(100L, interval.entryTimestampNs)
-        assertEquals(400L, interval.exitTimestampNs)
-        assertEquals(300L, interval.durationNs)
+        assertEquals(100L * TICK, interval.entryTimestampNs)
+        assertEquals(400L * TICK, interval.exitTimestampNs)
+        assertEquals(300L * TICK, interval.durationNs)
         assertEquals(HandstandReason.NOT_INVERTED, interval.endReason)
         assertFalse(interval.leftCensored)
         assertFalse(interval.rightCensored)
@@ -76,8 +87,8 @@ class HandstandHoldExperimentTest {
         e.onFrame(stacked(400))
         e.onFrame(stacked(500))
         val interval = assertNotNull(e.onFrame(kickUp(600)).completedInterval)
-        assertEquals(200L, interval.entryTimestampNs)
-        assertEquals(500L, interval.exitTimestampNs)
+        assertEquals(200L * TICK, interval.entryTimestampNs)
+        assertEquals(500L * TICK, interval.exitTimestampNs)
         assertEquals(HandstandReason.LEGS_NOT_STACKED, interval.endReason)
     }
 
@@ -105,9 +116,9 @@ class HandstandHoldExperimentTest {
         val e = HandstandHoldExperiment(config)
         e.onFrame(standing(0))
         for (t in listOf(100L, 200, 300, 400)) e.onFrame(stacked(t))
-        val resumed = e.onFrame(stacked(400 + config.maximumGapNs + 1))
+        val resumed = e.onFrame(stacked(400 + GAP_TICKS + 1))
         val first = assertNotNull(resumed.completedInterval)
-        assertEquals(400L, first.exitTimestampNs)
+        assertEquals(400L * TICK, first.exitTimestampNs)
         assertEquals(HandstandReason.CAPTURE_GAP, first.endReason)
         assertEquals(1, e.intervals.size)
     }
@@ -176,7 +187,7 @@ class HandstandHoldExperimentTest {
 
         val closed = assertNotNull(experiment.finish())
         assertEquals(0L, closed.entryTimestampNs)
-        assertEquals(1900L, closed.exitTimestampNs)
+        assertEquals(1900L * TICK, closed.exitTimestampNs)
         assertTrue(closed.rightCensored)
         assertEquals(1, experiment.intervals.size)
     }
@@ -192,7 +203,7 @@ class HandstandHoldExperimentTest {
         val closed = assertNotNull(third.completedInterval)
         assertEquals(HandstandReason.LEGS_NOT_STACKED, closed.endReason)
         // The exit is the last stacked frame, not the frame that finally proved the break.
-        assertEquals(900L, closed.exitTimestampNs)
+        assertEquals(900L * TICK, closed.exitTimestampNs)
     }
 
     /**
@@ -204,14 +215,15 @@ class HandstandHoldExperimentTest {
         val experiment = HandstandHoldExperiment(persistent)
         for (t in 0L until 10L) experiment.onFrame(stacked(t * 100))
 
-        val dropout = experiment.onFrame(HandstandPoseFrame(1000, 400, 400, emptyList()))
+        val dropout = experiment.onFrame(HandstandPoseFrame(1000 * TICK, 400, 400, emptyList()))
 
         val closed = assertNotNull(dropout.completedInterval)
         assertEquals(HandstandReason.NO_POSE, closed.endReason)
-        assertEquals(900L, closed.exitTimestampNs)
+        assertEquals(900L * TICK, closed.exitTimestampNs)
     }
 
-    private fun frame(t: Long, landmarks: List<Landmark>) = HandstandPoseFrame(t, 400, 400, landmarks)
+    /** [t] is a frame index on the synthetic 30 fps clock, not a nanosecond count. */
+    private fun frame(t: Long, landmarks: List<Landmark>) = HandstandPoseFrame(t * TICK, 400, 400, landmarks)
 
     private fun pose(
         shoulderY: Double = .70,

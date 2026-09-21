@@ -15,6 +15,17 @@ import kotlin.test.assertTrue
  *
  * All fixtures are SYNTHETIC and are not evidence of accuracy on video.
  */
+/**
+ * The engines gate endpoints on ELAPSED TIME, so a synthetic clock has to tick at a rate a camera
+ * could actually produce. These fixtures address frames in TICKS; one tick is one frame at a hair
+ * under 30 fps, applied at the single point where a frame is built. Every sequence, interval and
+ * expectation below is unchanged — only the unit they are counted in is now physical.
+ */
+private const val TICK = 333_334L
+
+/** The capture-gap limit, in ticks, so that gap fixtures stay readable in the same unit. */
+private const val GAP_TICKS = 500L
+
 class ToesToBarExperimentTest {
     private val config = ToesToBarConfig(
         side = ArmSide.LEFT,
@@ -22,7 +33,7 @@ class ToesToBarExperimentTest {
         maximumFeetBelowHandsAtBar = .6,
         minimumFeetBelowHandsDown = 1.5,
         minimumConfidence = .5,
-        maximumGapNs = 500,
+        maximumGapNs = GAP_TICKS * TICK,
         minimumEndpointSamples = 2,
         requireBothAnkles = true,
     )
@@ -98,7 +109,7 @@ class ToesToBarExperimentTest {
         e.onFrame(mid(200))
         e.onFrame(atBar(300))
         e.onFrame(atBar(400))
-        assertEquals(ToesToBarReason.NO_POSE, e.onFrame(ToesToBarPoseFrame(500, 400, 400, emptyList())).reason)
+        assertEquals(ToesToBarReason.NO_POSE, e.onFrame(ToesToBarPoseFrame(500 * TICK, 400, 400, emptyList())).reason)
         e.onFrame(mid(600))
         e.onFrame(down(700))
         assertEquals(0, e.onFrame(down(800)).count)
@@ -111,7 +122,7 @@ class ToesToBarExperimentTest {
         e.onFrame(down(100))
         assertEquals(ToesToBarReason.DUPLICATE_TIMESTAMP, e.onFrame(down(100)).reason)
         assertEquals(ToesToBarReason.BACKWARDS_TIMESTAMP, e.onFrame(down(50)).reason)
-        assertEquals(ToesToBarReason.CAPTURE_GAP, e.onFrame(down(100 + config.maximumGapNs + 1)).reason)
+        assertEquals(ToesToBarReason.CAPTURE_GAP, e.onFrame(down(100 + GAP_TICKS + 1)).reason)
     }
 
     @Test
@@ -163,7 +174,8 @@ class ToesToBarExperimentTest {
         assertFailsWith<IllegalArgumentException> { config.copy(maximumGapNs = 0) }
     }
 
-    private fun frame(t: Long, landmarks: List<Landmark>) = ToesToBarPoseFrame(t, 400, 400, landmarks)
+    /** [t] is a frame index on the synthetic 30 fps clock, not a nanosecond count. */
+    private fun frame(t: Long, landmarks: List<Landmark>) = ToesToBarPoseFrame(t * TICK, 400, 400, landmarks)
 
     private fun pose(
         shoulderY: Double = .40,
