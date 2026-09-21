@@ -1412,3 +1412,95 @@ have been attempted first and judged a failure for the wrong reason.
 were not used to fit anything. Whether the live dip and knee-raise failures have causes beyond rate
 remains open — the dip failure in particular was a `shoulder_above_wrist` admission failure, which
 this study says nothing about, and dip is rate-immune.
+
+## Update 45 — frame-rate independence: PRE-REGISTRATION (2026-09-21, written before the change)
+
+Declared before any engine edit, per method rule 2. The commit carrying this entry precedes the
+commit carrying the code and the run that tests it.
+
+**Question.** Update 44 established that fragility is set by the configs' sample-count parameters,
+not by movement speed. A sample count is a frame-rate-dependent way of expressing a duration. Can
+those parameters be read as the durations they were always expressing, without moving a single
+published native-rate number?
+
+**Audit — every sample-count parameter in the seven offline movements.**
+
+| parameter | engines | frozen value | the duration it expresses at 30 fps |
+|---|---|---|---|
+| `minimumEndpointSamples` | Dip, ToesToBar, MuscleUp, HSPU (4 via `ElbowCycleTiming`) | 2 | 33.333 ms |
+| `minimumEndpointSamples` | HangingLegRaise | 3 | 66.667 ms |
+| `minimumReferenceSamples` | MuscleUp | 5 | 133.333 ms |
+| `minimumReferenceSamples` | HSPU | 15 | 466.667 ms |
+| `minimumNonHoldingSamplesToClose` | HandstandHold | 3 | 66.667 ms |
+
+**The change.** One transformation, applied five times. No config file is touched and no config
+field is added or removed, so every frozen v1 config stays byte-identical:
+
+    internal const val REFERENCE_FRAME_INTERVAL_NS = 33_333_333L        // 30 fps
+    internal fun sampleCountAsDurationNs(samples: Int) = (samples - 1) * REFERENCE_FRAME_INTERVAL_NS
+
+- **Endpoint runs** confirm when `samples >= 2 && (t - runStart) >= holdNs` instead of
+  `samples >= N`. The 2-sample floor keeps the debounce: a single frame can still never confirm an
+  endpoint.
+- **Reference windows** keep the *minimal covering window* — evict the oldest sample only while the
+  window would still span `>= referenceNs` without it — and fire on `size >= 2 && span >= referenceNs`
+  instead of `size == N`. The spread gate is unchanged and is computed over whatever the window holds.
+
+**Why 30 fps is the conversion rate, stated as a choice rather than a discovery.** Update 42
+measured the corpus: native rates run 23.98–30.00 fps, so 30 is the fastest. Converting at the
+fastest rate yields the *shortest* duration, which is the most permissive reading — it is the choice
+that cannot make any engine stricter than it is today on any corpus clip. It is not a claim that
+every frozen count was tuned on 30 fps footage; dip was tuned at 25 and the straight-leg raise at
+23.98.
+
+**Deliberately NOT changed, with reasons.**
+
+1. **`maximumGapNs`.** Already a duration; nothing to convert. Its knee-raise value of 100 ms is
+   nonetheless unprincipled — at 10 fps from a 30 fps grid the step is 99,999,999 ns, under the
+   limit by 1 ns, while the 23.98 fps straight-leg clip trips it 57 times. That is luck, not design.
+   Changing the value is a v1 config edit and belongs to step 6, not here.
+2. **The `LOWERED` -> raised one-frame `ABANDONED` guard.** `PROJECT-STATE.md` §9 step 5 proposed
+   using the capture gap here — "if no frames were dropped, the motion really was that fast". That is
+   wrong for this step, and recording why is the point of this entry: at the native rate frames are
+   also not dropped, so the same relaxation fires there too and moves published numbers by
+   construction. It is a change of meaning, not a change of units, and it cannot be done under a
+   byte-identity gate. Deferred to step 6 with labelled data.
+3. **`JumpingJack`, `Squat`, `Lunge`, `Situp`.** Outside the frozen offline set, not covered by the
+   decimation study, and their practice-search helpers reason in sample counts. Changing them would
+   be unevidenced. The codebase therefore carries two semantics until they are covered; that is a
+   known, deliberate debt rather than an oversight.
+
+**Verification method.** Run 04 of `decimate_study.py`, same eight jobs, same four rates, same
+hash-bound caches, labels and configs as run 03. Only the Kotlin engines differ.
+
+**Predictions, declared now.**
+
+(a) **CONTROL — byte identity.** At the native rate, every job's `predictions_sha256` equals run
+    03's, for all eight jobs. Not the counts: the full prediction stream. If any differs, the change
+    is not the pure generalisation claimed here, the run is void, and no other number in it may be
+    interpreted. This is a stopping rule.
+(b) **The four `minimumEndpointSamples = 2` jobs are unchanged at every rate**, not just at native —
+    dip 3/3/3/3, toes-to-bar 6/6/6/6, muscle-up 3/3/3/3 both clips. Two samples already span a full
+    frame interval at any rate at or below 30 fps, so the rule is a no-op for them. If any of these
+    twelve cells moves, the transformation is not equivalence-preserving where it claims to be.
+(c) **Hanging knee raise `C0RXOvy609I`** — natively 6; run 03 gave 2 / 2 / 0 at 20 / 15 / 10 fps.
+    Predicted now: **>= 4 at 15 fps, >= 3 at 10 fps, >= 3 at 20 fps.** 20 fps is predicted lowest of
+    the three because a 20 fps grid over a 30 fps source alternates 33/67 ms steps, so only half its
+    two-sample runs clear 66.667 ms.
+(d) **HSPU, both clips** — natively 5; run 03 gave 3 / 4 / 0 (back) and 4 / 5 / 1 (facing).
+    Predicted now: **>= 3 at every rate on both clips**, and `REFERENCE_UNAVAILABLE` at 10 fps falls
+    from ~85% of frames to **< 30%**.
+(e) **Negative control.** Straight-leg raise `TcU7wtLdIx4` stays **0 at every rate**. It fails on a
+    knee-angle gate and foreshortening; units of debounce neither cause nor cure that.
+(f) **No cell exceeds its native count.** This relaxes a gate, so over-counting is the risk. A count
+    above native at any reduced rate falsifies the claim that this only restores lost repetitions.
+(g) **Mechanism for whatever is still lost.** Any repetition the knee raise still misses at 10 fps
+    appears as an `ABANDONED` cycle outcome — the unfixed guard of exclusion 2 — and **not** as a
+    missed endpoint. If the residue is missed endpoints instead, the diagnosis in Update 44 was
+    incomplete and the duration conversion is not the whole fix.
+
+**What this cannot settle.** It does not touch the live dip failure, which was a
+`shoulder_above_wrist` admission failure on a rate-immune engine and needs its own explanation. It
+says nothing about whether any frozen threshold is *right* — only that its units are now consistent.
+`HandstandHold` is included in the transformation but has **no** scoreable job in this study, so its
+only evidence is unit tests; that is weaker and is not to be reported as study-verified.
