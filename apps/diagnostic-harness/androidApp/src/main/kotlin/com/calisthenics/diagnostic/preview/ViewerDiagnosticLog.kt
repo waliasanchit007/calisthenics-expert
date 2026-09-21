@@ -108,6 +108,12 @@ internal class ViewerDiagnosticLog(
                         .put("right_joint_visibility_min",numeric(jointConfidence.rightVisibility,.01))
                         .put("right_joint_presence_min",numeric(jointConfidence.rightPresence,.01))
                         .put("capture_to_result_ms",numeric(performance?.captureToResultMs))
+                        // The five stages partition capture_to_result_ms exactly, so the row can be
+                        // read as a budget rather than as a total with an unexplained remainder.
+                        .put("capture_to_offer_ms",numeric(performance?.captureToOfferMs))
+                        .put("admission_ms",numeric(performance?.admissionMs))
+                        .put("preparation_ms",numeric(performance?.preparationMs))
+                        .put("submit_gap_ms",numeric(performance?.submitGapMs))
                         .put("inference_ms",numeric(performance?.inferenceMs))
                         .put("pose_age_ms",numeric(performance?.poseAgeMs))
                         .put("available_arm_joints",measurements?.availableArmJoints ?: 0)

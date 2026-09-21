@@ -266,8 +266,11 @@ units or constants resolves a 67 ms dwell at 10 fps. More frames can. Ledger Upd
 
 1. ~~**Cheap instrument fixes**~~ — **DONE 2026-09-16.** §8 items 3, 4 and 6 fixed; item 5 turned
    out to be an engine change, not a reporting tweak, and is recorded as such.
-2. **Profile the 133 ms.** Add stage timings (capture→preprocess→submit→infer→result→UI) to the
-   trace. One session answers whether there is one fat stage or diffuse cost.
+2. **Profile the 133 ms.** The instrument is **built and tested as of 2026-09-21** (ledger Update
+   48): `capture_to_offer_ms`, `admission_ms`, `preparation_ms`, `submit_gap_ms` and `inference_ms`
+   partition `capture_to_result_ms` exactly, and all five are emitted per row into the feedback
+   bundle. **Needs one device session to read.** Expected shapes were declared before the run, in
+   Update 48, so the reading is not fitted afterwards.
 3. ~~**Decimation study**~~ — **DONE 2026-09-16**, ledger Updates 42–44. Fragility is set by
    sample-count parameters, not movement speed. Two harness defects were caught by the
    pre-registered control and are recorded rather than quietly fixed. Its further claim that step 4

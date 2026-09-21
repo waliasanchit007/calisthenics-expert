@@ -1664,3 +1664,45 @@ new item. The band-crossing evidence is another thing more frames buy directly: 
 already recover to 3 and 5. It also means the eventual v2 work should reconsider the gap between
 `loweredSpanRatio` and `extendedSpanRatio`, which is currently narrow enough that a single sample
 decides a repetition.
+
+## Update 48 — the stage-timing instrument for step 2 (2026-09-21)
+
+Built offline, ahead of the device session it is for. No measurement is claimed here; this entry
+records the instrument and one thing it made unnecessary.
+
+**What was missing.** The 2026-09-15 sessions reported 38 ms of inference (p90 48 ms) inside a
+171 ms capture-to-result latency. Nothing said where the other 133 ms went. `ViewerSession`
+measured only `preparationMs`, `inferenceMs` and `captureToResultMs` — a total and two of its parts.
+
+**What was added.** Two further stages, chosen so the set is a **partition**:
+
+| stage | measured between | who owns it |
+|---|---|---|
+| `capture_to_offer_ms` | sensor timestamp -> analyser callback | CameraX; not ours |
+| `admission_ms` | analyser callback -> preparation start | our bookkeeping and lock |
+| `preparation_ms` | preparation | ours |
+| `submit_gap_ms` | prepared -> the submit call | our lock and dispatch |
+| `inference_ms` | submit -> result callback | native, including queueing |
+
+The five instants are contiguous, so the stages sum **exactly** to `capture_to_result_ms` and no
+cost can hide between two of them. `theStageTimingsPartitionCaptureToResultExactly` asserts the sum
+rather than the parts; forcing `submit_gap_ms` to a constant fails it, and the file was restored
+byte-exact. All five are emitted per row into the feedback bundle.
+
+**A probe that turned out to be unnecessary, recorded because the reasoning nearly went the other
+way.** `capture_to_offer_ms` subtracts a camera sensor timestamp from `SystemClock.elapsedRealtimeNanos`,
+which is meaningless if the two use different bases — and Android's `SENSOR_INFO_TIMESTAMP_SOURCE`
+may be `UNKNOWN` (monotonic) rather than `REALTIME`. I was about to build a clock-base probe.
+`CameraXFrameSource` already **refuses to bind** a camera whose timestamp source is not `REALTIME`,
+so the bases agree by construction. This also retrospectively validates the existing
+`captureToResultMs`, and therefore the 171 ms figure quoted from the 2026-09-15 sessions, which had
+rested on an assumption nobody had checked.
+
+**What this cannot say.** Nothing, until a device session runs. The expected shapes are worth
+stating in advance so the reading is not fitted afterwards: if `capture_to_offer_ms` dominates, the
+cost is CameraX buffering and the remedy is a different backpressure or output configuration; if
+`admission_ms` or `submit_gap_ms` dominate, it is our own serialisation and the remedy is stage
+overlap, which is step 4; if the residue is spread evenly, there is no single fat stage and the
+20-25 fps target in step 4 is in doubt.
+
+Verification: `shared` 892 tests, `androidApp` 282 tests, 0 failures, counted from JUnit XML.

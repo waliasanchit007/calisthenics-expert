@@ -49,7 +49,10 @@ class ViewerSession(
     private var cameraOffers = 0
     private var performanceCompletions = 0
     private var observationStartedNs: Long? = null
+    private var lastCaptureToOfferMs: Double? = null
+    private var lastAdmissionMs: Double? = null
     private var lastPreparationMs: Double? = null
+    private var lastSubmitGapMs: Double? = null
     private var lastInferenceMs: Double? = null
     private var lastCaptureToResultMs: Double? = null
     private var lastPoseCapturedNs: Long? = null
@@ -79,12 +82,20 @@ class ViewerSession(
         val preparedAtNs = clockNs()
         synchronized(lock) {
             if (closed || pending != id || failure != null) return
+            // Contiguous with the stages either side of it: capture -> offer -> preparation start.
+            lastCaptureToOfferMs = elapsedMs(offeredAtNs - capturedNs)
+            lastAdmissionMs = elapsedMs(preparationStartedNs - offeredAtNs)
             lastPreparationMs = elapsedMs(preparedAtNs - preparationStartedNs)
             publishLocked(preparedAtNs)
         }
         // The controller waits for the source callback to return before disposing inference.
         // Native submission must not block snapshots/stop on the main thread.
         val inferenceStartedNs = clockNs()
+        synchronized(lock) {
+            if (!closed && pending == id && failure == null) {
+                lastSubmitGapMs = elapsedMs(inferenceStartedNs - preparedAtNs)
+            }
+        }
         try {
             inference.submit(id, frame.modelRgb, capturedNs / 1_000_000) { result ->
                 val completedAtNs = clockNs()
@@ -165,7 +176,10 @@ class ViewerSession(
             completions = performanceCompletions,
             offerFps = elapsedNs?.let { cameraOffers * 1_000_000_000.0 / it },
             poseFps = elapsedNs?.let { performanceCompletions * 1_000_000_000.0 / it },
+            captureToOfferMs = lastCaptureToOfferMs,
+            admissionMs = lastAdmissionMs,
             preparationMs = lastPreparationMs,
+            submitGapMs = lastSubmitGapMs,
             inferenceMs = lastInferenceMs,
             captureToResultMs = lastCaptureToResultMs,
             poseAgeMs = lastPoseCapturedNs?.let { elapsedMs(nowNs - it) },

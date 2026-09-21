@@ -161,7 +161,66 @@ class ViewerSessionTest {
         assertEquals("Stopped", session.snapshots.value.message)
     }
 
+    /**
+     * The five stage timings are the instrument step 2 of the plan needs: the 2026-09-15 sessions
+     * showed 38 ms of inference inside 171 ms end to end, and nothing said where the other 133 ms
+     * went. A partition is only useful if it is airtight, so that is what is asserted.
+     */
+    @Test fun theStageTimingsPartitionCaptureToResultExactly() {
+        // Reads, in the order ViewerSession makes them: offered, preparation start, prepared,
+        // submit, completed. Shaped like the real device figures - a 38 ms inference inside 57 ms.
+        val clock = Scripted(10_000_000, 13_000_000, 18_000_000, 19_000_000, 57_000_000)
+        val port = Port()
+        val session = ViewerSession(port, clockNs = clock::now)
+
+        session.offer(0) { frame() }
+        port.callback!!(pose())
+
+        val p = session.snapshot(57_000_000).performance
+        assertEquals(10.0, p.captureToOfferMs)
+        assertEquals(3.0, p.admissionMs)
+        assertEquals(5.0, p.preparationMs)
+        assertEquals(1.0, p.submitGapMs)
+        assertEquals(38.0, p.inferenceMs)
+        assertEquals(57.0, p.captureToResultMs)
+
+        val stages = listOf(p.captureToOfferMs, p.admissionMs, p.preparationMs, p.submitGapMs, p.inferenceMs)
+        assertEquals(
+            p.captureToResultMs, stages.sumOf { assertNotNull(it) },
+            "the stages must leave no unexplained remainder",
+        )
+    }
+
+    @Test fun captureToOfferMeasuresTheCameraPipelineNotOurOwnWork() {
+        // The one stage we do not control. It is measured from the SENSOR timestamp, which is sound
+        // only because CameraXFrameSource refuses a camera without a REALTIME timestamp source.
+        val clock = Scripted(80_000_000, 80_000_000, 80_000_000, 80_000_000, 90_000_000)
+        val port = Port()
+        val session = ViewerSession(port, clockNs = clock::now)
+
+        session.offer(5_000_000) { frame() }
+        port.callback!!(pose())
+
+        val p = session.snapshot(90_000_000).performance
+        assertEquals(75.0, p.captureToOfferMs, "sensor capture to the analyser callback")
+        assertEquals(0.0, p.admissionMs)
+        assertEquals(0.0, p.preparationMs)
+        assertEquals(0.0, p.submitGapMs)
+        assertEquals(10.0, p.inferenceMs)
+        assertEquals(85.0, p.captureToResultMs)
+    }
+
     private class Clock(var nowNs: Long = 0) {
         fun now(): Long = nowNs
+    }
+
+    /** Returns each scripted instant in turn, then repeats the last one. */
+    private class Scripted(vararg values: Long) {
+        private val queue = ArrayDeque(values.toList())
+        private var last = 0L
+        fun now(): Long {
+            if (queue.isNotEmpty()) last = queue.removeFirst()
+            return last
+        }
     }
 }
