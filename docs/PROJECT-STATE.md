@@ -255,28 +255,48 @@ panel-routing bug and the diagnostic-log bug were the same defect one layer apar
 
 ## 9. The plan
 
-**Revised after step 3: 5 is now primary, 4 is secondary.** Order: 5 → 2 → 4 → 6.
+**Revised again after step 5 (2026-09-21): 4 is load-bearing after all.** Order: **4 → 2 → 6**.
+
+Step 5 is done and its result reverses half of the step 3 conclusion. Converting the sample counts
+to durations was real and is now proven correct at the native rate — but it was not sufficient, and
+the reason is a hard limit rather than a tuning error. The knee raise's **lowered** endpoint dwell
+has a median of 200 ms and a lower quartile of 100 ms; at 10 fps, 5 of its 13 dwells yield a single
+observation, and one observation cannot be told apart from a single-frame noise spike. No choice of
+units or constants resolves a 67 ms dwell at 10 fps. More frames can. Ledger Update 46.
 
 1. ~~**Cheap instrument fixes**~~ — **DONE 2026-09-16.** §8 items 3, 4 and 6 fixed; item 5 turned
    out to be an engine change, not a reporting tweak, and is recorded as such.
 2. **Profile the 133 ms.** Add stage timings (capture→preprocess→submit→infer→result→UI) to the
    trace. One session answers whether there is one fat stage or diffuse cost.
 3. ~~**Decimation study**~~ — **DONE 2026-09-16**, ledger Updates 42–44. Fragility is set by
-   sample-count parameters, not movement speed, and step 4 alone is insufficient. Two harness
-   defects were caught by the pre-registered control and are recorded rather than quietly fixed.
-4. **Raise the device rate.** Overlap the pipeline stages; target ~20–25 fps against a 38 ms
-   inference budget. App behaviour change — needs ADR coverage. May hit a real ceiling (thermal,
-   camera output format).
-5. **PRIMARY FIX — make the engines frame-rate-independent.** Step 3 says exactly where it matters:
-   `minimumEndpointSamples` and `minimumReferenceSamples` must become durations — that one change
-   addresses both collapse modes. `maximumGapNs` needs the same review: the knee-raise family's
-   100 ms limit only escapes tripping at 10 fps because 3 × 33.33 ms is 99.999 ms, and the 24 fps
-   straight-leg-raise clip trips it 57 times. The LOWERED→RAISED guard should use the capture gap: if
-   no frames were dropped, the motion really was that fast. Each with tests, a mutation check, and
-   byte-identical reproduction of the native-rate results. **Four engines need nothing.**
-6. **Only then, v2 configs** frozen against labelled device footage at the real rate. Additive,
-   labels frozen first, never edits to v1. This is where the dip depth gate is addressed, with the
-   owner's actual depth in the labelled set.
+   sample-count parameters, not movement speed. Two harness defects were caught by the
+   pre-registered control and are recorded rather than quietly fixed. Its further claim that step 4
+   alone is insufficient survives; its implication that step 5 would be sufficient does not.
+4. **NOW PRIMARY — raise the device rate.** Overlap the pipeline stages; target ~20–25 fps against
+   a 38 ms inference budget. App behaviour change — needs ADR coverage. May hit a real ceiling
+   (thermal, camera output format). Step 5 established what this buys: at 20 fps a 100 ms dwell
+   yields two observations instead of one, which is the difference between a confirmable endpoint
+   and an unconfirmable one. It will not reach the 67 ms dwells.
+5. ~~**Make the engines frame-rate-independent**~~ — **DONE 2026-09-21**, ledger Updates 45–46.
+   Five sample counts now convert once, at a declared 30 fps reference rate, and the engines gate on
+   elapsed time. All eight native-rate prediction streams reproduced **byte-identically**, and the
+   twelve cells belonging to the four `minimumEndpointSamples = 2` engines were unchanged at every
+   rate, as pre-registered. The HSPU reference — previously unobtainable at 10 fps on one clip and
+   9.5% wrong on the other — now lands within 1% of its native value. Counts improved in four cells,
+   regressed in one, and the pre-registered count predictions **failed**: the residue is the
+   two-sample debounce meeting a 67–100 ms dwell, which is an information limit. Two items proposed
+   under this step were **not** done, deliberately: `maximumGapNs` is already a duration and its
+   unprincipled 100 ms knee-raise value is a v1 config edit belonging to step 6; and the
+   LOWERED→RAISED guard relaxation would fire at the native rate too, so it changes meaning rather
+   than units and cannot be done under a byte-identity gate.
+6. **Then v2 configs** frozen against labelled device footage at the real rate. Additive, labels
+   frozen first, never edits to v1. This is where the dip depth gate is addressed, with the owner's
+   actual depth in the labelled set; where the knee-raise `maximumGapNs` of 100 ms is replaced with
+   a principled value; and where the LOWERED→RAISED guard can be reconsidered against labels.
+
+**Open, unexplained.** HSPU wall-facing at 10 fps fell 1 → 0 in run 04 although its reference is now
+within 0.8% of native and it has more endpoint frames than before. The reference is no longer the
+constraint there and the new one has not been isolated (ledger Update 46).
 
 **Do not** nudge the 0.05 dip gate, the 40° band, or `minimumEndpointSamples` against the 2026-09-15
 runs. Three of four failures trace to one systemic cause; tuning around it would bury that.
