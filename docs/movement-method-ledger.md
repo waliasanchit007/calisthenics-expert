@@ -1504,3 +1504,104 @@ hash-bound caches, labels and configs as run 03. Only the Kotlin engines differ.
 says nothing about whether any frozen threshold is *right* — only that its units are now consistent.
 `HandstandHold` is included in the transformation but has **no** scoreable job in this study, so its
 only evidence is unit tests; that is weaker and is not to be reported as study-verified.
+
+## Update 46 — frame-rate independence: RESULTS (2026-09-21, run 04)
+
+Tests the change pre-registered in Update 45. Run 04 of `decimate_study.py`, same eight jobs, four
+rates, same hash-bound caches, configs and labels as run 03 — every `config_sha256` and
+`cache_poses_sha256` compared equal. Only the Kotlin engines differ.
+
+**(a) CONTROL — PASSED, and this is the result that matters most.** At the native rate all eight
+jobs produced a **byte-identical `predictions_sha256`** to run 03. Not merely the same counts: the
+same prediction stream, frame for frame. Converting five sample counts into the durations they
+express is therefore a pure generalisation at the rate the configs were frozen at. No published
+number moved.
+
+| job | native | 20 fps | 15 fps | 10 fps |
+|---|---|---|---|---|
+| muscle-up ring `yTczZRbcfJU` | 3 -> 3 | 3 -> 3 | 3 -> 3 | 3 -> 3 |
+| muscle-up bar `k71s4T2_CJI` | 3 -> 3 | 3 -> 3 | 3 -> 3 | 3 -> 3 |
+| toes-to-bar `wZ6bjrOjbCI` | 6 -> 6 | 6 -> 6 | 6 -> 6 | 6 -> 6 |
+| dip `XTDc47D1G_I` *(study-local)* | 3 -> 3 | 3 -> 3 | 3 -> 3 | 3 -> 3 |
+| HSPU back `cLTvfDlhiXM` | 5 -> 5 | 3 -> 3 | 4 -> 4 | 0 -> **2** |
+| HSPU facing `tz_YVynl1sk` | 5 -> 5 | 4 -> **5** | 5 -> 5 | 1 -> **0** |
+| knee raise `C0RXOvy609I` | 6 -> 6 | 2 -> 2 | 2 -> **3** | 0 -> **1** |
+| straight-leg raise `TcU7wtLdIx4` | 0 -> 0 | 0 -> 0 | 0 -> 0 | 0 -> 0 |
+
+Four cells improved, one regressed, nineteen unchanged.
+
+**Scorecard against Update 45.**
+
+- **(a) control — HELD**, byte-identically, 8 of 8.
+- **(b) the four `minimumEndpointSamples = 2` jobs unchanged at every rate — HELD, 12 of 12 cells.**
+  The transformation is exactly a no-op where it was claimed to be one.
+- **(c) knee raise >= 4 at 15 fps, >= 3 at 10 and 20 fps — FAILED on all three.** Actual 3, 1 and 2.
+- **(d) HSPU >= 3 at every rate on both clips — FAILED.** Back-to-wall gives 2 at 10 fps; wall-facing
+  gives 0. The *mechanism* half of (d) held emphatically: `REFERENCE_UNAVAILABLE` at 10 fps
+  back-to-wall fell from **85% of frames to 5%** (predicted < 30%).
+- **(e) negative control — HELD.** Straight-leg raise stayed 0 at all four rates.
+- **(f) no cell exceeds its native count — HELD.** Nothing was over-counted.
+- **(g) the residue appears as `ABANDONED` — FALSIFIED**, and the falsification is the useful part.
+  At 10 fps the knee raise closes **no** rejected cycles at all: outcomes are `{COUNTED: 1}` and
+  nothing else. The engine never opens a candidate, because it never confirms the lowered endpoint
+  it must depart from. Phase census at 10 fps, run 03 -> run 04: `RAISING` 0 -> 4, `RAISED` 0 -> 17,
+  `LOWERING` 0 -> 4. The machine now moves where it previously could not, and still stalls earlier
+  than an `ABANDONED` outcome would require.
+
+**The reference conversion is quantitatively right.** Reconstructing the fixed reference span from
+each stream (`span / span_ratio`):
+
+| clip | native reference | 10 fps, run 03 | 10 fps, run 04 |
+|---|---|---|---|
+| HSPU back | 0.2852 at 1.8 s | **never established** | 0.2846 at 1.9 s (**0.2%** from native) |
+| HSPU facing | 0.2766 at 4.0 s | 0.2504 at 5.61 s (9.5% low) | 0.2744 at 4.1 s (**0.8%** from native) |
+
+A quantity that used to be unobtainable or 9.5% wrong at 10 fps is now within 1% of its native value
+and settles at the same instant. That is the whole of what the units change claimed to do.
+
+**Why the counts still fall — measured, not inferred.** The knee raise's two endpoint dwells are not
+symmetric. Measured on the native stream: the **raised** dwell has a median of 1750 ms, the
+**lowered** dwell a median of **200 ms**, a lower quartile of 100 ms and a minimum of 67 ms. Counting
+the usable observations each lowered dwell yields:
+
+| | dwells yielding a single sample |
+|---|---|
+| native (30 fps) | 2 of 15, both in the final 0.4 s of the clip |
+| 10 fps | **5 of 13** |
+
+A cycle must confirm a lowered endpoint before departure and again on return. Five of thirteen
+chances at 10 fps produce exactly **one** observation, and one observation is indistinguishable from
+a single-frame noise spike — which is precisely what the retained two-sample floor exists to reject.
+
+**This is an information limit, not a threshold to retune.** Debouncing against single-frame noise
+and resolving a 67 ms dwell are the same measurement, and at 10 fps they cannot be told apart by any
+choice of units or constants. Dropping the floor to one sample would make every noise spike an
+endpoint, and would move native-rate results.
+
+**CORRECTION to Update 44's implication, and to `PROJECT-STATE.md` §9.** Update 44 concluded that
+raising the device rate "will not fix it" and demoted that work to secondary. Half of that stands —
+rate alone was never the whole story, and the HSPU reference proves units were a real and separable
+defect. But the half that said the units change would be sufficient is **wrong**. The short lowered
+endpoint cannot be resolved at 10 fps at all, so step 4 is load-bearing again, and the ordering in
+§9 is revised accordingly rather than edited in place here.
+
+**Not explained.** HSPU wall-facing at 10 fps fell from 1 to 0 even though its reference is now
+within 0.8% of native and it has *more* endpoint frames than before (extended 79 -> 84, lowered
+51 -> 61). The reference is no longer the constraint there and the new one has not been isolated. It
+is recorded as open rather than given a plausible-sounding cause.
+
+**Verification carried out alongside the run.** `shared` 892 tests and `androidApp` 280 tests, 0
+failures, counted from the JUnit XML rather than from "BUILD SUCCESSFUL". Five new tests in
+`FrameRateIndependenceTest` pin the property directly — one knee raise counted exactly once at 30,
+25, 24, 20, 15, 12 and 10 fps; the endpoint hold still suppressing the count at every rate when
+widened past the dwell; a lone frame never confirming an endpoint however long the pause before it;
+and the handstand reference settling inside the same 466.7 ms window at 30 and 10 fps. A mutation of
+`sampleCountAsDurationNs` to `0L` fails three of those five; the file was restored and re-hashed
+byte-exact (`bd845554...f1af795`).
+
+**A defect in the tests, exposed rather than introduced.** All 47 initially failing tests were
+synthetic fixtures clocked at **100 ns per frame** — a spacing no camera produces. They could never
+have caught a frame-rate dependence, because in them time carried no meaning. They now address
+frames in ticks of one 30 fps interval. Every sequence and every assertion is unchanged; only the
+unit is physical. The one fixture that is a byte-for-byte copy of a corpus config file was
+deliberately left alone.
