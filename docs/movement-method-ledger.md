@@ -1605,3 +1605,62 @@ have caught a frame-rate dependence, because in them time carried no meaning. Th
 frames in ticks of one 30 fps interval. Every sequence and every assertion is unchanged; only the
 unit is physical. The one fixture that is a byte-for-byte copy of a corpus config file was
 deliberately left alone.
+
+## Update 47 — the HSPU regression explained: counts turn on a 5%-wide band (2026-09-21)
+
+Closes the item Update 46 left open. This is analysis of run 03 and run 04 artefacts already on
+disk — no new run, no engine change, nothing re-tuned.
+
+**Question.** HSPU wall-facing at 10 fps fell 1 -> 0 between runs although its reference moved from
+9.5% wrong to 0.8% from native, and it gained endpoint frames.
+
+**Method.** Classify every usable frame by the two gates the engine already applies: `S` when
+`span_ratio >= extendedSpanRatio` (0.80), `L` when `<= loweredSpanRatio` (0.75), and `m` for the
+band between them. Then count, for each ascent (an `L` run followed by an `S` run), whether any `m`
+frame sits between the two.
+
+**Result. The count is the number of ascents that pass through an `m` frame — in 14 of 16 cells.**
+
+| clip | rate | run 03 count / via-`m` / direct | run 04 count / via-`m` / direct |
+|---|---|---|---|
+| back | native | 5 / **5** / 0 | 5 / **5** / 0 |
+| back | 20 fps | 3 / **3** / 2 | 3 / **3** / 2 |
+| back | 15 fps | 4 / **4** / 1 | 4 / **4** / 1 |
+| back | 10 fps | 0 / **0** / 0 | 2 / **2** / 3 |
+| facing | native | 5 / **5** / 1 | 5 / **5** / 1 |
+| facing | 20 fps | 4 / **4** / 1 | 5 / **5** / 1 |
+| facing | 15 fps | 5 / **5** / 0 | 5 / **5** / 0 |
+| facing | 10 fps | 1 / 2 / 3 | **0** / 2 / 3 |
+
+**Mechanism.** `ElbowCycleTiming` reaches `RAISING` from `LOWERED` only on a frame that is neither
+lowered nor supported. A frame that goes straight from `LOWERED` to supported takes the
+`isSupported -> WAITING` branch, which **silently discards a completed repetition**. So a repetition
+is counted only if the sampler happens to catch the press mid-travel, inside a window that is just
+5% of the reference span wide.
+
+At 30 fps the press is sampled often enough that every genuine ascent lands at least one frame in
+that band. At 10 fps only 2 of 5 do. Whether a given repetition counts is then decided by sampling
+phase — which is why run 04's *more accurate* reference made wall-facing worse: shifting every ratio
+by 0.8% moved the one lucky frame out of the band.
+
+**This is the deferred guard, in a second engine.** Update 45 excluded the hanging leg raise's
+`LOWERED` -> raised one-frame `ABANDONED` guard on the grounds that relaxing it would also fire at
+the native rate. The same argument applies here and the evidence now makes it concrete: wall-facing
+has **one direct ascent at the native rate**, and its native count of 5 matches its label of 5. That
+direct ascent is a tracking artefact and discarding it is correct. Counting direct ascents would
+make the native count 6 — a false positive against the label.
+
+So the rule is right at 30 fps and wrong at 10 fps, for the same reason the knee-raise guard is:
+**a state machine that infers a transition from the presence of an intermediate observation cannot
+work at a rate that does not supply one.** Three engines, one root cause.
+
+**Not fully explained.** Wall-facing at 10 fps has two via-`m` ascents but counts 1 (run 03) and 0
+(run 04), so a second constraint operates on that clip alone — most likely the two-sample
+confirmation of the `S` run that follows. Fourteen of sixteen cells are exact; this one is not, and
+it is left stated rather than smoothed over.
+
+**Consequence for the plan.** This strengthens the step 4 case from Update 46 rather than adding a
+new item. The band-crossing evidence is another thing more frames buy directly: at 20 fps both clips
+already recover to 3 and 5. It also means the eventual v2 work should reconsider the gap between
+`loweredSpanRatio` and `extendedSpanRatio`, which is currently narrow enough that a single sample
+decides a repetition.

@@ -294,9 +294,17 @@ units or constants resolves a 67 ms dwell at 10 fps. More frames can. Ledger Upd
    actual depth in the labelled set; where the knee-raise `maximumGapNs` of 100 ms is replaced with
    a principled value; and where the LOWERED→RAISED guard can be reconsidered against labels.
 
-**Open, unexplained.** HSPU wall-facing at 10 fps fell 1 → 0 in run 04 although its reference is now
-within 0.8% of native and it has more endpoint frames than before. The reference is no longer the
-constraint there and the new one has not been isolated (ledger Update 46).
+**Explained 2026-09-21, ledger Update 47.** The HSPU count equals the number of ascents that put a
+sample in the 5%-wide band between `loweredSpanRatio` (0.75) and `extendedSpanRatio` (0.80) — 14 of
+16 cells exactly. `ElbowCycleTiming` reaches `RAISING` from `LOWERED` only via a frame that is
+neither lowered nor supported; a direct `LOWERED` → supported step takes the `isSupported → WAITING`
+branch and **silently discards a completed repetition**. At 30 fps every genuine ascent lands a frame
+in the band; at 10 fps 2 of 5 do, so sampling phase decides the count, and run 04's *more accurate*
+reference moved the one lucky frame out of it. This is the same defect as the hanging leg raise's
+deferred `LOWERED` → raised guard: **three engines, one root cause — a machine that infers a
+transition from an intermediate observation the rate does not supply.** It cannot be relaxed under a
+byte-identity gate, because wall-facing has one direct ascent at the native rate whose discarding is
+correct against its label. One cell of the sixteen is still not fully accounted for.
 
 **Do not** nudge the 0.05 dip gate, the 40° band, or `minimumEndpointSamples` against the 2026-09-15
 runs. Three of four failures trace to one systemic cause; tuning around it would bury that.
