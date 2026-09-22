@@ -191,6 +191,41 @@ class ViewerSessionTest {
         )
     }
 
+    @Test fun aSnapshotTakenWhileTheNextFrameIsInFlightStillShowsOneWholeFrame() {
+        // The trace samples these fields every 100 ms, so a row can land while frame N+1 is being
+        // prepared. Publishing the early stages as they happened made such a row mix N+1's first
+        // stages with N's inference and total — a "partition" that no longer summed to its total.
+        val clock = Scripted(
+            10_000_000, 13_000_000, 18_000_000, 19_000_000, 57_000_000,   // frame 1, captured at 0
+            150_000_000, 160_000_000, 180_000_000, 181_000_000,           // frame 2, in flight
+            240_000_000,                                                  // frame 2 completes
+        )
+        val port = Port()
+        val session = ViewerSession(port, clockNs = clock::now)
+        session.offer(0) { frame() }
+        port.callback!!(pose())
+        session.offer(100_000_000) { frame(9) }
+
+        val torn = session.snapshot(185_000_000).performance
+        assertEquals(10.0, torn.captureToOfferMs, "frame 2's capture-to-offer leaked into frame 1's row")
+        assertEquals(3.0, torn.admissionMs)
+        assertEquals(5.0, torn.preparationMs)
+        assertEquals(1.0, torn.submitGapMs)
+        assertEquals(57.0, torn.captureToResultMs)
+        assertEquals(torn.captureToResultMs, sumOfStages(torn))
+
+        port.callback!!(pose())
+        val next = session.snapshot(240_000_000).performance
+        assertEquals(50.0, next.captureToOfferMs)
+        assertEquals(59.0, next.inferenceMs)
+        assertEquals(140.0, next.captureToResultMs)
+        assertEquals(next.captureToResultMs, sumOfStages(next))
+    }
+
+    private fun sumOfStages(p: ViewerPerformance) =
+        listOf(p.captureToOfferMs, p.admissionMs, p.preparationMs, p.submitGapMs, p.inferenceMs)
+            .sumOf { assertNotNull(it) }
+
     @Test fun captureToOfferMeasuresTheCameraPipelineNotOurOwnWork() {
         // The one stage we do not control. It is measured from the SENSOR timestamp, which is sound
         // only because CameraXFrameSource refuses a camera without a REALTIME timestamp source.

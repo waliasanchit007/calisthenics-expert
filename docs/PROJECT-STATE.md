@@ -269,8 +269,10 @@ units or constants resolves a 67 ms dwell at 10 fps. More frames can. Ledger Upd
 2. **Profile the 133 ms.** The instrument is **built and tested as of 2026-09-21** (ledger Update
    48): `capture_to_offer_ms`, `admission_ms`, `preparation_ms`, `submit_gap_ms` and `inference_ms`
    partition `capture_to_result_ms` exactly, and all five are emitted per row into the feedback
-   bundle. **Needs one device session to read.** Expected shapes were declared before the run, in
-   Update 48, so the reading is not fitted afterwards.
+   bundle. A torn-snapshot defect in it was found and fixed before it produced data (Update 50).
+   Read a session with `tools/stage_profile.py <session-dir>`. **Needs one device session.**
+   Predictions are pre-registered in Update 50. The existing traces already show the camera is
+   not the limit: it offers ~29 fps and one frame in three becomes a pose.
 3. ~~**Decimation study**~~ — **DONE 2026-09-16**, ledger Updates 42–44. Fragility is set by
    sample-count parameters, not movement speed. Two harness defects were caught by the
    pre-registered control and are recorded rather than quietly fixed. Its further claim that step 4

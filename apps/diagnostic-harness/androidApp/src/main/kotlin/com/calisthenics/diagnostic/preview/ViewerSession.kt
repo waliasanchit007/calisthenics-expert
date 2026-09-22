@@ -82,20 +82,11 @@ class ViewerSession(
         val preparedAtNs = clockNs()
         synchronized(lock) {
             if (closed || pending != id || failure != null) return
-            // Contiguous with the stages either side of it: capture -> offer -> preparation start.
-            lastCaptureToOfferMs = elapsedMs(offeredAtNs - capturedNs)
-            lastAdmissionMs = elapsedMs(preparationStartedNs - offeredAtNs)
-            lastPreparationMs = elapsedMs(preparedAtNs - preparationStartedNs)
             publishLocked(preparedAtNs)
         }
         // The controller waits for the source callback to return before disposing inference.
         // Native submission must not block snapshots/stop on the main thread.
         val inferenceStartedNs = clockNs()
-        synchronized(lock) {
-            if (!closed && pending == id && failure == null) {
-                lastSubmitGapMs = elapsedMs(inferenceStartedNs - preparedAtNs)
-            }
-        }
         try {
             inference.submit(id, frame.modelRgb, capturedNs / 1_000_000) { result ->
                 val completedAtNs = clockNs()
@@ -103,6 +94,14 @@ class ViewerSession(
                     if (closed || failure != null || pending != id) return@synchronized
                     pending = null
                     performanceCompletions++
+                    // All six are published together, for THIS frame, at its completion. Writing the
+                    // early stages as they happen would let a snapshot taken while the next frame is
+                    // being prepared mix that frame's first stages with this frame's inference and
+                    // total — and the five would no longer sum to the total they claim to partition.
+                    lastCaptureToOfferMs = elapsedMs(offeredAtNs - capturedNs)
+                    lastAdmissionMs = elapsedMs(preparationStartedNs - offeredAtNs)
+                    lastPreparationMs = elapsedMs(preparedAtNs - preparationStartedNs)
+                    lastSubmitGapMs = elapsedMs(inferenceStartedNs - preparedAtNs)
                     lastInferenceMs = elapsedMs(completedAtNs - inferenceStartedNs)
                     lastCaptureToResultMs = elapsedMs(completedAtNs - capturedNs)
                     when (result) {

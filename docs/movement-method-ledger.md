@@ -1772,3 +1772,58 @@ just recovered counts.
 **Why this correction matters for the plan.** Update 47 closed off an engine-side option with a
 false argument. With it withdrawn, HSPU has a candidate engine fix that does not need more frames,
 while the knee raise still does. That is a different plan from the one recorded two days ago.
+
+## Update 50 — stage profile: PRE-REGISTRATION (2026-09-23, written before the device run)
+
+Declared before any trace carrying the stage fields exists. The commit carrying this entry precedes
+the device session.
+
+**A defect in Update 48's instrument, found and fixed before it produced any data.** The trace
+samples `ViewerSession`'s latest-value fields every 100 ms. Update 48 wrote the first four stages
+when frame N+1 was prepared but inference and the total when frame N completed, so any row logged
+in between mixed two frames and the "exact partition" held only by luck. The single-frame unit test
+could not see it. All six values are now published together at completion; a two-frame test,
+`aSnapshotTakenWhileTheNextFrameIsInFlightStillShowsOneWholeFrame`, fails on the Update 48 version
+and passes on the fix.
+
+**What the existing traces already establish, without the new fields** (all four 2026-09-15
+sessions, from the cumulative counters, which do not depend on the 100 ms sampler):
+
+| session | offer rate | pose rate | inference median / p90 | capture-to-result median |
+|---|---|---|---|---|
+| `63ad6747` knee raise | 29.1 fps | 10.4 fps | 38.6 / 48.3 ms | 175.3 ms |
+| `7fe115b9` dip | 29.0 fps | 10.0 fps | 40.4 / 52.8 ms | 178.8 ms |
+| `8a2f89f2` dip | 29.4 fps | 10.3 fps | 38.2 / 47.2 ms | 171.5 ms |
+| `e9675325` knee raise | 29.3 fps | 10.7 fps | 38.4 / 48.0 ms | 164.9 ms |
+
+**The camera is not what limits the rate: it offers ~29 fps and one frame in three becomes a pose.**
+Pose capture intervals sit on the camera's 33.3 ms grid — 100 ms 71%, 66.7 ms 19%, 133.3 ms 9%,
+33.3 ms 2% (`8a2f89f2`) — so a frame's busy time usually spans two to three camera frames.
+
+**Tool.** `tools/stage_profile.py`, rules fixed in its docstring and checked against a synthetic
+trace with known answers before any real data.
+
+**Predictions, declared now.**
+
+(a) **CONTROL.** 100% of frames carrying the five stage fields sum exactly to
+    `capture_to_result_ms`. If not, the instrument is wrong and nothing below is interpreted.
+(b) **Replication.** Offer rate 28–30 fps; pose rate 9.5–11 fps; inference median 35–45 ms;
+    capture-to-result median 160–185 ms. A miss here means the session is not comparable to
+    2026-09-15 and the causes below must be read against that.
+(c) **Busy time** (admission + preparation + submit gap + inference) median **60–100 ms**, because
+    pose intervals mostly span three camera frames.
+(d) Of the three front-half stages, **preparation is the largest**. Admission and submit gap each
+    have a median **under 5 ms** — they are a lock and a counter.
+(e) `capture_to_offer_ms` median **50–110 ms**, and it is the stage that dominates non-inference
+    latency (171 ms total minus ~80 ms busy leaves ~90 ms). This is camera-side latency, running
+    concurrently with our work: it delays every result but is not what caps the rate.
+(f) The rate verdict is **BUSY-BOUND**.
+(g) With one frame in flight, 20 fps is **NOT** reachable, but the **overlap ceiling is >= 20 fps**:
+    preparing frame N+1 while frame N infers caps the rate at the slower half, not their sum. If
+    the overlap ceiling comes out under 20 fps, overlap alone cannot deliver step 4's target and
+    preparation has to get faster as well.
+
+**What each outcome would mean for step 4.** (f) and (g) holding means step 4 is stage overlap, with
+a design target set by the measured ceiling. UPSTREAM-BOUND would mean our per-frame work is not the
+limit and overlap would buy nothing. A diffuse latency profile with (e) failing would mean the
+latency story in this entry is wrong, whatever the rate does.
