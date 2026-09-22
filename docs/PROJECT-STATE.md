@@ -266,19 +266,22 @@ units or constants resolves a 67 ms dwell at 10 fps. More frames can. Ledger Upd
 
 1. ~~**Cheap instrument fixes**~~ — **DONE 2026-09-16.** §8 items 3, 4 and 6 fixed; item 5 turned
    out to be an engine change, not a reporting tweak, and is recorded as such.
-2. **Profile the 133 ms.** The instrument is **built and tested as of 2026-09-21** (ledger Update
-   48): `capture_to_offer_ms`, `admission_ms`, `preparation_ms`, `submit_gap_ms` and `inference_ms`
-   partition `capture_to_result_ms` exactly, and all five are emitted per row into the feedback
-   bundle. A torn-snapshot defect in it was found and fixed before it produced data (Update 50).
-   Read a session with `tools/stage_profile.py <session-dir>`. **Needs one device session.**
-   Predictions are pre-registered in Update 50. The existing traces already show the camera is
-   not the limit: it offers ~29 fps and one frame in three becomes a pose.
+2. ~~**Profile the 133 ms**~~ — **DONE 2026-09-23**, ledger Updates 50–51, 7 of 7 pre-registered
+   predictions held. The rate is preparation (35.7 ms) plus inference (41.3 ms) in series, one
+   frame in flight, on a 33.3 ms camera grid → every third frame. Our own locks cost 0.2 ms. The
+   other ~100 ms of latency is camera-side and nearly constant; it delays results but does not cap
+   the rate. **Overlap is the lever: ceiling ~24 fps, inference-bound.** Every camera frame would
+   need inference under 33.3 ms, which CPU cannot reach (median 41.3, p10 33.7).
 3. ~~**Decimation study**~~ — **DONE 2026-09-16**, ledger Updates 42–44. Fragility is set by
    sample-count parameters, not movement speed. Two harness defects were caught by the
    pre-registered control and are recorded rather than quietly fixed. Its further claim that step 4
    alone is insufficient survives; its implication that step 5 would be sufficient does not.
-4. **NOW PRIMARY — raise the device rate.** Overlap the pipeline stages; target ~20–25 fps against
-   a 38 ms inference budget. App behaviour change — needs ADR coverage. May hit a real ceiling
+4. **NOW PRIMARY — raise the device rate.** Step 2 made the design concrete: overlap preparation
+   with inference (ceiling ~24 fps on CPU), and separately decide whether the GPU delegate is worth a
+   landmark-parity check for full 30 fps. **Before building it**, emulate each design offline — the
+   measured preparation and inference distributions applied to the 30 fps caches — because a ~24 fps
+   pipeline produces a sampling pattern the decimation study never tested, and its closest cell
+   gave the knee raise 2 of 6. App behaviour change — needs ADR coverage. May hit a real ceiling
    (thermal, camera output format). Step 5 established what this buys: at 20 fps a 100 ms dwell
    yields two observations instead of one, which is the difference between a confirmable endpoint
    and an unconfirmable one. It will not reach the 67 ms dwells.

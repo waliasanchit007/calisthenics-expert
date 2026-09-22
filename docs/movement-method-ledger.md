@@ -1827,3 +1827,65 @@ trace with known answers before any real data.
 a design target set by the measured ceiling. UPSTREAM-BOUND would mean our per-frame work is not the
 limit and overlap would buy nothing. A diffuse latency profile with (e) failing would mean the
 latency story in this entry is wrong, whatever the rate does.
+
+## Update 51 — stage profile: RESULTS (2026-09-23, session `d39f3f2b`)
+
+One device session: SM-S938B over wireless debugging, debug build `cca727b`, in-app ADR-0006
+debug session, hanging knee raise selected, ~117 s including set-up. 1189 frames, 3345 trace rows,
+0 dropped, ended by user stop. The collector was confirmed to be receiving the session before the
+movement began. Bundle held outside Git with a source record. Read with `tools/stage_profile.py`,
+unchanged since Update 50 was committed.
+
+| stage | p10 | median | p90 | p99 |
+|---|---|---|---|---|
+| `capture_to_offer_ms` | 94.6 | **100.8** | 106.3 | 112.5 |
+| `admission_ms` | | 0.1 | 0.1 | |
+| `preparation_ms` | 27.8 | **35.7** | 43.6 | 55.8 |
+| `submit_gap_ms` | | 0.1 | 0.2 | |
+| `inference_ms` | 33.7 | **41.3** | 55.2 | 73.6 |
+| `capture_to_result_ms` | | 179.0 | 198.2 | |
+
+Offer rate 29.8 fps, pose rate 10.2 fps; pose capture intervals 100 ms 82%, 66.7 ms 11%, 133.3 ms
+6%, 33.3 ms 1%. The trace held every completed frame (1189 distinct = 1189 frames written), so the
+statistics are over the whole session rather than a sample of it.
+
+**Scorecard against Update 50 — 7 of 7 held.**
+
+- (a) control: **1189 of 1189** frames partition exactly.
+- (b) replication: offer 29.8 (28–30), pose 10.2 (9.5–11), inference 41.3 (35–45), total 179.0
+  (160–185).
+- (c) busy time 78.4 ms (60–100).
+- (d) preparation is the largest front-half stage; admission and submit gap are 0.1 ms each (< 5).
+- (e) `capture_to_offer_ms` 100.8 ms (50–110) and it dominates non-inference latency at 73%.
+- (f) BUSY-BOUND: pose interval 98.3 ms against busy plus one offer interval, 112.0 ms.
+- (g) 20 fps not reachable with one frame in flight; overlap ceiling **24.2 fps** (>= 20).
+
+**How much weight that deserves.** (b), (c) and (e) were derived from the 2026-09-15 traces, so they
+are consistency checks rather than independent tests. What is genuinely new: preparation costs
+35.7 ms, our own bookkeeping costs nothing measurable, and camera-side latency is ~100 ms.
+
+**What this establishes.**
+
+1. **The rate is set by preparation plus inference running in series.** 35.7 + 41.3 ms, one frame in
+   flight, on a 33.3 ms camera grid, gives every third frame. Our locks cost 0.2 ms together, so
+   there is no contention to remove.
+2. **Stage overlap is the lever, and its ceiling is inference-bound at ~24 fps.** Preparing frame N+1
+   while frame N infers removes preparation from the cycle. Speeding up preparation alone would not
+   raise the rate much, because inference by itself (41.3 ms) already spans more than one camera
+   frame.
+3. **Every camera frame (the decimation study's native column, which reproduces every published
+   count) needs inference under 33.3 ms.** CPU inference has a median of 41.3 ms and a p10 of 33.7 ms,
+   so CPU cannot do it. The GPU delegate is the obvious candidate, but it changes the numerics
+   against a corpus that was extracted on CPU, so it would need a landmark-parity check before any
+   frozen config could be trusted on it. A lighter model variant is ruled out: different landmarks
+   break every frozen config's provenance.
+4. **`capture_to_offer_ms` is ~100 ms and nearly constant** (p10–p90 94.6–106.3). That looks like a
+   fixed pipeline depth of about three frames rather than load-dependent queueing — a hypothesis,
+   not a finding. It delays every result but not the rate, so it is irrelevant to counting and
+   relevant later to how responsive live feedback feels.
+
+**What this cannot say.** Whether ~24 fps is enough. An overlapped pipeline on a 30 fps camera would
+pick frames at intervals of mostly 33.3 ms with some 66.7 ms — a sampling pattern between the
+decimation study's native column and its "20 fps" column (alternating 33/67 ms), which gave the knee
+raise 2 of 6. The study has no cell with that pattern, so it cannot predict the result. That is the
+question to answer before building step 4, not after.
