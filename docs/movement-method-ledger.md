@@ -1706,3 +1706,69 @@ overlap, which is step 4; if the residue is spread evenly, there is no single fa
 20-25 fps target in step 4 is in doubt.
 
 Verification: `shared` 892 tests, `androidApp` 282 tests, 0 failures, counted from JUnit XML.
+
+## Update 49 — CORRECTION to Update 47: the band rule is two-sided, and my argument against relaxing it was wrong (2026-09-23)
+
+Analysis of existing run 03 / run 04 artefacts only. No engine change, no new run.
+
+**1. The rule is two-sided, and with that it is exact.** Update 47 counted only ascents and matched
+14 of 16 cells. Tracing the unmatched cell (wall-facing, 10 fps) shows its two via-`m` ascents
+failed on the **descent**: at 8.5 -> 8.6 s the ratio steps 0.827 -> 0.748, supported straight to
+lowered, which takes `ElbowCycleTiming`'s `SUPPORTED + isLowered -> WAITING` branch. The later
+ascent through the band then only re-establishes `SUPPORTED` from `WAITING`, which is not a
+completion. Enumerating complete cycles (a supported run of >= 2, a lowered run of >= 2, a closing
+supported run of >= 2, no rejected frame inside) and classifying each by whether its descent and its
+ascent put a sample in the band:
+
+| clip | rate | run 03 count / both / descent-only / ascent-only | run 04 count / both / descent-only / ascent-only |
+|---|---|---|---|
+| back | native | 5 / 5 / 0 / 0 | 5 / 5 / 0 / 0 |
+| back | 20 fps | 3 / 3 / 2 / 0 | 3 / 3 / 2 / 0 |
+| back | 15 fps | 4 / 4 / 1 / 0 | 4 / 4 / 1 / 0 |
+| back | 10 fps | 0 / 0 / 0 / 0 | 2 / 2 / 3 / 0 |
+| facing | native | 5 / 5 / 0 / 0 | 5 / 5 / 0 / 0 |
+| facing | 20 fps | 4 / 4 / 1 / 0 | 5 / 5 / 0 / 0 |
+| facing | 15 fps | 5 / 5 / 0 / 0 | 5 / 5 / 0 / 0 |
+| facing | 10 fps | 1 / 1 / 3 / 1 | 0 / 0 / 3 / 2 |
+
+**The count equals the number of complete cycles with a band sample on BOTH transitions: 16 of 16
+cells.** Update 47's "not fully explained" item is closed.
+
+**2. WITHDRAWN: the argument that the rule cannot be relaxed.** Update 47 said wall-facing has "one
+direct ascent at the native rate", that its discarding is correct against the label, and that
+counting direct transitions "would make the native count 6 — a false positive". **I asserted that
+without measuring it, and it is false.** The native direct `L -> S` at 14.48–14.51 s is a
+single-frame spike at the top of a supported run — `S S S L S S`, ratio 0.890 -> 0.742 -> 0.835. It
+never forms a lowered dwell, so the two-sample endpoint hold rejects it however the transitions are
+handled. At the native rate **neither clip has a single complete cycle that fails the band rule** —
+every column but "both" is zero.
+
+**What does survive.** A relaxed machine would still change the per-frame *phase* stream at the
+native rate — that spike frame, for one, would enter `LOWERING` instead of `WAITING` — so it cannot
+pass the stream-level `predictions_sha256` gate used in Update 46. Whether it preserves native
+**counts and event timestamps** is plausible from the census above but is untested. Those are
+different gates, and which one applies must be decided before a run, not after.
+
+**3. The same scrutiny applied to Update 45's exclusion 2.** That entry said relaxing the knee
+raise's `LOWERED` -> raised guard "moves published numbers by construction". That was also asserted,
+not measured. On `C0RXOvy609I` the native outcomes are `{COUNTED: 6}` — the guard never fired there.
+It is in any case irrelevant to the knee raise's residue, which Update 46(g) showed is unconfirmable
+single-sample lowered dwells, not `ABANDONED` cycles.
+
+**4. Contamination disclosure — this matters for anything done next.** The descent-only and
+ascent-only columns are, in effect, a preview of what a relaxed HSPU machine would add at reduced
+rates: run 04 at 10 fps would go 2 -> 5 on back-to-wall and 0 -> 5 on wall-facing, equal to native
+on both. **Those are census numbers from a Python enumeration, not engine output**, and any engine
+change designed from here is **designed with sight of its own result on this corpus**. A test of it
+on these two clips is therefore non-blind and must be labelled so. A blind test needs HSPU footage
+that nobody has yet looked at.
+
+**5. A risk the band was quietly covering.** The band requirement acts as a second debounce: a
+transition must be seen mid-travel. Without it, the only protection is the two-sample endpoint
+holds, so a two-frame tracking dropout of the span inside a supported run would become a
+repetition. That false-positive risk is why any relaxation needs negative cases in its test set, not
+just recovered counts.
+
+**Why this correction matters for the plan.** Update 47 closed off an engine-side option with a
+false argument. With it withdrawn, HSPU has a candidate engine fix that does not need more frames,
+while the knee raise still does. That is a different plan from the one recorded two days ago.

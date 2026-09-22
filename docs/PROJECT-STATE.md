@@ -297,17 +297,20 @@ units or constants resolves a 67 ms dwell at 10 fps. More frames can. Ledger Upd
    actual depth in the labelled set; where the knee-raise `maximumGapNs` of 100 ms is replaced with
    a principled value; and where the LOWERED→RAISED guard can be reconsidered against labels.
 
-**Explained 2026-09-21, ledger Update 47.** The HSPU count equals the number of ascents that put a
-sample in the 5%-wide band between `loweredSpanRatio` (0.75) and `extendedSpanRatio` (0.80) — 14 of
-16 cells exactly. `ElbowCycleTiming` reaches `RAISING` from `LOWERED` only via a frame that is
-neither lowered nor supported; a direct `LOWERED` → supported step takes the `isSupported → WAITING`
-branch and **silently discards a completed repetition**. At 30 fps every genuine ascent lands a frame
-in the band; at 10 fps 2 of 5 do, so sampling phase decides the count, and run 04's *more accurate*
-reference moved the one lucky frame out of it. This is the same defect as the hanging leg raise's
-deferred `LOWERED` → raised guard: **three engines, one root cause — a machine that infers a
-transition from an intermediate observation the rate does not supply.** It cannot be relaxed under a
-byte-identity gate, because wall-facing has one direct ascent at the native rate whose discarding is
-correct against its label. One cell of the sixteen is still not fully accounted for.
+**Explained 2026-09-21, corrected 2026-09-23 — ledger Updates 47 and 49.** An HSPU repetition is
+counted only if BOTH its descent and its ascent put a sample in the 5%-wide band between
+`loweredSpanRatio` (0.75) and `extendedSpanRatio` (0.80) — exact in 16 of 16 cells. `ElbowCycleTiming`
+takes `SUPPORTED + isLowered → WAITING` and `LOWERED + isSupported → WAITING`, silently discarding a
+repetition whose transition skipped the band. At 30 fps every genuine transition lands a frame in it;
+at 10 fps many do not, so sampling phase decides the count.
+
+Update 47 argued this could not be relaxed because of a "direct ascent at the native rate". **That
+argument was wrong and is withdrawn:** the native case is a single-frame spike (`S S S L S S`) that the
+two-sample hold rejects anyway, and neither clip has one complete native cycle that fails the band.
+So HSPU has a **candidate engine fix that does not need more frames**; the knee raise does not. Two
+cautions attach: it changes the per-frame phase stream at native, so the gate would have to be count-
+and-event identity, decided before the run; and it was designed with sight of its own census on this
+corpus (10 fps would go 2 → 5 and 0 → 5), so a test on these clips is non-blind.
 
 **Do not** nudge the 0.05 dip gate, the 40° band, or `minimumEndpointSamples` against the 2026-09-15
 runs. Three of four failures trace to one systemic cause; tuning around it would bury that.
