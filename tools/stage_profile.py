@@ -27,6 +27,14 @@ Verdicts:
 
 Trace rows are sampled every 100 ms, so above ~10 fps the stage statistics come from a sample of
 completed frames, not all of them. Rates are always taken from the cumulative counters instead.
+
+OVERLAPPED sessions (ADR-0007, `pipeline_mode` on every row) are judged differently, because the
+serial rules above assume one frame is prepared and inferred before the next is admitted:
+  * the ceiling is 1000 / max(median(front half), median(inference)) and the session is bound by
+    whichever of the two is slower;
+  * `submit_gap_ms` includes the mailbox wait, so the partition still has to sum exactly;
+  * `superseded`, `analysis_late`, `analysis_expired` and `completions_dropped` are reported, because
+    they are what the two ADR-0007 decisions cost.
 """
 from __future__ import annotations
 import json, statistics, sys
@@ -58,12 +66,16 @@ def main(arg: str) -> int:
         seen.add(key); frames.append(r)
 
     first, last = samples[0], samples[-1]
+    mode = last.get("pipeline_mode") or "SERIAL (no pipeline_mode field)"
     seconds = (last["elapsed_ms"] - first["elapsed_ms"]) / 1000.0
     done = last["completed"] - first["completed"]
-    offers = (last["submitted"] + last["pipeline_skipped"]) - (first["submitted"] + first["pipeline_skipped"])
+    sup = lambda r: r.get("superseded") or 0
+    offers = (last["submitted"] + last["pipeline_skipped"] + sup(last)) - \
+             (first["submitted"] + first["pipeline_skipped"] + sup(first))
     pose_fps = done / seconds if seconds > 0 else float("nan")
     offer_fps = offers / seconds if seconds > 0 else float("nan")
     print(f"trace {trace}")
+    print(f"  pipeline mode {mode}")
     print(f"  {len(samples)} sampled rows over {seconds:.1f} s, {len(frames)} distinct completed frames")
     print(f"  offer rate {offer_fps:.1f} fps   pose rate {pose_fps:.1f} fps")
 
@@ -86,6 +98,23 @@ def main(arg: str) -> int:
         share = "" if k == "inference_ms" else f"{100 * statistics.median(v) / non_inf:5.0f}%" if non_inf > 0 else ""
         print(f"  {k:22s} {statistics.median(v):8.1f} {pct(v, .9):8.1f}  {share}")
     print(f"  {'capture_to_result_ms':22s} {statistics.median(total):8.1f} {pct(total, .9):8.1f}")
+
+    if mode == "OVERLAPPED":
+        front = [f["admission_ms"] + f["preparation_ms"] for f in have]
+        wait = [f["submit_gap_ms"] for f in have]
+        cf, ci = statistics.median(front), statistics.median(inf)
+        print(f"\n  front half median {cf:.1f} ms, inference median {ci:.1f} ms, mailbox wait median "
+              f"{statistics.median(wait):.1f} ms (p90 {pct(wait, .9):.1f})")
+        print(f"  ceiling {1000.0 / max(cf, ci):.1f} fps, {'inference' if ci >= cf else 'preparation'}-bound;"
+              f" observed {pose_fps:.1f} fps")
+        print(f"  superseded {sup(last) - sup(first)} of {offers} offers"
+              f" ({100 * (sup(last) - sup(first)) / max(offers, 1):.1f}%)")
+        for k in ("analysis_late", "analysis_expired", "completions_dropped"):
+            print(f"  {k:20s} {last.get(k, 'absent')}")
+        age = [f["capture_to_result_ms"] for f in have]
+        print(f"  capture_to_result p50 {statistics.median(age):.1f} p90 {pct(age, .9):.1f} p99 {pct(age, .99):.1f} ms;"
+              f" >= 250 ms: {100 * sum(a >= 250 for a in age) / len(age):.2f}%")
+        return 0
 
     busy = [sum(f[k] for k in BUSY) for f in have]
     ceiling = 1000.0 / statistics.median(busy)

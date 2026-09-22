@@ -49,6 +49,15 @@ class MovementViewerController(
     internal fun onPreviewFrame(timestampNs: Long) { if (!closed.get()) previewRate.onFrame(timestampNs) }
     fun previewFps(): Double? = previewRate.fps(SystemClock.elapsedRealtimeNanos())
 
+    /**
+     * Every completed observation once, in capture order — the analysis feed (ADR-0007). Distinct
+     * from [snapshots], which is conflated and filtered for display freshness.
+     */
+    fun completions(): Flow<ViewerObservation> = flow {
+        while (!closed.get() && session == null) delay(10)
+        session?.let { emitAll(it.completions) }
+    }
+
     /** Results wake the UI immediately; startup waiting does not throttle active inference. */
     fun snapshots(): Flow<ViewerSnapshot> = flow {
         while (!closed.get() && session == null) delay(10)
@@ -69,7 +78,8 @@ class MovementViewerController(
                 port = native
                 val active = ViewerSession(native,
                     freshnessNs = if (input == ViewerInput.CAMERA) 250_000_000L else 1_500_000_000L,
-                    clockNs = SystemClock::elapsedRealtimeNanos)
+                    clockNs = SystemClock::elapsedRealtimeNanos,
+                    mode = ViewerPipelineMode.OVERLAPPED)
                 session = active
                 if (closed.get()) { active.close(); native.dispose(); return@execute }
                 when (input) {
@@ -151,8 +161,15 @@ class MovementViewerController(
         session?.close()
         val camera = source
         source = null
+        val closing = session
         releaseViewerResources(camera?.let { it::stop },
-            { try { port?.dispose() } finally { port = null } },
+            {
+                // ADR-0007: in OVERLAPPED mode a submission can run on the port's callback thread,
+                // which camera quiescence does not cover, and the port disposes its detector
+                // outside its own lock. Wait for any in-progress submit before disposing.
+                closing?.awaitNativeSubmissionsIdle()
+                try { port?.dispose() } finally { port = null }
+            },
             { worker.shutdown() })
     }
 

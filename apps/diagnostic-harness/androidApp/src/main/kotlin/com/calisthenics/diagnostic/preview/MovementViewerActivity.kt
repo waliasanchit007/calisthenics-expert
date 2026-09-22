@@ -73,6 +73,12 @@ class MovementViewerActivity : ComponentActivity() {
             LaunchedEffect(controller) {
                 val current = controller ?: return@LaunchedEffect
                 launch {
+                    // ADR-0007: analysis consumes every completion once, in capture order.
+                    current.completions().collect { observation ->
+                        if (controller === current) onCompletion(observation)
+                    }
+                }
+                launch {
                     current.snapshots().collect { latest ->
                         if (controller === current) {
                             // Derive expiry at display time, including results already old on arrival.
@@ -235,11 +241,12 @@ class MovementViewerActivity : ComponentActivity() {
         val decisionNs = SystemClock.elapsedRealtimeNanos()
         snapshot = latest
         if (controller != null && latest.failure == null) {
-            // Only the raw freshness-filtered observation; never candidate or overlay-held data.
-            movementCoordinator.update(latest.observation,decisionNs)
+            // Display tick only. Observations reach analysis from the completion stream
+            // (onCompletion), never from this conflated, display-freshness-filtered snapshot.
+            movementCoordinator.tick(decisionNs)
         } else movementCoordinator.clear()
         refreshMovementPanel()
-        recordDiagnostic(ViewerDebugEvent.SAMPLE,decisionNs)
+        recordDiagnostic(ViewerDebugEvent.SAMPLE,decisionNs,recordFrame = false)
         if (controller != null && input == ViewerInput.CAMERA && latest.failure == null) {
             overlay = overlayPresenter.present(candidate, SystemClock.elapsedRealtimeNanos())
         } else {
@@ -286,13 +293,31 @@ class MovementViewerActivity : ComponentActivity() {
         super.onDestroy()
     }
 
-    private fun recordDiagnostic(event: ViewerDebugEvent, now: Long = SystemClock.elapsedRealtimeNanos()) {
+    /**
+     * Raw result, straight from the session's completion stream: the only way an observation reaches
+     * analysis or the frame record (ADR-0007). A result the display already considers stale is still
+     * analysed and recorded here, up to the result deadline.
+     */
+    internal fun onCompletion(observation: ViewerObservation) {
+        val now = SystemClock.elapsedRealtimeNanos()
+        if (controller == null || snapshot?.failure != null) return
+        movementCoordinator.update(observation, now)
+        refreshMovementPanel()
+        recordDiagnostic(ViewerDebugEvent.SAMPLE, now, observation)
+    }
+
+    private fun recordDiagnostic(
+        event: ViewerDebugEvent,
+        now: Long = SystemClock.elapsedRealtimeNanos(),
+        observation: ViewerObservation? = snapshot?.observation,
+        recordFrame: Boolean = true,
+    ) {
         val logger = diagnosticLog ?: return
         val expired = now >= diagnosticDeadlineNs
         val latest = snapshot
-        latest?.observation?.let { feedback?.recordObservation(it,now) }
+        if (recordFrame) observation?.let { feedback?.recordObservation(it,now) }
         fun confidence(indices: Set<Int>, presence: Boolean): Double? {
-            val joints = latest?.observation?.landmarks?.filter { it.index in indices } ?: return null
+            val joints = observation?.landmarks?.filter { it.index in indices } ?: return null
             if (joints.size != 3 || joints.map { it.index }.toSet().size != 3) return null
             val values = joints.map { if (presence) it.presence else it.visibility }
             if (values.any { it == null || !it.isFinite() }) return null
@@ -307,8 +332,9 @@ class MovementViewerActivity : ComponentActivity() {
             if (selectedOfflineMovement() == null) movementCoordinator.experiment.inputIssue else null,
             movementCoordinator.feedStatus,
             movementCoordinator.captureGapNs,latest?.submitted ?: 0,latest?.completed ?: 0,latest?.skipped ?: 0,
-            scores,latest?.performance,latest?.observation,
-            selectedOfflineMovement()?.name,movementCoordinator.offlineUpdate)
+            scores,latest?.performance,observation,
+            selectedOfflineMovement()?.name,movementCoordinator.offlineUpdate,
+            movementCoordinator.analysisLate,movementCoordinator.analysisExpired)
         if (expired) {
             logger.close(); diagnosticLog = null; diagnosticsEnabled = false
             refreshDebugSession()

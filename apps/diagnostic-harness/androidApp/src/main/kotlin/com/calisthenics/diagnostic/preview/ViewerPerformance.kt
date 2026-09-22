@@ -17,6 +17,12 @@ data class ViewerPerformance(
     val completions: Int = 0,
     val offerFps: Double? = null,
     val poseFps: Double? = null,
+    /** `SERIAL` or `OVERLAPPED` (ADR-0007); null only for a performance record with no session. */
+    val pipelineMode: String? = null,
+    /** OVERLAPPED only: frames prepared and then replaced in the mailbox before submission. */
+    val superseded: Int = 0,
+    /** Completions the analysis stream could not buffer. Expected to stay 0; counted, not hidden. */
+    val completionsDropped: Int = 0,
     /** Sensor capture -> the analyser callback. Camera pipeline latency; we do not control it. */
     val captureToOfferMs: Double? = null,
     /** The analyser callback -> the start of frame preparation. Our own bookkeeping and lock. */

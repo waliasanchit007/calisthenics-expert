@@ -64,6 +64,17 @@ internal class ViewerMovementCoordinator {
     private var lastSeenNs: Long? = null
     private var sessionActive = false
 
+    /**
+     * ADR-0007 decision 2, made visible. [analysisLate]: results admitted to analysis at an age the
+     * display would already call stale (250 ms or more). [analysisExpired]: pose results withheld at
+     * or past the result deadline. Both are expected to be 0 in SERIAL mode.
+     */
+    private var lastNoPoseNs: Long? = null
+    var analysisLate = 0
+        private set
+    var analysisExpired = 0
+        private set
+
     /** The coordinator owns this lifecycle flag; callers cannot make an active session stopped. */
     fun beginSession() { sessionActive = true }
 
@@ -99,10 +110,35 @@ internal class ViewerMovementCoordinator {
         return true
     }
 
+    /**
+     * The display's tick between results (ADR-0007). It never admits an observation — only
+     * [update], fed from the session's completion stream, does — so the display path can no longer
+     * hand analysis a newer frame ahead of an older one still in the stream, which the analyser
+     * would have to treat as a backwards timestamp. It keeps the two things that path used to do:
+     * expire the shown measurement at the display's 250 ms, and run the result deadline.
+     */
+    fun tick(nowNs: Long) {
+        val lastNoPose = lastNoPoseNs
+        if (lastNoPose != null && nowNs - lastNoPose in 0 until SAMPLE_FRESHNESS_NS) {
+            // Still the latest result: keep reporting it, exactly as re-reading it used to.
+            feedStatus = MovementFeedStatus.NO_POSE
+            experiment.onTrackingGap()
+            return
+        }
+        val shown = measurements
+        if (shown != null && nowNs - shown.capturedNs in 0 until SAMPLE_FRESHNESS_NS) return
+        update(null, nowNs)
+    }
+
     fun update(observation: ViewerObservation?, nowNs: Long) {
         trace = trace.filter { nowNs - it.capturedNs in 0..3_000_000_000L }.takeLast(90)
+        if (observation != null) lastNoPoseNs = if (observation.posePresent) null else observation.capturedNs
+        // ADR-0007: analysis admits a result up to the result deadline, not the display's 250 ms.
+        // A result younger than the deadline is late, not lost; the display keeps its own cutoff.
+        val ageNs = observation?.let { nowNs - it.capturedNs }
         val fresh = observation != null && observation.posePresent &&
-            nowNs - observation.capturedNs in 0 until SAMPLE_FRESHNESS_NS
+            ageNs!! in 0 until ANALYSIS_ADMISSION_NS
+        if (observation != null && observation.posePresent && ageNs!! >= ANALYSIS_ADMISSION_NS) analysisExpired++
         if (!fresh) {
             feedStatus = MovementFeedStatus.WAITING
             if (measurements != null) {
@@ -113,6 +149,8 @@ internal class ViewerMovementCoordinator {
             // result can still be in flight. Never feed the old pose or advance the analyzer.
             // With capture gap <250ms and result age <250ms, a valid continuation must arrive
             // before lastSeen+500ms. Neither null UI ticks nor stale results renew this deadline.
+            // Since ADR-0007 a result aged 250-500 ms is also admitted; one that arrives after this
+            // deadline has fired is fed as a fresh start after the gap, never stitched across it.
             val lastCapture = lastSeenNs
             if (observation?.posePresent == false || lastCapture == null ||
                 nowNs < lastCapture || nowNs - lastCapture >= RESULT_DEADLINE_NS) {
@@ -134,6 +172,7 @@ internal class ViewerMovementCoordinator {
             return
         }
         lastSeenNs = observation.capturedNs
+        if (ageNs!! >= SAMPLE_FRESHNESS_NS) analysisLate++
         captureGapNs = previous?.let { observation.capturedNs - it }
         feedStatus = MovementFeedStatus.FRESH
         val measured = measureMovement(observation.landmarks,observation.frame.width,
@@ -185,6 +224,9 @@ internal class ViewerMovementCoordinator {
         offlineUpdate = null
         recentRejections.clear()
         framingAdvice = null
+        analysisLate = 0
+        analysisExpired = 0
+        lastNoPoseNs = null
         experiment.reset()
         (selection as? ViewerMovementSelection.Offline)?.let {
             offlineEngine = offlineMovementEngine(it.movement, it.side, it.muscleUpVariant)
@@ -198,5 +240,7 @@ internal class ViewerMovementCoordinator {
         // Same capture-gap limit enforced by PullUpExperiment on the next fresh sample.
         const val MAX_CAPTURE_GAP_NS = 250_000_000L
         const val RESULT_DEADLINE_NS = MAX_CAPTURE_GAP_NS + SAMPLE_FRESHNESS_NS
+        /** ADR-0007: how old a result may be and still reach analysis. The display keeps 250 ms. */
+        const val ANALYSIS_ADMISSION_NS = RESULT_DEADLINE_NS
     }
 }

@@ -53,6 +53,7 @@ internal class ViewerDiagnosticLog(
         jointConfidence: ViewerJointConfidence = ViewerJointConfidence(), performance: ViewerPerformance? = null,
         observation: ViewerObservation? = null,
         offlineMovement: String? = null, offline: OfflineMovementUpdate? = null,
+        analysisLate: Int = 0, analysisExpired: Int = 0,
     ) {
         if (writer.isShutdown) return
         val signature = listOf(state.movement,state.stage,state.phase,state.candidateCycles,state.failure,state.lastCycleOutcome,issue,
@@ -118,6 +119,11 @@ internal class ViewerDiagnosticLog(
                         .put("pose_age_ms",numeric(performance?.poseAgeMs))
                         .put("available_arm_joints",measurements?.availableArmJoints ?: 0)
                         .put("submitted",submitted).put("completed",completed).put("pipeline_skipped",pipelineSkipped)
+                        // ADR-0007: which pipeline produced the row, and what its two decisions cost.
+                        .put("pipeline_mode",performance?.pipelineMode ?: JSONObject.NULL)
+                        .put("superseded",performance?.superseded ?: 0)
+                        .put("completions_dropped",performance?.completionsDropped ?: 0)
+                        .put("analysis_late",analysisLate).put("analysis_expired",analysisExpired)
                         .put("writer_dropped",drops.get()).put("rate_suppressed",suppressedAtEnqueue)
                         .put("offline_movement",offlineMovement ?: JSONObject.NULL)
                         .put("offline_phase",offline?.phase ?: JSONObject.NULL)
