@@ -1889,3 +1889,67 @@ pick frames at intervals of mostly 33.3 ms with some 66.7 ms — a sampling patt
 decimation study's native column and its "20 fps" column (alternating 33/67 ms), which gave the knee
 raise 2 of 6. The study has no cell with that pattern, so it cannot predict the result. That is the
 question to answer before building step 4, not after.
+
+## Update 52 — pipeline emulation: PRE-REGISTRATION (2026-09-23, written before the run)
+
+Declared before any corpus cache is passed through the emulator. The commit carrying this entry
+precedes the run.
+
+**Question.** Update 51 found the rate is preparation plus inference in series and that overlapping
+them lifts the ceiling to ~24 fps. But a ~24 fps pipeline on a 30 fps camera picks frames at a mix of
+33.3 ms and 66.7 ms intervals — a pattern the decimation study never tested. Before building step 4,
+which pipeline design actually recovers the counts?
+
+**Method.** `pipeline-emulation-20260923/emulate.py` (sha256 `a1a15de9...fcb8b4`, outside Git) decides,
+from timing alone, which camera frames each design would turn into poses. Stage durations are drawn
+with a seeded RNG from the 1189 measured rows of device session `d39f3f2b`
+(`stage-durations-d39f3f2b.json`, sha256 `8df14a75...9086b`). The picked frames are then replayed
+through the frozen v1 engines by the same Kotlin replay path as decimation runs 03 and 04, over the
+same eight jobs, caches, configs and labels. 10 seeds (0–9) per design per job; results are the
+median and range over seeds.
+
+| design | what it models |
+|---|---|
+| **D0** | today: one frame in flight, preparation then inference — the lower control |
+| **D1** | preparation overlapped with inference, one-slot latest-wins mailbox, measured durations |
+| **D2** | D1 with inference 40% faster — a round what-if, **not a GPU measurement** |
+| **D3** | D2 with preparation also 40% faster — the upper control, close to every frame |
+
+**Logic checked on synthetic timelines only**, with hand-computable answers: serial with 78 ms busy
+picks every third frame; overlap at 35.7/41.3 ms gives 24.4 fps. One of my hand answers was
+**wrong** and the emulator was right. For overlap at 35.7/20 ms I expected "every other frame";
+because `KEEP_ONLY_LATEST` hands over the queued frame the instant preparation ends, preparation
+runs back to back and gives 1000 / 35.7 = 28 fps. The expectation was corrected; the emulator was
+not changed.
+
+**Predictions, declared now.**
+
+(a) **CONTROL, low.** D0 on the six 30 fps jobs gives a mean pick rate of 9.5–11 fps with an
+    interval of three source frames as the mode, at >= 70% (the device showed 82%). If not, the
+    emulator does not model the real pipeline and the run is void. A stopping rule.
+(b) **CONTROL, high.** D3's median count equals the native count on >= 7 of 8 jobs. If not, even
+    near-every-frame sampling misbehaves and nothing else is interpretable. A stopping rule.
+(c) **Rates** on the 30 fps jobs: D1 22–25 fps (inference-bound); D2 26–29 fps (the binding stage
+    moves to preparation); D3 >= 28.5 fps.
+(d) The four `minimumEndpointSamples = 2` jobs (muscle-up x2, toes-to-bar, dip) have median = native
+    under every design.
+(e) **Knee raise** `C0RXOvy609I` (native 6): D0 median <= 2; D1 median **3–5**, an improvement that
+    does **not** fully recover, because its short lowered dwells at mixed 33/67 ms spacing will often
+    miss the 66.7 ms hold; D2 median >= D1.
+(f) **HSPU**, both clips (native 5): D0 median <= 3 each; D1 median >= 4 each.
+(g) Straight-leg raise stays 0 everywhere, and no design's median exceeds native anywhere.
+
+**Decision rule, declared now.**
+
+- D1 knee raise >= 5 **and** HSPU >= 4 on both clips -> overlap alone is step 4; the GPU work is
+  optional.
+- D1 knee raise <= 4 but D2 or D3 >= 5 -> overlap is necessary but not sufficient; the GPU parity
+  check joins step 4, together with faster preparation if D3 beats D2.
+- D3 knee raise < 5 -> near-every-frame sampling still loses knee raises; the explanation in Update 46
+  is incomplete.
+
+**Limitations, stated before the result.** The two stages are assumed not to slow each other down;
+on the phone they share cores and a thermal budget, so D1–D3 are optimistic. Camera latency is taken
+as constant. The durations come from one ~2-minute session of one movement on one device, drawn
+i.i.d., with no thermal drift. The dip and straight-leg caches are 25 and 24 fps, so for them the
+emulated camera is slower than the device's 30 fps; control (a) is restricted to the 30 fps jobs.
