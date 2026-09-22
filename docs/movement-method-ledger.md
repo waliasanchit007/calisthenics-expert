@@ -2047,3 +2047,42 @@ in capture order however late it is, up to the coordinator's existing 500 ms res
 the display keeps 250 ms. That is an amendment to ADR-0006 for the analysis path, recorded as
 decision 2 of ADR-0007. It changes nothing about any recorded session, because none has ever
 delivered a result past 250 ms.
+
+## Update 55 — ADR-0007 built; expectations for the first OVERLAPPED session (2026-09-23, before it)
+
+**Built** in `400f65e`. `ViewerSession` has a `SERIAL` / `OVERLAPPED` mode; the viewer uses
+`OVERLAPPED`. Analysis reads the session's completion stream with a 500 ms admission bound, and the
+display path only ticks expiry and the result deadline. Two defects were found while building and
+designed out rather than left to chance:
+
+1. **A native use-after-close race.** The inference port reserves its slot under its own monitor
+   but calls the detector outside it, and `dispose` closes the detector outside it too. SERIAL was
+   safe only because every submit ran on the analyser thread, which the controller already waits for.
+   OVERLAPPED also submits from the port's callback thread, so the session now counts submissions
+   between claim and return, and the controller waits for that count to drain — off the main thread —
+   before disposing. The port itself, shared with the formal harness, is unchanged.
+2. **A reordering hazard.** Had the display path kept feeding observations to analysis, a newer
+   frame from the display snapshot could reach the coordinator ahead of an older one still in the
+   completion stream, which the analyser must treat as a backwards timestamp and so invalidate the
+   cycle in progress. The display path now never admits an observation.
+
+Tests: `shared` 892, `androidApp` 301 (18 new), 0 failures. Three mutations — the mailbox keeping the
+older frame, the fence not taken, admission back at 250 ms — each fail their test; files restored
+byte-exact.
+
+**Expectations for the first OVERLAPPED device session, declared before it.** This session is a
+measurement for ADR-0007 verification step 3, not a count test; no repetition count from it is
+scored. The emulation assumed preparation and inference do not contend for the CPU, and that is the
+main unknown this session exists to measure.
+
+(a) The partition sums exactly for 100% of frames with stage fields.
+(b) Pose rate **18–24 fps** (emulated 23.1; contention can only lower it).
+(c) Inference-bound: median inference >= median front half.
+(d) Inference median **41–50 ms**. Above 50 ms, contention is costing more than the emulation can
+    absorb, and step 3 must carry that forward rather than reuse the serial durations.
+(e) Capture-to-result p50 **195–230 ms**, with at most **5%** of results at 250 ms or more.
+(f) `analysis_expired` = 0 and `completions_dropped` = 0.
+(g) `superseded` is **10–25%** of offers: preparation runs at ~1000/35.7 = 28 fps back to back and
+    inference consumes ~23 fps.
+
+The device thermal status is read with `dumpsys thermalservice` at the start and end.
