@@ -1953,3 +1953,59 @@ on the phone they share cores and a thermal budget, so D1–D3 are optimistic. C
 as constant. The durations come from one ~2-minute session of one movement on one device, drawn
 i.i.d., with no thermal drift. The dip and straight-leg caches are 25 and 24 fps, so for them the
 emulated camera is slower than the device's 30 fps; control (a) is restricted to the 30 fps jobs.
+
+## Update 53 — pipeline emulation: RESULTS (2026-09-23, run 01)
+
+Tests Update 52. `emulate.py` and `stage-durations-d39f3f2b.json` hash-matched their registered
+values at scoring time. The runner (`run_emulation.py`, `183326b0...`) and the scorer (`score.py`,
+`280c4287...`) were written after the pre-registration commit and before any result was read; the
+scorer was finished while the run was still in progress. 320 replays, 0 errors.
+
+| job | native | D0 today | D1 overlap | D2 +40% inference | D3 +40% both |
+|---|---|---|---|---|---|
+| muscle-up ring | 3 | 3 [3–3] @10.2 | 3 [3–3] @23.1 | 3 [3–3] @27.6 | 3 [3–3] @30.0 |
+| muscle-up bar | 3 | 3 [3–3] @10.2 | 3 [3–3] @23.1 | 3 [3–3] @27.6 | 3 [3–3] @30.0 |
+| HSPU back | 5 | 2 [1–4] @10.2 | **4** [3–5] @23.0 | 5 [5–5] @27.6 | 5 [5–5] @30.0 |
+| HSPU facing | 5 | 2 [1–4] @10.3 | **4** [3–5] @23.1 | 5 [4–5] @27.6 | 5 [5–5] @30.0 |
+| knee raise | 6 | 0.5 [0–1] @10.3 | **5** [4–6] @23.2 | 6 [5–6] @27.5 | 6 [6–6] @30.0 |
+| straight-leg raise | 0 | 0 @10.4 | 0 @22.5 | 0 @23.9 | 0 @24.0 |
+| toes-to-bar | 6 | 6 [6–6] @10.3 | 6 [6–6] @23.1 | 6 [6–6] @27.5 | 6 [6–6] @30.0 |
+| dip *(study-local)* | 3 | 3 [3–3] @10.3 | 3 [3–3] @22.8 | 3 [3–3] @25.0 | 3 [3–3] @25.0 |
+
+Cells: median count [min–max over 10 seeds] @ mean pick rate in fps.
+
+**Scorecard — 7 of 7 held.**
+
+- (a) low control: D0 gives 10.2–10.3 fps with 82–83% of intervals at three frames (device: 10.2 fps,
+  82%). This validates the serial model rather than testing it independently — its durations come
+  from that same session — but the device's pick pattern does emerge from the durations under the
+  model, which is what the control exists to check.
+- (b) high control: D3 median equals native on **8 of 8**.
+- (c) rates: D1 23.0–23.2, D2 27.5–27.6, D3 30.0. The binding stage moves to preparation in D2,
+  exactly as predicted.
+- (d) the four immune jobs equal native under every design.
+- (e) knee raise D0 0.5, D1 5, D2 6 — inside every predicted band, D1 at the top of 3–5.
+- (f) HSPU D0 2 and 2, D1 4 and 4.
+- (g) the negative control stays 0, and no median exceeds native anywhere.
+
+**Decision, by the rule fixed in Update 52: overlap alone is step 4; the GPU work is optional.**
+
+**It is met at its threshold, not with margin, and the margin matters.** Per seed, D1 gives the knee
+raise `[4, 5, 5, 5, 5, 5, 6, 6, 6, 6]` — at least 5 in 9 of 10 seeds. HSPU back-to-wall is at least 4
+in 9 of 10, wall-facing in 8 of 10. D1 also assumes preparation and inference do not slow each other
+down; on the phone they share cores and a thermal budget, so a real build will run somewhat below
+23 fps, and these counts sit at the edge of the rule. D2 is where the margin comes from: at 27.6 fps
+the knee raise is 6 in 8 of 10 seeds and back-to-wall HSPU is 5 in all ten.
+
+**What the D1 residue is.** HSPU at D1 still typically loses one repetition in five. That is the
+band-rule defect of Updates 47 and 49 — a transition that skips the 5% band between the gates — and
+the candidate engine fix recorded in Update 49 addresses exactly that residue, independently of rate.
+
+**Consistent with, not proof of, the live experience.** D0 predicts 0–1 of 6 knee raises on a clip
+whose native count is 6; the owner's live knee-raise sessions on 2026-09-15 counted 0. Different
+athlete, apparatus and camera placement, so this is consistency only.
+
+**What comes next follows from the margin.** Build the overlap under an ADR. Then measure the real
+overlapped stage durations on the device with `tools/stage_profile.py`, re-run this emulator with
+those durations in place of the serial ones, and so obtain a count prediction for the actual build
+**before** any live test is scored — the same pre-registration discipline, one step earlier.

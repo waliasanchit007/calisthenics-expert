@@ -276,15 +276,16 @@ units or constants resolves a 67 ms dwell at 10 fps. More frames can. Ledger Upd
    sample-count parameters, not movement speed. Two harness defects were caught by the
    pre-registered control and are recorded rather than quietly fixed. Its further claim that step 4
    alone is insufficient survives; its implication that step 5 would be sufficient does not.
-4. **NOW PRIMARY — raise the device rate.** Step 2 made the design concrete: overlap preparation
-   with inference (ceiling ~24 fps on CPU), and separately decide whether the GPU delegate is worth a
-   landmark-parity check for full 30 fps. **Before building it**, emulate each design offline — the
-   measured preparation and inference distributions applied to the 30 fps caches — because a ~24 fps
-   pipeline produces a sampling pattern the decimation study never tested, and its closest cell
-   gave the knee raise 2 of 6. App behaviour change — needs ADR coverage. May hit a real ceiling
-   (thermal, camera output format). Step 5 established what this buys: at 20 fps a 100 ms dwell
-   yields two observations instead of one, which is the difference between a confirmable endpoint
-   and an unconfirmable one. It will not reach the 67 ms dwells.
+4. **NOW PRIMARY — build stage overlap.** Decided 2026-09-23 by the pipeline emulation study
+   (ledger Updates 52–53, 7 of 7 predictions held): prepare frame N+1 while frame N infers, with a
+   one-slot latest-wins mailbox. Emulated with the measured device durations it gives ~23 fps and
+   takes the knee raise from 0–1 of 6 today to 5 [4–6], and HSPU from 2 to 4 of 5. **The pre-declared
+   rule was met at its threshold, not with margin**, and the emulation ignores CPU contention between
+   the two stages, so a real build will do somewhat worse. Margin comes from inference 40% faster
+   (27.6 fps → knee raise 6, HSPU 5/5), which is why the GPU parity check stays on the list as
+   optional. App behaviour change — needs an ADR. After building: measure the real overlapped
+   durations with `tools/stage_profile.py`, re-run the emulator with them, and pre-register the
+   count prediction before any live attempt is scored.
 5. ~~**Make the engines frame-rate-independent**~~ — **DONE 2026-09-21**, ledger Updates 45–46.
    Five sample counts now convert once, at a declared 30 fps reference rate, and the engines gate on
    elapsed time. All eight native-rate prediction streams reproduced **byte-identically**, and the
