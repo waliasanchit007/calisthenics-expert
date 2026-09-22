@@ -2009,3 +2009,41 @@ athlete, apparatus and camera placement, so this is consistency only.
 overlapped stage durations on the device with `tools/stage_profile.py`, re-run this emulator with
 those durations in place of the serial ones, and so obtain a count prediction for the actual build
 **before** any live test is scored — the same pre-registration discipline, one step earlier.
+
+## Update 54 — SENSITIVITY: the 250 ms freshness cutoff undoes overlap for the knee raise (2026-09-23)
+
+**Not a pre-registered test.** Written after Update 53's result was read, to check one thing its
+emulation left out. It does not change Update 53's scorecard; it changes what may be built.
+
+**What Update 53 omitted.** The live viewer withholds from analysis any result older than 250 ms,
+twice: `ViewerSession.snapshot()` nulls a stale observation, and `ViewerMovementCoordinator.update()`
+refuses one past `SAMPLE_FRESHNESS_NS`. The serial pipeline never reaches that age — session
+`d39f3f2b` delivered 0 of 1144 results past 250 ms (p99 218.9 ms), and main-thread delivery adds
+p50 0.2 / p99 7.8 ms — so the rule has never fired. Overlap adds a mailbox wait.
+
+**Method.** `sensitivity_freshness.py`: the D1 overlap model, with camera latency now sampled per
+frame from the measured `capture_to_offer_ms` (Update 53 used a constant) and each result withheld
+if its age at delivery is >= 250 ms. Same eight jobs and replay path, 10 seeds. The model's serial
+variant reproduces the measured latency (p50 179.9 vs 179.0 measured; p90 197.3 vs 198.2).
+
+| job | overlap, no drop | overlap, 250 ms drop |
+|---|---|---|
+| knee raise (native 6) | 5 [3–6] | **1.5 [0–5]** |
+| HSPU back (5) | 4.5 [2–5] | 5 [2–5] |
+| HSPU facing (5) | 4.5 [4–5] | 4 [3–5] |
+| all other jobs | native | native |
+
+About 2% of results are withheld. For the knee raise that is enough: `CAPTURE_GAP` rejections per run
+go from a median of **0 to 8**, and `TRACKING_INTERRUPTED` cycles from **0 to 3**. Each withheld
+result leaves a hole in the engine's input; on a stream spaced 33/67 ms, one hole makes a gap of
+67–133 ms, and the frozen knee-raise config interrupts anything over 100 ms. Overlap delivers more
+frames, each one later, and the cutoff converts "late" into "missing".
+
+**Latency under overlap**, 55,231 emulated deliveries: p50 208, p99 256.5, p99.9 275.1, max 286.7
+ms; 2.04% past 250 ms, **none past 500 ms**.
+
+**Consequence.** Overlap must not be built on its own. Analysis has to receive each completed result
+in capture order however late it is, up to the coordinator's existing 500 ms result deadline, while
+the display keeps 250 ms. That is an amendment to ADR-0006 for the analysis path, recorded as
+decision 2 of ADR-0007. It changes nothing about any recorded session, because none has ever
+delivered a result past 250 ms.
